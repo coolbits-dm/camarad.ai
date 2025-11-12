@@ -1,0 +1,9 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - '-t'
+      - 'europe-west3-docker.pkg.dev/camarad-ai/web/camarad-ui:latest'
+      - '.'
+images:
+  - 'europe-west3-docker.pkg.dev/camarad-ai/web/camarad-ui:latest'
