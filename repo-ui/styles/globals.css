@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --background: 15 23 42;
+  --foreground: 226 232 240;
+  --muted: 30 41 59;
+  --muted-foreground: 148 163 184;
+  --surface: 17 24 39;
+  --surface-foreground: 228 231 238;
+  --surface-muted: 24 32 45;
+  --border: 71 85 105;
+  --accent: 139 92 246;
+  --accent-foreground: 248 250 255;
+  --success: 34 197 94;
+  --danger: 248 113 113;
+  --invert-logo: 1;
+}
+
+[data-theme='dark'] {
+  --invert-logo: 1;
+}
+
+.light {
+  color-scheme: light;
+  --invert-logo: 0;
+  --background: 249 251 255;
+  --foreground: 17 24 39;
+  --muted: 226 232 240;
+  --muted-foreground: 71 85 105;
+  --surface: 255 255 255;
+  --surface-foreground: 17 24 39;
+  --surface-muted: 243 244 246;
+  --border: 203 213 225;
+  --accent-foreground: 24 24 27;
+}
+
+[data-accent='violet'] {
+  --accent: 139 92 246;
+  --accent-foreground: 250 250 255;
+}
+
+[data-accent='cyan'] {
+  --accent: 34 211 238;
+  --accent-foreground: 17 24 39;
+}
+
+[data-accent='emerald'] {
+  --accent: 16 185 129;
+  --accent-foreground: 248 250 252;
+}
+
+[data-accent='amber'] {
+  --accent: 245 158 11;
+  --accent-foreground: 28 25 23;
+}
+
+[data-accent='rose'] {
+  --accent: 244 63 94;
+  --accent-foreground: 255 241 242;
+}
+
+html {
+  scroll-behavior: smooth;
+  font-feature-settings: 'kern';
+}
+
+body {
+  @apply min-h-screen bg-background text-foreground antialiased;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.mic-pulse {
+  background: radial-gradient(circle at center, rgba(var(--accent), 0.2), transparent 60%);
+  animation: micPulse 2.8s ease-in-out infinite;
+}
+
+@keyframes micPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.1;
+  }
+}
+
+::selection {
+  background-color: rgba(var(--accent), 0.25);
+  color: rgb(var(--accent-foreground));
+}
+
+button,
+[role='button'] {
+  @apply transition-all ease-out-cubic;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
