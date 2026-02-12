@@ -43,6 +43,24 @@ printf '[smoke] API_URL=%s\n' "$API_URL"
 wait_http_ok "$BASE_URL/healthz" 30 || fail "healthz did not become 2xx within 30s"
 ok "healthz"
 
+wait_http_ok "$BASE_URL/" 30 || fail "landing did not become 2xx within 30s"
+ok "landing /"
+
+wait_http_ok "$BASE_URL/signup" 30 || fail "signup did not become 2xx within 30s"
+ok "signup"
+
+wait_http_ok "$BASE_URL/chat-demo" 30 || fail "chat-demo did not become 2xx within 30s"
+ok "chat-demo"
+
+wait_http_ok "$BASE_URL/api/search?q=ppc" 30 || fail "public search did not become 2xx within 30s"
+ok "public search /api/search"
+
+app_search_hdrs="$(curl -sSI "$BASE_URL/api/app/search?q=ppc" || true)"
+app_search_code="$(printf '%s\n' "$app_search_hdrs" | awk 'BEGIN{IGNORECASE=1} /^HTTP\//{print $2; exit}')"
+[[ "$app_search_code" == "401" ]] || fail "app search without auth expected 401, got ${app_search_code:-none}"
+printf '%s\n' "$app_search_hdrs" | grep -Eiq '^Cache-Control:.*no-store' || fail "app search missing Cache-Control: no-store"
+ok "app search protected (401 + no-store)"
+
 code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/readyz" || true)"
 if [[ "$code" == "404" ]]; then
   ok "readyz (not implemented)"
@@ -53,7 +71,7 @@ fi
 
 hdrs="$(curl -sSI "$API_URL/api/connectors/ga4/oauth/callback" || true)"
 printf '%s\n' "$hdrs" | sed -n '1,20p'
-printf '%s\n' "$hdrs" | grep -Eiq '^HTTP/.* (200|400|401|403|404)' || fail "GA4 callback status unexpected"
+printf '%s\n' "$hdrs" | grep -Eiq '^HTTP/.* 400' || fail "GA4 callback expected 400 without OAuth params"
 printf '%s\n' "$hdrs" | grep -Eiq '^Cache-Control:.*no-store' || fail "GA4 callback missing Cache-Control: no-store"
 ok "ga4 callback headers (no-store)"
 

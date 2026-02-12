@@ -4,6 +4,17 @@ Data: 2026-02-12
 
 ## P0 - In lucru acum (execution order)
 
+### 0) P0 confidence harness + OAuth cache audit
+- Status: `done`
+- Owner: `codex`
+- Task:
+  - script nou `scripts/connect_confidence.sh` (20x loop GA4 + Ads, AUTHED/MOCK, retry pe 502/503/504)
+  - doc nou `docs/OAUTH_CLOUDFLARE_AUDIT.md` (bypass paths + verificare `curl -I` + expected headers)
+  - `scripts/smoke.sh` consolidat: callback GA4 trebuie sa raspunda `400` + `Cache-Control: no-store`
+- Done cand:
+  - harness ruleaza 20/20 pe sesiune autentificata
+  - callback OAuth nu mai este cache-uit pe edge
+
 ### 1) M2.B GA4 real via Coolbits - polish final
 - Status: `in_progress`
 - Owner: `codex`
@@ -41,12 +52,14 @@ Data: 2026-02-12
   - exista recomandare de calibrare planuri/CT cu impact estimat pe profitabilitate
 
 ### 3) M3 Client-scoping audit complet
-- Status: `todo`
+- Status: `in_progress`
 - Owner: `codex + cblm`
 - ETA: `2 zile`
 - Task:
   - audit endpoint-uri critice pentru izolarea per client (`X-Client-ID`)
   - teste automate pentru leakage cross-client (chat, agents, flows, connectors)
+  - audit by-id API routes + fix queries cu `user_id` + `client_id` pe rutele client-scoped
+  - matrix anti-leak extins in `test_m3_scoping.py` (owned client A vs owned client B, missing scope, spoof guard)
 - Done cand:
   - zero leakage cross-client confirmat pe rute critice + UI
 
@@ -79,13 +92,16 @@ Data: 2026-02-12
   - demo repeatable, fara mock confusion, pe cont real conectat
 
 ### 6) Landing/public trust polish
-- Status: `todo`
+- Status: `in_progress`
 - Owner: `codex`
 - ETA: `1 zi`
 - Task:
   - verifica convergenta globala pentru `/legal`, `/privacy`, `/terms`
   - clarifica rolul `api.camarad.ai` (API root behavior/documentatie)
   - pastreaza footer links coerente (`Pricing`, `Legal`, `Privacy`, `Terms`)
+  - landing polish v1: autocomplete (`/api/search`), CTA clar signup/demo, blocuri "what you get/how it works/proof"
+  - split search endpoint: public deterministic `/api/search` + scoped auth `/api/app/search`
+  - demo chat public read-only (`/chat-demo`, plus `?demo=1` pe `/chat` pentru user neautentificat)
 
 ## P2 - Dupa stabilizare
 

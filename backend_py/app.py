@@ -840,6 +840,7 @@ SCOPED_API_PREFIXES = (
     "/api/orchestrator/",
     "/api/conversations",
     "/api/chats",
+    "/api/boardroom/",
 )
 REQUIRES_CLIENT_SCOPE_RULES = (
     ("POST", "/api/orchestrator/execute", True),
@@ -847,6 +848,8 @@ REQUIRES_CLIENT_SCOPE_RULES = (
     ("POST", "/api/connectors/ga4/property", True),
     ("GET", "/api/conversations/", False),
     ("DELETE", "/api/conversations/", False),
+    ("GET", "/api/boardroom/meetings", False),
+    ("POST", "/api/boardroom/meetings", True),
 )
 
 
@@ -2860,6 +2863,245 @@ def landing_page():
     return render_template("landing.html")
 
 
+_SEARCH_STRIP_RE = re.compile(r"[^a-zA-Z0-9 _-]+")
+
+
+def _normalize_search_query(raw_value, max_len=64):
+    txt = str(raw_value or "").strip()
+    if not txt:
+        return ""
+    txt = txt[:max_len]
+    txt = _SEARCH_STRIP_RE.sub("", txt)
+    return txt.strip()
+
+
+@app.route("/api/search", methods=["GET"])
+def api_search():
+    """Public lightweight search for landing autocomplete (static-safe)."""
+    q = _normalize_search_query(request.args.get("q"), max_len=64).lower()
+    if len(q) < 2:
+        return jsonify([])
+
+    out = []
+    seen = set()
+
+    # Agents from workspace registry.
+    for ws_slug, ws_data in (workspaces or {}).items():
+        ws_name = str((ws_data or {}).get("name") or ws_slug).strip()
+        for agent_slug, agent_name in ((ws_data or {}).get("agents") or {}).items():
+            name = str(agent_name or agent_slug).strip()
+            slug = str(agent_slug or "").strip().lower()
+            hay = f"{name} {slug} {ws_name} {ws_slug}".lower()
+            if q not in hay:
+                continue
+            key = ("agent", ws_slug, slug)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "type": "agent",
+                "name": name,
+                "subtitle": ws_name,
+                "url": f"/chat/{ws_slug}/{slug}",
+            })
+            if len(out) >= 8:
+                return jsonify(out)
+
+    connectors = [
+        ("Google Ads", "connectors, campaigns, spend, ROAS", "/connectors"),
+        ("Google Analytics 4", "traffic, events, funnels, audience", "/connectors"),
+        ("Stripe Billing", "plans, subscriptions, usage", "/settings#settings-billing"),
+    ]
+    for name, subtitle, url in connectors:
+        hay = f"{name} {subtitle}".lower()
+        if q not in hay:
+            continue
+        key = ("connector", name)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "type": "connector",
+            "name": name,
+            "subtitle": subtitle,
+            "url": url,
+        })
+        if len(out) >= 8:
+            return jsonify(out)
+
+    templates = [
+        ("Growth War Room", "live Ads + GA4 orchestration template", "/orchestrator"),
+        ("PPC Daily Review", "campaign checks, pacing, next actions", "/orchestrator"),
+        ("Weekly Executive Brief", "CEO/CMO/CFO cross-functional summary", "/orchestrator"),
+    ]
+    for name, subtitle, url in templates:
+        hay = f"{name} {subtitle}".lower()
+        if q not in hay:
+            continue
+        key = ("template", name)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "type": "template",
+            "name": name,
+            "subtitle": subtitle,
+            "url": url,
+        })
+        if len(out) >= 8:
+            return jsonify(out)
+
+    return jsonify(out[:8])
+
+
+@app.route("/api/app/search", methods=["GET"])
+def api_app_search():
+    """Authenticated app search with client/workspace scoping."""
+    def _out(payload, status=200):
+        resp = make_response(jsonify(payload), status)
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return _out({"error": "Authentication required"}, 401)
+
+    uid = get_current_user_id()
+    if int(uid or 0) <= 0:
+        return _out({"error": "Authentication required"}, 401)
+
+    q_raw = _normalize_search_query(request.args.get("q"), max_len=64)
+    q = q_raw.lower()
+    if len(q) < 2:
+        return _out([])
+
+    raw_cid = str(request.cookies.get("camarad_client_id") or "").strip().lower()
+    try:
+        cid = int(raw_cid) if raw_cid and raw_cid not in ("0", "none", "null", "undefined") else None
+        if cid is not None and cid <= 0:
+            cid = None
+    except (TypeError, ValueError):
+        cid = None
+    if cid is None:
+        return _out({"error": "Client scope required"}, 400)
+    settings = _get_user_settings(uid)
+    payload = _build_chat_home_payload(uid, cid, settings)
+    if payload.get("forbidden_client"):
+        return _out({"error": "Client not found or not owned"}, 404)
+
+    out = []
+    seen = set()
+
+    for card in (payload.get("agents") or []):
+        hay = str(card.get("search_text") or "").lower()
+        if q not in hay:
+            continue
+        url = str(card.get("open_url") or "").strip()
+        if not url:
+            continue
+        key = ("agent", str(card.get("agent_slug") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "type": "agent",
+            "name": str(card.get("agent_name") or card.get("agent_slug") or "").strip(),
+            "subtitle": str(card.get("workspace_name") or "").strip(),
+            "url": url,
+        })
+        if len(out) >= 10:
+            return _out(out)
+
+    conn = get_db()
+    try:
+        _ensure_client_tables(conn)
+        cursor = conn.cursor()
+        if cid is not None and not _client_owned(conn, uid, cid):
+            return _out({"error": "Client not found or not owned"}, 404)
+
+        if cid is not None:
+            c_rows = cursor.execute(
+                """
+                SELECT connector_slug, status, config_json, COALESCE(client_id, 0) AS cfg_client_id
+                FROM connectors_config
+                WHERE user_id = ?
+                  AND COALESCE(client_id, 0) IN (?, 0)
+                ORDER BY CASE WHEN COALESCE(client_id, 0) = ? THEN 0 ELSE 1 END ASC, id DESC
+                """,
+                (uid, int(cid), int(cid)),
+            ).fetchall()
+        else:
+            c_rows = cursor.execute(
+                """
+                SELECT connector_slug, status, config_json, COALESCE(client_id, 0) AS cfg_client_id
+                FROM connectors_config
+                WHERE user_id = ?
+                ORDER BY CASE WHEN COALESCE(client_id, 0) = 0 THEN 0 ELSE 1 END ASC, id DESC
+                """,
+                (uid,),
+            ).fetchall()
+
+        slug_to_name = {v: k for k, v in CONNECTOR_NAME_TO_SLUG.items()}
+        added_connectors = set()
+        for row in c_rows:
+            slug = str(row[0] or "").strip().lower()
+            if not slug or slug in added_connectors:
+                continue
+            status = str(row[1] or "").strip()
+            cfg = {}
+            try:
+                cfg = json.loads(row[2]) if row[2] else {}
+            except Exception:
+                cfg = {}
+            custom = str((cfg or {}).get("custom_name") or "").strip()
+            display = custom or slug_to_name.get(slug) or _humanize_slug(slug)
+            hay = f"{slug} {display} {status}".lower()
+            if q not in hay:
+                continue
+            added_connectors.add(slug)
+            out.append({
+                "type": "connector",
+                "name": display,
+                "subtitle": status or "Configured",
+                "url": "/connectors",
+            })
+            if len(out) >= 10:
+                return _out(out)
+
+        sql = """
+            SELECT id, name, category, COALESCE(client_id, 0) AS flow_client_id
+            FROM flows
+            WHERE user_id = ? AND COALESCE(is_template, 0) = 1
+        """
+        params = [uid]
+        if cid is not None:
+            sql += " AND COALESCE(client_id, 0) = ?"
+            params.append(int(cid))
+        rows = cursor.execute(sql, tuple(params)).fetchall()
+        for r in rows:
+            tpl_id = int(r[0] or 0)
+            name = str(r[1] or "").strip()
+            category = str(r[2] or "").strip()
+            hay = f"{name} {category}".lower()
+            if q not in hay:
+                continue
+            key = ("template", tpl_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "type": "template",
+                "name": name,
+                "subtitle": category or "Template",
+                "url": f"/orchestrator?flow_id={tpl_id}",
+            })
+            if len(out) >= 10:
+                return _out(out)
+    finally:
+        conn.close()
+
+    return _out(out[:10])
+
+
 @app.route("/login")
 @app.route("/login/")
 @app.route("/register")
@@ -3241,9 +3483,26 @@ def search(ws_slug):
     return render_template('search_results.html', ws_slug=ws_slug, query=query, results=results)
 
 
+@app.route("/chat-demo")
+def chat_demo_page():
+    seed_q = str(request.args.get("q") or "").strip()
+    return render_template("chat_demo.html", seed_q=seed_q)
+
+
+@app.route("/platform-demo")
+@app.route("/demo")
+def platform_demo_page():
+    return render_template("platform_demo.html")
+
+
 @app.route('/chat')
 @app.route('/chat/')
 def chat_home():
+    demo_mode = str(request.args.get("demo") or "").strip().lower() in ("1", "true", "yes", "on")
+    if demo_mode and not is_user_authenticated():
+        seed_q = str(request.args.get("q") or "").strip()
+        return render_template("chat_demo.html", seed_q=seed_q)
+
     if AUTH_REQUIRED and not is_user_authenticated():
         return _auth_redirect(next_path="/chat")
     uid = get_current_user_id()
@@ -5890,6 +6149,17 @@ def enforce_client_scope_ownership():
     finally:
         conn.close()
     return None
+
+
+@app.after_request
+def enforce_no_store_for_html(response):
+    """Prevent stale HTML/UI from browser/CDN caches (especially mobile Safari)."""
+    content_type = str(response.headers.get("Content-Type") or "").lower()
+    if "text/html" in content_type:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 def _google_ads_build_summary(campaigns):
@@ -12969,19 +13239,27 @@ def api_client_connectors():
 @app.route("/api/client_connectors/<int:link_id>", methods=["PATCH"])
 def api_patch_client_connector(link_id):
     uid = get_current_user_id()
+    cid = get_current_client_id()
     conn = get_db()
     _ensure_client_tables(conn)
 
-    row = conn.execute(
-        """
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Client not found or not owned"}), 404
+
+    sql = """
         SELECT cc.id, cc.client_id
         FROM client_connectors cc
         JOIN clients c ON c.id = cc.client_id
         WHERE cc.id = ? AND c.user_id = ?
-        LIMIT 1
-        """,
-        (link_id, uid),
-    ).fetchone()
+    """
+    params = [link_id, uid]
+    if cid is not None:
+        sql += " AND cc.client_id = ?"
+        params.append(cid)
+    sql += " LIMIT 1"
+
+    row = conn.execute(sql, tuple(params)).fetchone()
 
     if not row:
         conn.close()
@@ -13021,20 +13299,35 @@ def api_patch_client_connector(link_id):
 
     sets.append("updated_at = datetime('now')")
     params.append(link_id)
-
-    conn.execute(f"UPDATE client_connectors SET {', '.join(sets)} WHERE id = ?", tuple(params))
+    if cid is not None:
+        conn.execute(f"UPDATE client_connectors SET {', '.join(sets)} WHERE id = ? AND client_id = ?", tuple(params + [cid]))
+    else:
+        conn.execute(f"UPDATE client_connectors SET {', '.join(sets)} WHERE id = ?", tuple(params))
     conn.commit()
-
-    updated = conn.execute(
-        """
-        SELECT id, client_id, connector_slug, account_id, account_name, status, config_json, last_synced, created_at, updated_at
-        FROM client_connectors
-        WHERE id = ?
-        LIMIT 1
-        """,
-        (link_id,),
-    ).fetchone()
+    if cid is not None:
+        updated = conn.execute(
+            """
+            SELECT id, client_id, connector_slug, account_id, account_name, status, config_json, last_synced, created_at, updated_at
+            FROM client_connectors
+            WHERE id = ? AND client_id = ?
+            LIMIT 1
+            """,
+            (link_id, cid),
+        ).fetchone()
+    else:
+        updated = conn.execute(
+            """
+            SELECT id, client_id, connector_slug, account_id, account_name, status, config_json, last_synced, created_at, updated_at
+            FROM client_connectors
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (link_id,),
+        ).fetchone()
     conn.close()
+
+    if not updated:
+        return jsonify({"error": "Client connector not found or not owned"}), 404
 
     out = dict(updated)
     try:
@@ -15091,6 +15384,7 @@ def boardroom_agents():
 def boardroom_meetings_list():
     """List all meetings (mock + DB)"""
     uid = get_current_user_id()
+    cid = get_current_client_id()
     meetings_out = []
 
     # Add mock meetings
@@ -15110,10 +15404,27 @@ def boardroom_meetings_list():
     # Add from DB
     try:
         conn = get_db()
-        rows = conn.execute(
-            "SELECT id, template_id, title, status, created_at, duration_min, agents_json, rounds, topic FROM meetings WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
-            (uid,)
-        ).fetchall()
+        _ensure_client_tables(conn)
+        try:
+            conn.execute("ALTER TABLE meetings ADD COLUMN client_id INTEGER")
+            conn.commit()
+        except Exception:
+            pass
+        if cid is not None and not _client_owned(conn, uid, cid):
+            conn.close()
+            return jsonify({"error": "Client not found or not owned"}), 404
+
+        sql = """
+            SELECT id, template_id, title, status, created_at, duration_min, agents_json, rounds, topic, client_id
+            FROM meetings
+            WHERE user_id = ?
+        """
+        params = [uid]
+        if cid is not None:
+            sql += " AND COALESCE(client_id, 0) = ?"
+            params.append(cid)
+        sql += " ORDER BY created_at DESC LIMIT 50"
+        rows = conn.execute(sql, tuple(params)).fetchall()
         conn.close()
         for r in rows:
             meetings_out.append({
@@ -15126,6 +15437,7 @@ def boardroom_meetings_list():
                 "agents": json.loads(r["agents_json"]) if r["agents_json"] else [],
                 "rounds": r["rounds"],
                 "topic": (r["topic"] or "")[:120],
+                "client_id": r["client_id"] if "client_id" in r.keys() else None,
             })
     except Exception:
         pass  # table may not exist yet
@@ -15136,6 +15448,8 @@ def boardroom_meetings_list():
 @app.route("/api/boardroom/meetings/<meeting_id>", methods=["GET"])
 def boardroom_meeting_detail(meeting_id):
     """Get full meeting details including transcript"""
+    uid = get_current_user_id()
+    cid = get_current_client_id()
     # Check mock meetings first
     for m in MOCK_MEETINGS:
         if m["id"] == meeting_id:
@@ -15145,7 +15459,23 @@ def boardroom_meeting_detail(meeting_id):
     try:
         real_id = meeting_id.replace("db-", "")
         conn = get_db()
-        row = conn.execute("SELECT * FROM meetings WHERE id = ?", (real_id,)).fetchone()
+        _ensure_client_tables(conn)
+        try:
+            conn.execute("ALTER TABLE meetings ADD COLUMN client_id INTEGER")
+            conn.commit()
+        except Exception:
+            pass
+
+        if cid is not None and not _client_owned(conn, uid, cid):
+            conn.close()
+            return jsonify({"error": "Meeting not found"}), 404
+
+        sql = "SELECT * FROM meetings WHERE id = ? AND user_id = ?"
+        params = [real_id, uid]
+        if cid is not None:
+            sql += " AND COALESCE(client_id, 0) = ?"
+            params.append(cid)
+        row = conn.execute(sql, tuple(params)).fetchone()
         conn.close()
         if row:
             return jsonify({
@@ -15161,6 +15491,7 @@ def boardroom_meeting_detail(meeting_id):
                 "transcript": json.loads(row["transcript_json"]) if row["transcript_json"] else [],
                 "summary": row["summary"],
                 "action_items": json.loads(row["action_items_json"]) if row["action_items_json"] else [],
+                "client_id": row["client_id"] if "client_id" in row.keys() else None,
             })
     except Exception:
         pass
@@ -15172,6 +15503,7 @@ def boardroom_meeting_detail(meeting_id):
 def boardroom_create_meeting():
     """Create a new meeting and run the simulation"""
     uid = get_current_user_id()
+    cid = get_current_client_id()
     data = request.get_json(force=True, silent=True) or {}
 
     template_id = data.get("template_id", "custom-sandbox")
@@ -15227,10 +15559,15 @@ def boardroom_create_meeting():
     meeting_id = None
     try:
         conn = get_db()
+        _ensure_client_tables(conn)
+        if cid is not None and not _client_owned(conn, uid, cid):
+            conn.close()
+            return jsonify({"error": "Client not found or not owned"}), 404
         conn.execute("""
             CREATE TABLE IF NOT EXISTS meetings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER DEFAULT 1,
+                client_id INTEGER,
                 template_id TEXT,
                 title TEXT,
                 status TEXT DEFAULT 'completed',
@@ -15245,10 +15582,14 @@ def boardroom_create_meeting():
                 config_json TEXT
             )
         """)
+        try:
+            conn.execute("ALTER TABLE meetings ADD COLUMN client_id INTEGER")
+        except Exception:
+            pass
         cursor = conn.execute("""
-            INSERT INTO meetings (user_id, template_id, title, status, duration_min, agents_json, rounds, topic, transcript_json, summary, action_items_json, config_json)
-            VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (uid, template_id, title, duration_min, json.dumps(agents), rounds, topic,
+            INSERT INTO meetings (user_id, client_id, template_id, title, status, duration_min, agents_json, rounds, topic, transcript_json, summary, action_items_json, config_json)
+            VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (uid, cid, template_id, title, duration_min, json.dumps(agents), rounds, topic,
               json.dumps(transcript), summary, json.dumps(action_items), json.dumps(config)))
         meeting_id = cursor.lastrowid
         conn.commit()

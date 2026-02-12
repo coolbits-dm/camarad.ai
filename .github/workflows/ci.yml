@@ -1,0 +1,38 @@
+name: Camarad CI
+
+on:
+  push:
+    branches: ["master", "main", "release/**"]
+  pull_request:
+    branches: ["master", "main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      AUTH_REQUIRED: "0"
+      APP_ENV: "test"
+      FLASK_ENV: "test"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile
+        run: |
+          python3 -m py_compile app.py database.py
+
+      - name: Run scoped tests
+        run: |
+          python3 test_m3_scoping.py
+          python3 test_ga4_oauth.py
+          python3 test_plan_recommendations.py

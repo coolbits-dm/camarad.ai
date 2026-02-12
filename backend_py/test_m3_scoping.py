@@ -7,6 +7,7 @@ import app as m
 
 
 m.AUTH_REQUIRED = False
+m.init_db()
 client = m.app.test_client()
 RUN_ID = int(time.time())
 PREFIX = f"m3-{RUN_ID}"
@@ -36,6 +37,17 @@ def _minimal_flow_payload():
             ],
             "connections": [],
         }
+    }
+
+
+def _minimal_meeting_payload():
+    return {
+        "template_id": "strategy-review",
+        "title": "Scoped Boardroom Test",
+        "agents": ["ceo-strategy", "cmo-growth"],
+        "topic": "Scope integrity check",
+        "rounds": 1,
+        "config": {"complexity": "low"},
     }
 
 
@@ -187,6 +199,65 @@ def run():
     history_b = r.get_json() or []
     if exec_id > 0:
         assert all(int(x.get("id") or 0) != exec_id for x in history_b), history_b[:3]
+
+    # Flow by-id matrix: client A resource must not be readable under client B
+    flow_create = client.post(
+        "/api/flows",
+        data=json.dumps(_minimal_flow_payload()),
+        content_type="application/json",
+        headers=hdr(1, client_a),
+    )
+    assert flow_create.status_code == 200, (flow_create.status_code, flow_create.get_data(as_text=True)[:240])
+    flow_id = int((flow_create.get_json() or {}).get("flow_id") or 0)
+    assert flow_id > 0
+
+    flow_get_a = client.get(f"/api/flows/{flow_id}", headers=hdr(1, client_a))
+    assert flow_get_a.status_code == 200, (flow_get_a.status_code, flow_get_a.get_data(as_text=True)[:240])
+
+    flow_get_b = client.get(f"/api/flows/{flow_id}", headers=hdr(1, client_b))
+    assert flow_get_b.status_code == 404, (flow_get_b.status_code, flow_get_b.get_data(as_text=True)[:240])
+
+    # Client connector by-id matrix: patch under different owned client must be 404
+    links_a = client.get(f"/api/client_connectors?client_id={client_a}", headers=hdr(1, client_a))
+    assert links_a.status_code == 200
+    link_id_a = int((links_a.get_json() or [{}])[0].get("id") or 0)
+    assert link_id_a > 0
+
+    patch_ok = client.patch(
+        f"/api/client_connectors/{link_id_a}",
+        data=json.dumps({"status": "connected"}),
+        content_type="application/json",
+        headers=hdr(1, client_a),
+    )
+    assert patch_ok.status_code == 200, (patch_ok.status_code, patch_ok.get_data(as_text=True)[:240])
+
+    patch_leak = client.patch(
+        f"/api/client_connectors/{link_id_a}",
+        data=json.dumps({"status": "error"}),
+        content_type="application/json",
+        headers=hdr(1, client_b),
+    )
+    assert patch_leak.status_code == 404, (patch_leak.status_code, patch_leak.get_data(as_text=True)[:240])
+
+    # Boardroom by-id matrix: meeting under client A must not be readable in client B
+    meet_create = client.post(
+        "/api/boardroom/meetings",
+        data=json.dumps(_minimal_meeting_payload()),
+        content_type="application/json",
+        headers=hdr(1, client_a),
+    )
+    assert meet_create.status_code == 200, (meet_create.status_code, meet_create.get_data(as_text=True)[:240])
+    meeting_id = str((meet_create.get_json() or {}).get("id") or "")
+    assert meeting_id.startswith("db-"), meeting_id
+
+    meet_get_a = client.get(f"/api/boardroom/meetings/{meeting_id}", headers=hdr(1, client_a))
+    assert meet_get_a.status_code == 200, (meet_get_a.status_code, meet_get_a.get_data(as_text=True)[:240])
+
+    meet_get_b = client.get(f"/api/boardroom/meetings/{meeting_id}", headers=hdr(1, client_b))
+    assert meet_get_b.status_code == 404, (meet_get_b.status_code, meet_get_b.get_data(as_text=True)[:240])
+
+    meet_get_missing_scope = client.get(f"/api/boardroom/meetings/{meeting_id}", headers=hdr(1, None))
+    assert meet_get_missing_scope.status_code == 400, (meet_get_missing_scope.status_code, meet_get_missing_scope.get_data(as_text=True)[:240])
 
     # Spoof guard: in production mode, X-User-ID fallback must not grant scoped access
     old_auth_required = m.AUTH_REQUIRED
