@@ -1,6 +1,0 @@
-cd /opt/camarad.ai
-git apply --check /path/to/patch.diff   # verifică dacă se aplică curat
-git apply /path/to/patch.diff
-git add components/layout/Sidebar.tsx components/chat/ChatWindow.tsx
-git commit -m "fix: logo visibility and composer spacing"
-pm2 restart camarad-ui

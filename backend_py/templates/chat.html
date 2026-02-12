@@ -1,0 +1,433 @@
+{% extends "base.html" %}
+
+{% block title %}Chat with {{ agent_name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div class="d-flex align-items-center gap-3">
+    <div id="chat-header-avatar" class="avatar-container animate micro-tilt" style="width:48px;height:48px;">
+      <!-- JS will render agent avatar -->
+    </div>
+    <div>
+      <h4 class="mb-0" id="chat-agent-title">{{ agent_name }}</h4>
+      <small class="text-muted d-block" id="chat-agent-status">● Online</small>
+      <small class="text-muted d-block active-client-label" style="font-size:0.72rem;">Active Client: None</small>
+    </div>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-sm btn-outline-success" onclick="startNewConversation()">
+      <i class="bi bi-plus-circle me-1"></i> New Chat
+    </button>
+    <button class="btn btn-sm btn-outline-danger" onclick="deleteCurrentConversation()" title="Delete this chat">
+      <i class="bi bi-trash"></i>
+    </button>
+  </div>
+</div>
+
+<div id="chat-history" class="border rounded-3 p-3 mb-3" style="height:calc(100vh - 220px); overflow-y:auto; background:#0d1117; border-color:#30363d !important;">
+  {% for msg in history %}
+  <div class="d-flex mb-3 {% if msg.role == 'user' %}justify-content-end{% else %}justify-content-start{% endif %} gap-2">
+    {% if msg.role != 'user' %}
+    <div class="chat-avatar-wrap" id="chat-avatar-static">
+      <!-- JS will render SVG avatar here -->
+    </div>
+    {% endif %}
+    <div class="{% if msg.role == 'user' %}bg-primary{% else %}bg-dark border border-secondary{% endif %} rounded-3 px-3 py-2" style="max-width:75%;">
+      <div class="d-flex align-items-center mb-1">
+        {% if msg.role == 'user' %}<i class="bi bi-person-fill me-2" style="font-size:0.8rem;opacity:0.7"></i>{% endif %}
+        <small class="fw-bold" style="opacity:0.8">{% if msg.role == 'user' %}You{% else %}{{ agent_name }}{% endif %}</small>
+      </div>
+      <div style="font-size:0.9rem;">{{ msg.content|safe }}</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div id="chat-suggestions-wrap" class="mb-2">
+  <div id="chat-suggestions" class="d-flex flex-wrap gap-2"></div>
+</div>
+
+<div class="input-group">
+  <input type="text" id="message-input" class="form-control bg-dark border-secondary text-light" placeholder="Type a message..." autocomplete="off">
+  <button class="btn btn-outline-info" id="compose-flow-btn" title="Generate orchestrator flow from this prompt">
+    <i class="bi bi-diagram-3 me-1"></i>Generate Flow
+  </button>
+  <button class="btn btn-primary" id="send-btn"><i class="bi bi-send me-1"></i>Send</button>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    window.agentName = '{{ agent_name }}';
+    window.wsSlug = '{{ ws_slug }}';
+    window.agentSlug = '{{ agent_slug }}';
+    window.convId = {{ conv_id or 'null' }};
+</script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const chatHistory = document.getElementById('chat-history');
+    const userInput = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+    const composeFlowBtn = document.getElementById('compose-flow-btn');
+    const suggestionsEl = document.getElementById('chat-suggestions');
+
+    if (!chatHistory || !userInput || !sendBtn) {
+        console.error('Chat elements not found!');
+        return;
+    }
+
+    // Scroll to bottom on load
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+
+var msgAvatarCounter = 0;
+
+    function appendMessage(role, content, isHtml) {
+        var div = document.createElement('div');
+        div.className = 'd-flex mb-3 gap-2 ' + (role === 'user' ? 'justify-content-end' : 'justify-content-start');
+        var bgClass = role === 'user' ? 'bg-primary' : 'bg-dark border border-secondary';
+        var name = role === 'user' ? 'You' : window.agentName;
+        var plainText = isHtml ? content.replace(/<[^>]+>/g, ' ') : content;
+
+        // Build avatar for agent messages (with unique ID for gesture targeting)
+        var avatarHtml = '';
+        var avatarId = '';
+        if (role !== 'user') {
+          msgAvatarCounter++;
+          avatarId = 'msg-avatar-' + msgAvatarCounter;
+          if (window._agentPhotoSrc) {
+            avatarHtml = '<div class="chat-avatar-wrap" id="' + avatarId + '"><div class="avatar-photo-mini"><img src="' + window._agentPhotoSrc + '" alt=""></div></div>';
+          } else if (window.CamaradAvatars) {
+            avatarHtml = '<div class="chat-avatar-wrap" id="' + avatarId + '">' + window.CamaradAvatars.getSVG(window.agentSlug, 'neutral', 36) + '</div>';
+          }
+        }
+
+        var userIcon = role === 'user' ? '<i class="bi bi-person-fill me-2" style="font-size:0.8rem;opacity:0.7"></i>' : '';
+
+        div.innerHTML = avatarHtml
+          + '<div class="' + bgClass + ' rounded-3 px-3 py-2" style="max-width:75%;">' 
+          + '<div class="d-flex align-items-center mb-1">'
+          + userIcon
+          + '<small class="fw-bold" style="opacity:0.8">' + name + '</small></div>'
+          + '<div style="font-size:0.9rem;">' + (isHtml ? content : escapeHtml(content)) + '</div></div>';
+        chatHistory.appendChild(div);
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+
+        // ── Contextual gesture reaction ──
+        if (window.CamaradAvatars && window.CamaradAvatars.gestureReact) {
+          // Agent message → react the inline avatar AND the header avatar
+          if (role !== 'user' && avatarId) {
+            var avatarEl = document.getElementById(avatarId);
+            if (avatarEl) {
+              window.CamaradAvatars.gestureReact(avatarEl, window.agentSlug, plainText, { fallbackExpr: 'smile' });
+            }
+          }
+          // Header avatar reacts to every message
+          var headerAv = document.getElementById('chat-header-avatar');
+          if (headerAv) {
+            var hExpr = role === 'user' ? 'listen' : plainText;
+            if (role === 'user') {
+              // User typing → agent listens
+              window.CamaradAvatars.gestureReact(headerAv, window.agentSlug, 'tell me more, I see', { fallbackExpr: 'neutral' });
+            } else {
+              window.CamaradAvatars.gestureReact(headerAv, window.agentSlug, plainText, { fallbackExpr: 'neutral' });
+            }
+          }
+        }
+    }
+
+    function showTyping() {
+        var div = document.createElement('div');
+        div.className = 'd-flex mb-3 gap-2 justify-content-start';
+        div.id = 'typing-indicator';
+        var avatarHtml = '';
+        if (window._agentPhotoSrc) {
+          avatarHtml = '<div class="chat-avatar-wrap typing-avatar"><div class="avatar-photo-mini"><img src="' + window._agentPhotoSrc + '" alt=""></div></div>';
+        } else if (window.CamaradAvatars) {
+          avatarHtml = '<div class="chat-avatar-wrap typing-avatar">' + window.CamaradAvatars.getSVG(window.agentSlug, 'think', 36) + '</div>';
+        }
+        div.innerHTML = avatarHtml + '<div class="bg-dark border border-secondary rounded-3 px-3 py-2">'
+          + '<div class="d-flex align-items-center gap-2">'
+          + '<span class="text-muted" style="font-size:0.85rem"><em>typing</em>'
+          + '<span class="typing-dots">...</span></span></div></div>';
+        chatHistory.appendChild(div);
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+
+        // Header avatar enters thinking mode while typing
+        if (window.CamaradAvatars) {
+          var headerAv = document.getElementById('chat-header-avatar');
+          if (headerAv) {
+            window.CamaradAvatars.setExpression(headerAv, window.agentSlug, 'think');
+            var svg = headerAv.querySelector('svg');
+            if (svg) svg.classList.add('gesture-tilt-left');
+          }
+        }
+        return div;
+    }
+
+    function renderSuggestions(items) {
+        if (!suggestionsEl) return;
+        suggestionsEl.innerHTML = '';
+        if (!Array.isArray(items) || !items.length) return;
+        items.forEach(function(item) {
+            var prompt = String((item && item.prompt) || '').trim();
+            var label = String((item && item.label) || prompt).trim();
+            if (!prompt) return;
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-sm btn-outline-secondary rounded-pill';
+            btn.style.maxWidth = '100%';
+            btn.style.whiteSpace = 'nowrap';
+            btn.style.overflow = 'hidden';
+            btn.style.textOverflow = 'ellipsis';
+            btn.textContent = label;
+            btn.title = prompt;
+            btn.addEventListener('click', function() {
+                userInput.value = prompt;
+                userInput.focus();
+                sendMessage();
+            });
+            suggestionsEl.appendChild(btn);
+        });
+    }
+
+    function loadSuggestions() {
+        if (!suggestionsEl) return;
+        var params = new URLSearchParams({
+          ws_slug: window.wsSlug || '',
+          agent_slug: window.agentSlug || ''
+        });
+        if (window.convId) params.set('conv_id', String(window.convId));
+        fetch('/api/chat/suggestions?' + params.toString())
+          .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+          })
+          .then(function(data) {
+            renderSuggestions((data && data.suggestions) || []);
+          })
+          .catch(function() {
+            renderSuggestions([]);
+          });
+    }
+
+    function estimateChatMessageCost(message) {
+        var text = String(message || '');
+        var lower = text.toLowerCase();
+        var cost = 5;
+
+        var looksHeavy = text.length > 50
+          || text.indexOf('?') >= 0
+          || /(how|list|campaign|api|roas|budget|ctr|conversion|report|connector|seo|ga4|google ads)/i.test(text);
+        if (looksHeavy) {
+          var heavyBonus = 15 + (Math.floor(text.length / 100) * 5);
+          heavyBonus = Math.max(15, Math.min(30, heavyBonus));
+          cost += heavyBonus;
+        }
+
+        var looksToolish = /(generate|create|build|run|export|sync|fetch|webhook|deploy|boardroom|asset)/i.test(lower);
+        if (looksToolish) cost += 20;
+
+        return cost;
+    }
+
+    async function sendMessage() {
+        const message = userInput.value.trim();
+        if (!message) return;
+        if (sendBtn.disabled) return;
+        const requestId = (window.crypto && window.crypto.randomUUID)
+          ? window.crypto.randomUUID()
+          : ('req-' + Date.now() + '-' + Math.floor(Math.random() * 1e6));
+
+        sendBtn.disabled = true;
+
+        // CT spend gate for chat usage (simple + heavy prompts)
+        const msgCost = estimateChatMessageCost(message);
+        if (window.spendCT && typeof window.spendCT === 'function') {
+            const spend = await window.spendCT(msgCost, 'chat_message', 'Chat message: ' + message.substring(0, 80), { silentSuccess: true, request_id: requestId });
+            if (!spend || spend.success !== true) {
+                sendBtn.disabled = false;
+                userInput.focus();
+                return;
+            }
+
+        }
+        appendMessage('user', message, false);
+        userInput.value = '';
+        var typing = showTyping();
+
+        fetch(window.location.pathname, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: message, conv_id: window.convId, request_id: requestId })
+        })
+        .then(function(res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(function(data) {
+            if (typing && typing.parentNode) typing.parentNode.removeChild(typing);
+
+            var reply = data.response_html || data.response || data.error || 'No response';
+            appendMessage('agent', reply, true);
+
+            // Update conv_id if returned (new conversation)
+            if (data.conv_id && !window.convId) {
+                window.convId = data.conv_id;
+                // Update URL without reload
+                var url = new URL(window.location);
+                url.searchParams.set('conv_id', data.conv_id);
+                window.history.replaceState({}, '', url);
+            }
+
+            // Refresh sidebar chat list
+            if (window.loadSidebarChats) window.loadSidebarChats();
+            loadSuggestions();
+        })
+        .catch(function(err) {
+            if (typing && typing.parentNode) typing.parentNode.removeChild(typing);
+            appendMessage('agent', 'Error: ' + err.message, false);
+            if (window.showToast) window.showToast('Chat Error', err.message, 'error');
+            loadSuggestions();
+        })
+        .finally(function() {
+            sendBtn.disabled = false;
+            userInput.focus();
+        });
+    }
+
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(text));
+        return div.innerHTML;
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    if (composeFlowBtn) {
+      composeFlowBtn.addEventListener('click', composeFlowFromPrompt);
+    }
+    userInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    // Focus input
+    userInput.focus();
+    loadSuggestions();
+
+    async function composeFlowFromPrompt() {
+        var prompt = userInput.value.trim();
+        if (!prompt) return;
+        if (composeFlowBtn) composeFlowBtn.disabled = true;
+        try {
+          var res = await fetch('/api/orchestrator/compose', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({prompt: prompt})
+          });
+          var data = await res.json();
+          if (!res.ok || !data.success) {
+            var msg = (data && (data.error || data.message)) || ('HTTP ' + res.status);
+            if (window.showToast) window.showToast('Flow Compose Error', msg, 'error');
+            return;
+          }
+          if (window.showToast) window.showToast('Flow generated. Opening orchestrator...', 'success');
+          window.location.href = '/orchestrator?flow_id=' + encodeURIComponent(data.flow_id);
+        } catch (err) {
+          if (window.showToast) window.showToast('Flow Compose Error', err.message || String(err), 'error');
+        } finally {
+          if (composeFlowBtn) composeFlowBtn.disabled = false;
+        }
+    }
+
+    // ── Initialize avatars ──
+    if (window.CamaradAvatars) {
+      // Header avatar
+      var headerAvEl = document.getElementById('chat-header-avatar');
+      if (headerAvEl) {
+        window.CamaradAvatars.render(headerAvEl, window.agentSlug, { size: 48, expression: 'smile', animate: true });
+        var profile = window.CamaradAvatars.getProfile(window.agentSlug);
+        if (profile) headerAvEl.style.setProperty('--avatar-accent', profile.accentColor);
+        // Status color
+        var statusEl = document.getElementById('chat-agent-status');
+        if (statusEl && profile) statusEl.style.color = profile.accentColor;
+      }
+      // Server-rendered message avatars
+      document.querySelectorAll('#chat-avatar-static').forEach(function(el) {
+        el.innerHTML = window.CamaradAvatars.getSVG(window.agentSlug, 'neutral', 36);
+      });
+    }
+
+    // ── Load custom avatar from DB if uploaded ──
+    fetch('/api/agents/' + window.agentSlug)
+      .then(function(r) { return r.json(); })
+      .then(function(cfg) {
+        // Custom name
+        if (cfg.custom_name && cfg.custom_name !== window.agentName) {
+          window.agentName = cfg.custom_name;
+          var titleEl = document.getElementById('chat-agent-title');
+          if (titleEl) titleEl.textContent = cfg.custom_name;
+        }
+        // Custom photo overrides SVG
+        if (cfg.avatar_base64) {
+          window._agentPhotoSrc = 'data:image/png;base64,' + cfg.avatar_base64;
+          var headerAv = document.getElementById('chat-header-avatar');
+          if (headerAv) {
+            headerAv.innerHTML = '<div class="avatar-photo-mini" style="width:48px;height:48px;--avatar-accent:' + (window.CamaradAvatars && window.CamaradAvatars.getProfile(window.agentSlug) ? window.CamaradAvatars.getProfile(window.agentSlug).accentColor : '#58a6ff') + '"><img src="' + window._agentPhotoSrc + '" alt="Avatar"></div>';
+          }
+          // Update server-rendered message avatars
+          document.querySelectorAll('#chat-avatar-static').forEach(function(el) {
+            el.innerHTML = '<div class="avatar-photo-mini"><img src="' + window._agentPhotoSrc + '" alt=""></div>';
+          });
+        }
+        // Custom colors
+        if (cfg.avatar_colors && window.CamaradAvatars) {
+          var p = window.CamaradAvatars.PROFILES[window.agentSlug];
+          if (p) {
+            if (cfg.avatar_colors.accent) p.accentColor = cfg.avatar_colors.accent;
+            if (cfg.avatar_colors.skin) p.skinTone = cfg.avatar_colors.skin;
+            if (cfg.avatar_colors.hair) p.hairColor = cfg.avatar_colors.hair;
+            // Re-render if no custom photo
+            if (!cfg.avatar_base64) {
+              var headerAv = document.getElementById('chat-header-avatar');
+              if (headerAv) window.CamaradAvatars.render(headerAv, window.agentSlug, { size: 48, expression: 'smile', animate: true });
+              document.querySelectorAll('#chat-avatar-static').forEach(function(el) {
+                el.innerHTML = window.CamaradAvatars.getSVG(window.agentSlug, 'neutral', 36);
+              });
+            }
+          }
+        }
+      })
+      .catch(function(e) { console.warn('Could not load agent config:', e); });
+});
+
+function startNewConversation() {
+    fetch('/api/conversations/new', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({workspace_slug: window.wsSlug, agent_slug: window.agentSlug})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        if (d.redirect) {
+            if (window.showToast) window.showToast('New Chat', 'Starting fresh conversation...', 'success', 1500);
+            setTimeout(function() { window.location.href = d.redirect; }, 500);
+        }
+    });
+}
+
+function deleteCurrentConversation() {
+    if (!window.convId) return;
+    if (!confirm('Delete this conversation permanently?')) return;
+    fetch('/api/conversations/' + window.convId, {method: 'DELETE'})
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+          if (d.success) {
+              if (window.showToast) window.showToast('Chat Deleted', 'Conversation removed.', 'info', 1500);
+              setTimeout(function() { window.location.href = '/chat/' + window.wsSlug + '/' + window.agentSlug; }, 500);
+          }
+      });
+}
+</script>
+{% endblock %}

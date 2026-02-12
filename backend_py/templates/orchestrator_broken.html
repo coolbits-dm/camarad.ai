@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+
+{% block title %}Orchestrator{% endblock %}
+
+{% block content %}
+<div class="d-flex h-100">
+  {% include "sidebar.html" %}
+  <main class="flex-grow-1 d-flex flex-column overflow-hidden" style="margin-left: 280px;">
+    <!-- Header -->
+    <div class="bg-dark border-bottom border-secondary p-3 d-flex justify-content-between align-items-center">
+      <h4 class="mb-0">Orchestrator (Mock)</h4>
+      <div class="d-flex gap-2 flex-wrap">
+        <button class="btn btn-sm btn-outline-primary" onclick="addNode('trigger')">+ Trigger</button>
+        <button class="btn btn-sm btn-outline-primary" onclick="addNode('agent')">+ Agent</button>
+        <button class="btn btn-sm btn-outline-primary" onclick="addNode('connector')">+ Connector</button>
+        <button class="btn btn-sm btn-outline-primary" onclick="addNode('condition')">+ Condition</button>
+        <button class="btn btn-sm btn-outline-primary" onclick="addNode('output')">+ Output</button>
+        <button class="btn btn-sm btn-outline-success" onclick="saveFlow()">Save</button>
+        <button class="btn btn-sm btn-outline-danger" onclick="clearFlow()">Clear</button>
+        <button class="btn btn-sm btn-outline-info" onclick="exportFlow()">Export JSON</button>
+        <button class="btn btn-sm btn-outline-warning" onclick="runFlow()">Run Mock</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="resetView()">Reset View</button>
+      </div>
+    </div>
+
+    <!-- Canvas full -->
+    <div id="canvas" class="flex-grow-1 position-relative bg-dark" style="overflow: hidden; cursor: grab;">
+      <!-- Noduri și linii aici -->
+    </div>
+  </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/interactjs@1.10.27/dist/interact.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leader-line@1.0.7/leader-line.min.js"></script>
+<script>
+  const canvas = document.getElementById('canvas');
+  let lines = [];
+  let scale = 1;
+  let translateX = 0;
+  let translateY = 0;
+
+  // Pan: drag pe canvas background
+  interact(canvas)
+    .draggable({
+      inertia: true,
+      listeners: {
+        move(event) {
+          translateX += event.dx / scale;
+          translateY += event.dy / scale;
+          updateTransform();
+        }
+      }
+    });
+
+  // Zoom: wheel pe canvas
+  canvas.addEventListener('wheel', event => {
+    event.preventDefault();
+    const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
+    scale = Math.max(0.3, Math.min(3, scale * zoomFactor));
+    updateTransform();
+  });
+
+  function updateTransform() {
+    canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+  }
+
+  function resetView() {
+    scale = 1;
+    translateX = 0;
+    translateY = 0;
+    updateTransform();
+    canvas.querySelectorAll('.node').forEach(n => {
+      n.style.transform = 'none';
+      n.setAttribute('data-x', 0);
+      n.setAttribute('data-y', 0);
+    });
+    updateLines();
+  }
+
+  function addNode(type) {
+    const node = document.createElement('div');
+    node.className = `node position-absolute p-3 rounded border bg-secondary text-light shadow`;
+    node.dataset.type = type;
+    node.style.left = `${Math.random() * 400 + 100}px`;
+    node.style.top = `${Math.random() * 300 + 100}px`;
+    node.style.zIndex = 10;
+    node.innerHTML = `
+      <div class="fw-bold">${type.toUpperCase()}</div>
+      <div>${type} node</div>
+      <button class="btn btn-sm btn-danger position-absolute top-0 end-0 m-1" onclick="this.parentElement.remove(); updateLines()">×</button>
+    `;
+    canvas.appendChild(node);
+    makeDraggable(node);
+    makeConnectable(node);
+  }
+
+  function makeDraggable(el) {
+    interact(el).draggable({
+      inertia: true,
+      listeners: {
+        move(event) {
+          const target = event.target;
+          const x = (parseFloat(target.getAttribute('data-x')) || 0) + event.dx;
+          const y = (parseFloat(target.getAttribute('data-y')) || 0) + event.dy;
+          target.style.transform = `translate(${x}px, ${y}px)`;
+          target.setAttribute('data-x', x);
+          target.setAttribute('data-y', y);
+          updateLines();
+        }
+      }
+    });
+  }
+
+  function makeConnectable(node) {
+    node.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      if (window.connectingFrom) {
+        const line = new LeaderLine(window.connectingFrom, node, { color: '#58a6ff', size: 3 });
+        lines.push(line);
+        window.connectingFrom = null;
+      } else {
+        window.connectingFrom = node;
+      }
+    });
+  }
+
+  function updateLines() {
+    lines.forEach(line => line.position());
+  }
+
+  function clearFlow() {
+    canvas.innerHTML = '';
+    lines.forEach(l => l.remove());
+    lines = [];
+  }
+
+  function saveFlow() {
+    const nodes = Array.from(canvas.querySelectorAll('.node')).map(n => ({
+      type: n.dataset.type,
+      x: parseFloat(n.getAttribute('data-x') || 0) + parseFloat(n.style.left || 0),
+      y: parseFloat(n.getAttribute('data-y') || 0) + parseFloat(n.style.top || 0),
+      label: n.querySelector('div:nth-child(2)').textContent
+    }));
+
+    const connections = lines.map(l => ({
+      from: l.start.id,
+      to: l.end.id
+    }));
+
+    const flow = { nodes, connections };
+    localStorage.setItem('camarad_orchestrator_flow', JSON.stringify(flow));
+    alert('Flow saved!');
+  }
+
+  function exportFlow() {
+    const nodes = Array.from(canvas.querySelectorAll('.node')).map(n => ({
+      type: n.dataset.type,
+      x: parseFloat(n.getAttribute('data-x') || 0) + parseFloat(n.style.left || 0),
+      y: parseFloat(n.getAttribute('data-y') || 0) + parseFloat(n.style.top || 0),
+      label: n.querySelector('div:nth-child(2)').textContent
+    }));
+
+    const connections = lines.map(l => ({
+      from: l.start.id,
+      to: l.end.id
+    }));
+
+    const flow = {
+      version: "1.0",
+      created: new Date().toISOString(),
+      nodes,
+      connections
+    };
+
+    const jsonStr = JSON.stringify(flow, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `camarad-flow-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    alert('Flow exported as JSON!');
+  }
+
+  function runFlow() {
+    const triggers = canvas.querySelectorAll('.node[data-type="trigger"]');
+    const outputs = canvas.querySelectorAll('.node[data-type="output"]');
+
+    if (triggers.length === 0) {
+      alert("Add at least one Trigger node!");
+      return;
+    }
+    if (outputs.length === 0) {
+      alert("Add at least one Output node!");
+      return;
+    }
+
+    alert(`Mock run: ${triggers.length} triggers, ${outputs.length} outputs, ${lines.length} connections. Check console for log.`);
+
+    console.log("Mock Flow Execution:");
+    console.log(`Triggers: ${triggers.length}`);
+    console.log(`Outputs: ${outputs.length}`);
+    console.log(`Connections: ${lines.length}`);
+  }
+
+  // Load on start
+  const saved = localStorage.getItem('camarad_orchestrator_flow');
+  if (saved) {
+    try {
+      const flow = JSON.parse(saved);
+      flow.nodes.forEach(n => {
+        addNode(n.type);
+        const node = canvas.lastElementChild;
+        node.style.left = `${n.x}px`;
+        node.style.top = `${n.y}px`;
+        node.querySelector('div:nth-child(2)').textContent = n.label;
+      });
+      setTimeout(() => {
+        flow.connections.forEach(c => {
+          const from = canvas.querySelector(`.node[data-type="${c.from}"]`);
+          const to = canvas.querySelector(`.node[data-type="${c.to}"]`);
+          if (from && to) {
+            const line = new LeaderLine(from, to, { color: '#58a6ff', size: 3 });
+            lines.push(line);
+          }
+        });
+      }, 100);
+    } catch (e) {
+      console.error('Error loading flow:', e);
+    }
+  }
+</script>
+{% endblock %}

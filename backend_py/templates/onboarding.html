@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  {% if google_site_verification %}
+  <meta name="google-site-verification" content="{{ google_site_verification }}">
+  {% endif %}
+  {% if gtm_container_id %}
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','{{ gtm_container_id }}');</script>
+  <!-- End Google Tag Manager -->
+  {% endif %}
+  <title>Onboarding - Camarad.AI</title>
+  <link rel="icon" type="image/x-icon" href="/static/brand/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/brand/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/brand/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/brand/apple-touch-icon.png">
+  <link rel="manifest" href="/static/brand/site.webmanifest">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <style>
+    :root {
+      --bg: #090d14;
+      --panel: #111827;
+      --border: #263349;
+      --text: #dbe3f0;
+      --muted: #8f9bb3;
+      --accent: #1f6feb;
+      --accent-2: #1456ad;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: "Segoe UI", "SF Pro Text", "Helvetica Neue", sans-serif;
+      background:
+        radial-gradient(880px 460px at 12% -180px, rgba(31, 111, 235, 0.2), transparent 70%),
+        linear-gradient(180deg, #090d14 0%, #0b111b 100%);
+      padding: 1rem;
+    }
+    .shell {
+      width: min(760px, 100%);
+      margin: 1rem auto;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: rgba(17, 24, 39, 0.93);
+      box-shadow: 0 28px 70px rgba(0, 0, 0, 0.45);
+      padding: 1.2rem;
+    }
+    .brand-head {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin-bottom: 0.65rem;
+      color: #dfe9ff;
+      text-decoration: none;
+    }
+    .brand-head img {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      object-fit: contain;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(1.35rem, 3vw, 1.85rem);
+      letter-spacing: -0.02em;
+    }
+    p { color: var(--muted); margin: 0.35rem 0 1rem; }
+    .label { font-size: 0.9rem; color: #c7d4e8; margin-bottom: 0.25rem; }
+    .input, .select {
+      width: 100%;
+      border: 1px solid #2a3952;
+      background: #0f1827;
+      color: #e0e8f5;
+      border-radius: 10px;
+      padding: 0.62rem 0.74rem;
+    }
+    .input:focus, .select:focus {
+      outline: none;
+      border-color: #3f82be;
+      box-shadow: 0 0 0 3px rgba(57, 160, 255, 0.25);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.8rem;
+    }
+    .btn-submit {
+      border: 1px solid #2f4668;
+      border-radius: 10px;
+      background: linear-gradient(180deg, var(--accent), var(--accent-2));
+      color: #fff;
+      font-weight: 600;
+      padding: 0.72rem 1rem;
+    }
+    .status {
+      min-height: 20px;
+      margin-top: 0.7rem;
+      font-size: 0.9rem;
+      color: #9cc8ff;
+    }
+    @media (max-width: 720px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  {% if gtm_container_id %}
+  <!-- Google Tag Manager (noscript) -->
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ gtm_container_id }}"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+  <!-- End Google Tag Manager (noscript) -->
+  {% endif %}
+  <section class="shell">
+    <a href="/landing" class="brand-head" aria-label="Camarad.AI landing">
+      <img src="/static/brand/camarad-logo-64.png" alt="Camarad logo">
+      <span>Camarad.AI</span>
+    </a>
+    <h1>Finish your onboarding</h1>
+    <p>Set up your real Camarad profile. This unlocks app navigation, chat, connectors, and orchestrator with your account context.</p>
+
+    <form id="onboarding-form">
+      <div class="grid">
+        <div>
+          <label class="label" for="display_name">Display name</label>
+          <input class="input" id="display_name" name="display_name" maxlength="80" required value="{{ (profile.display_name or '')|e }}">
+        </div>
+        <div>
+          <label class="label" for="role">Role</label>
+          <input class="input" id="role" name="role" maxlength="80" placeholder="Founder, CMO, Freelancer..." value="{{ (profile.role or '')|e }}">
+        </div>
+        <div>
+          <label class="label" for="timezone">Timezone</label>
+          <input class="input" id="timezone" name="timezone" maxlength="80" value="{{ (profile.timezone or 'Europe/Bucharest')|e }}">
+        </div>
+        <div>
+          <label class="label" for="language">Language</label>
+          <select class="select" id="language" name="language">
+            <option value="en" {% if (profile.language or 'en') == 'en' %}selected{% endif %}>English</option>
+            <option value="ro" {% if (profile.language or '') == 'ro' %}selected{% endif %}>Romanian</option>
+            <option value="de" {% if (profile.language or '') == 'de' %}selected{% endif %}>German</option>
+            <option value="fr" {% if (profile.language or '') == 'fr' %}selected{% endif %}>French</option>
+            <option value="es" {% if (profile.language or '') == 'es' %}selected{% endif %}>Spanish</option>
+          </select>
+        </div>
+        <div>
+          <label class="label" for="default_workspace">Default workspace</label>
+          <select class="select" id="default_workspace" name="default_workspace">
+            <option value="agency">Agency</option>
+            <option value="business">Business</option>
+            <option value="personal">Personal</option>
+            <option value="development">Development</option>
+          </select>
+        </div>
+        <div>
+          <label class="label" for="company_name">Company name (optional)</label>
+          <input class="input" id="company_name" name="company_name" maxlength="120" placeholder="Acme SRL">
+        </div>
+      </div>
+
+      <div style="margin-top:0.8rem;">
+        <label class="label" for="company_website">Company website (optional)</label>
+        <input class="input" id="company_website" name="company_website" maxlength="200" placeholder="https://example.com">
+      </div>
+
+      <div style="margin-top:1rem; display:flex; justify-content:flex-end;">
+        <button type="submit" class="btn-submit" id="onboarding-submit">
+          <i class="bi bi-check2-circle me-2"></i>Save and continue
+        </button>
+      </div>
+      <div class="status" id="onboarding-status"></div>
+    </form>
+  </section>
+
+  <script>
+    (function () {
+      var form = document.getElementById("onboarding-form");
+      var statusEl = document.getElementById("onboarding-status");
+      var submitBtn = document.getElementById("onboarding-submit");
+
+      function setStatus(msg, isError) {
+        statusEl.textContent = msg || "";
+        statusEl.style.color = isError ? "#ff9ba5" : "#9cc8ff";
+      }
+
+      form.addEventListener("submit", async function (ev) {
+        ev.preventDefault();
+        submitBtn.disabled = true;
+        setStatus("Saving onboarding...");
+        var body = {
+          display_name: document.getElementById("display_name").value.trim(),
+          role: document.getElementById("role").value.trim(),
+          timezone: document.getElementById("timezone").value.trim(),
+          language: document.getElementById("language").value,
+          default_workspace: document.getElementById("default_workspace").value,
+          company_name: document.getElementById("company_name").value.trim(),
+          company_website: document.getElementById("company_website").value.trim(),
+          next: "/app"
+        };
+        try {
+          const resp = await fetch("/api/auth/onboarding", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify(body),
+          });
+          const data = await resp.json();
+          if (!resp.ok || !data.success) {
+            throw new Error((data && data.error) || "onboarding_failed");
+          }
+          window.location.href = data.next || "/app";
+        } catch (err) {
+          setStatus("Onboarding failed: " + String(err.message || err), true);
+          submitBtn.disabled = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

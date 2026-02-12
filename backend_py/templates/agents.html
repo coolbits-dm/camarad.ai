@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+
+{% block title %}AI Agents{% endblock %}
+
+{% block content %}
+<style>
+  .agents-toolbar {
+    display: grid;
+    grid-template-columns: 1fr 190px;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .agents-toolbar .form-control,
+  .agents-toolbar .form-select {
+    background: #0f1827;
+    border-color: #2a3952;
+    color: #dbe3f0;
+  }
+  .agents-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .agents-stack {
+    margin-bottom: 14px;
+  }
+  .agents-stack-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 6px 0 8px;
+    color: #9fb0ca;
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+  .agents-stack-head .left {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .agents-stack-head .count {
+    font-size: 0.72rem;
+    color: #7f91ac;
+  }
+  .agent-card {
+    border: 1px solid #2a3952;
+    border-radius: 12px;
+    background: #0f1724;
+    padding: 10px;
+    min-height: 118px;
+    transition: border-color .15s ease, background .15s ease, transform .15s ease;
+  }
+  .agent-card:hover {
+    border-color: #3f82be;
+    background: #111c2d;
+    transform: translateY(-1px);
+  }
+  .agent-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .agent-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 1px solid #2f3e57;
+    background: #0d1117;
+    flex: 0 0 34px;
+    display: grid;
+    place-items: center;
+  }
+  .agent-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .agent-title-wrap {
+    min-width: 0;
+    flex: 1;
+  }
+  .agent-name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #e7edf8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .agent-sub {
+    font-size: 0.74rem;
+    color: #93a8c7;
+  }
+  .agent-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 3px 0 10px;
+  }
+  .agent-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .agent-status.online .agent-status-dot { background: #1fbe6b; }
+  .agent-status.away .agent-status-dot { background: #e5ab31; }
+  .agent-status.offline .agent-status-dot { background: #7d8590; }
+  .agent-status {
+    font-size: 0.68rem;
+    color: #9db0cc;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .agent-workspace-badge {
+    border: 1px solid #2b3d59;
+    border-radius: 999px;
+    padding: 1px 6px;
+    font-size: 0.66rem;
+    color: #98afcf;
+    white-space: nowrap;
+  }
+  .agent-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .agent-actions .btn {
+    white-space: nowrap;
+  }
+  #agents-empty {
+    border: 1px dashed #2b3e59;
+    border-radius: 12px;
+    padding: 18px;
+    text-align: center;
+    color: #8ea2bf;
+    margin-top: 8px;
+    background: #0f1724;
+  }
+  #agents-empty[hidden] { display: none !important; }
+  @media (max-width: 1360px) {
+    .agents-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 920px) {
+    .agents-toolbar { grid-template-columns: 1fr; }
+    .agents-grid { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-2">
+  <div>
+    <h3 class="mb-0">AI Agents</h3>
+    <small class="text-muted">Unified catalog with the same agent identities used in Chat Home.</small>
+  </div>
+  <span class="badge bg-dark border border-secondary">{{ agents_home.total_agents }} agents</span>
+</div>
+
+<div class="agents-toolbar">
+  <input
+    id="agents-search"
+    class="form-control"
+    type="text"
+    placeholder="Search agents..."
+    value="{{ q|e }}"
+    autocomplete="off"
+  >
+  <select id="agents-workspace" class="form-select">
+    <option value="all" {% if ws_filter == "all" %}selected{% endif %}>All workspaces</option>
+    <option value="personal" {% if ws_filter == "personal" %}selected{% endif %}>Personal</option>
+    <option value="business" {% if ws_filter == "business" %}selected{% endif %}>Business</option>
+    <option value="agency" {% if ws_filter == "agency" %}selected{% endif %}>Agency</option>
+    <option value="development" {% if ws_filter == "development" %}selected{% endif %}>Development</option>
+    <option value="other" {% if ws_filter == "other" %}selected{% endif %}>Other</option>
+  </select>
+</div>
+
+{% for group in agents_home.groups %}
+<section class="agents-stack" data-workspace="{{ group.workspace_slug }}">
+  <div class="agents-stack-head">
+    <span class="left"><i class="bi {{ group.workspace_icon }}"></i>{{ group.workspace_name }}</span>
+    <span class="count">{{ group.count }}</span>
+  </div>
+  <div class="agents-grid">
+    {% for agent in group.agents %}
+      <article
+        class="agent-card"
+        data-workspace="{{ agent.workspace_slug }}"
+        data-search="{{ agent.search_text|e }}"
+      >
+        <div class="agent-head">
+          <span
+            class="agent-avatar"
+            data-agent-slug="{{ agent.agent_slug }}"
+            data-needs-svg="{% if not agent.has_photo %}1{% else %}0{% endif %}"
+            data-avatar-colors='{{ (agent.avatar_colors or {})|tojson|safe }}'
+          >
+            {% if agent.has_photo %}
+              <img src="data:image/png;base64,{{ agent.avatar_base64 }}" alt="{{ agent.agent_name }}">
+            {% endif %}
+          </span>
+          <span class="agent-title-wrap">
+            <div class="agent-name">{{ agent.agent_name }}</div>
+            <div class="agent-sub">{{ agent.agent_slug }}</div>
+          </span>
+        </div>
+
+        <div class="agent-meta">
+          <span class="agent-status {{ agent.status_class }}"><span class="agent-status-dot"></span>{{ agent.status }}</span>
+          <span class="agent-workspace-badge">{{ agent.workspace_name }}</span>
+        </div>
+
+        <div class="agent-actions">
+          <a href="{{ agent.open_url }}" class="btn btn-sm btn-outline-secondary">Open Chat</a>
+          <a href="/agent/{{ agent.agent_slug }}" class="btn btn-sm btn-outline-primary">Manage</a>
+        </div>
+      </article>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+
+<div id="agents-empty" hidden>
+  No agents matched the current filters. Try clearing search or switching workspace.
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  function qs(id) { return document.getElementById(id); }
+  var searchEl = qs('agents-search');
+  var wsEl = qs('agents-workspace');
+  var emptyEl = qs('agents-empty');
+  var cards = Array.prototype.slice.call(document.querySelectorAll('.agent-card'));
+  var stackSections = Array.prototype.slice.call(document.querySelectorAll('.agents-stack'));
+
+  function applyFilters() {
+    var q = String((searchEl && searchEl.value) || '').trim().toLowerCase();
+    var ws = String((wsEl && wsEl.value) || 'all').trim().toLowerCase();
+    var visibleCards = 0;
+
+    cards.forEach(function (card) {
+      var search = String(card.getAttribute('data-search') || '').toLowerCase();
+      var cws = String(card.getAttribute('data-workspace') || '').toLowerCase();
+      var okWs = (ws === 'all') || (cws === ws);
+      var okQ = !q || (search.indexOf(q) >= 0);
+      var show = okWs && okQ;
+      card.style.display = show ? '' : 'none';
+      if (show) visibleCards += 1;
+    });
+
+    stackSections.forEach(function (section) {
+      var hasVisible = section.querySelector('.agent-card:not([style*="display: none"])');
+      section.hidden = !hasVisible;
+    });
+
+    emptyEl.hidden = visibleCards > 0;
+  }
+
+  function applyAvatarColors(slug, colors) {
+    if (!window.CamaradAvatars || !window.CamaradAvatars.PROFILES || !colors || typeof colors !== 'object') return;
+    var p = window.CamaradAvatars.PROFILES[slug];
+    if (!p) return;
+    if (colors.accent) p.accentColor = colors.accent;
+    if (colors.skin) p.skinTone = colors.skin;
+    if (colors.hair) p.hairColor = colors.hair;
+  }
+
+  function renderAgentAvatars() {
+    if (!window.CamaradAvatars) return;
+    document.querySelectorAll('.agent-avatar[data-needs-svg="1"]').forEach(function (el) {
+      var slug = String(el.getAttribute('data-agent-slug') || '').trim();
+      if (!slug) return;
+      var raw = el.getAttribute('data-avatar-colors') || '{}';
+      try { applyAvatarColors(slug, JSON.parse(raw)); } catch (e) {}
+      el.innerHTML = window.CamaradAvatars.getMini(slug);
+    });
+  }
+
+  if (searchEl) searchEl.addEventListener('input', applyFilters);
+  if (wsEl) wsEl.addEventListener('change', applyFilters);
+
+  renderAgentAvatars();
+  applyFilters();
+})();
+</script>
+{% endblock %}

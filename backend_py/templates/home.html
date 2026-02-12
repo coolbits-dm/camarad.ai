@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Camarad AI - Home{% endblock %}
+
+{% block content %}
+<h1 class="text-center mb-4">Camarad AI Companion Platform</h1>
+<div class="row">
+    {% for ws_slug, ws_data in workspaces.items() %}
+    <div class="col-md-3 mb-3">
+        <div class="card bg-light text-dark">
+            <div class="card-body text-center">
+                <h5 class="card-title">{{ ws_data.name }}</h5>
+                <a href="{{ url_for('workspace', ws_slug=ws_slug) }}" class="btn btn-primary">Enter</a>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

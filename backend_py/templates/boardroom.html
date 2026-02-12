@@ -1,0 +1,870 @@
+{% extends "base.html" %}
+{% block title %}Boardroom — Multi-Agent Meetings{% endblock %}
+
+{% block content %}
+<style>
+  .br-hero { background: linear-gradient(135deg, #161b22 0%, #0d1117 50%, #1a1040 100%); border: 1px solid #30363d; border-radius: 16px; padding: 28px 32px; margin-bottom: 24px; }
+  .meeting-card { cursor: pointer; transition: all 0.25s; border-radius: 12px; }
+  .meeting-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,0,0,0.4); border-color: #58a6ff !important; }
+  .meeting-card.selected { border-color: #58a6ff !important; box-shadow: 0 0 0 2px rgba(88,166,255,0.4); }
+  .agent-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; background: #21262d; border: 1px solid #30363d; cursor: pointer; transition: all 0.2s; font-size: 0.85rem; user-select: none; }
+  .agent-chip:hover { border-color: #58a6ff; background: #161b22; }
+  .agent-chip.active { border-color: #58a6ff; background: #1f6feb22; box-shadow: 0 0 8px rgba(88,166,255,0.2); }
+  .agent-chip .chip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .complexity-badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; }
+  .transcript-bubble { padding: 14px 18px; border-radius: 12px; background: #161b22; border-left: 3px solid; margin-bottom: 10px; animation: bubbleIn 0.3s ease; }
+  @keyframes bubbleIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .round-divider { text-align: center; padding: 8px 0; color: #8b949e; font-size: 0.8rem; font-weight: 600; letter-spacing: 1px; }
+  .action-item { padding: 10px 14px; border-radius: 8px; background: #0d1117; border: 1px solid #21262d; margin-bottom: 6px; }
+  .action-item .priority-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .priority-dot.critical { background: #f85149; }
+  .priority-dot.high { background: #d29922; }
+  .priority-dot.medium { background: #58a6ff; }
+  .priority-dot.low { background: #8b949e; }
+  .meeting-hist-item { padding: 10px 14px; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
+  .meeting-hist-item:hover { background: #21262d; }
+  /* Maturity gauge */
+  .maturity-ring { width: 100px; height: 100px; position: relative; }
+  .maturity-ring svg { transform: rotate(-90deg); }
+  .maturity-ring .ring-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 1.3rem; font-weight: 700; }
+  .sub-index-bar { height: 8px; border-radius: 4px; background: #21262d; overflow: hidden; }
+  .sub-index-bar .fill { height: 100%; border-radius: 4px; transition: width 0.8s ease; }
+  /* Panels */
+  .br-panel { display: none; }
+  .br-panel.active { display: block; }
+  .config-section { background: #0d1117; border: 1px solid #21262d; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  /* Spinner overlay for meeting run */
+  #meetingRunOverlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 9000; justify-content: center; align-items: center; flex-direction: column; gap: 16px; }
+  #meetingRunOverlay.show { display: flex; }
+  .run-progress-ring { width: 120px; height: 120px; animation: spin 2s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
+<!-- ═══ Meeting Run Overlay ═══ -->
+<div id="meetingRunOverlay">
+  <svg class="run-progress-ring" viewBox="0 0 120 120">
+    <circle cx="60" cy="60" r="50" stroke="#21262d" stroke-width="8" fill="none"/>
+    <circle cx="60" cy="60" r="50" stroke="#58a6ff" stroke-width="8" fill="none"
+            stroke-dasharray="100 214" stroke-linecap="round"/>
+  </svg>
+  <div class="text-white fs-5 fw-bold" id="runStatusText">Agents entering the boardroom...</div>
+  <div class="text-muted small" id="runSubText">Preparing meeting context</div>
+</div>
+
+<!-- ═══ Hero Section ═══ -->
+<div class="br-hero">
+  <div class="row align-items-center">
+    <div class="col-md-8">
+      <h2 class="mb-1">
+        <i class="bi bi-people-fill text-primary me-2"></i>
+        Boardroom
+        <span class="badge bg-primary bg-opacity-25 text-primary ms-2" style="font-size:0.6em;">BETA</span>
+      </h2>
+      <p class="text-muted mb-0">Multi-agent meeting room — where AI minds converge for strategy, analysis, brainstorming, and decision-making.</p>
+    </div>
+    <div class="col-md-4 text-end">
+      <button class="btn btn-primary btn-lg" onclick="brShowPanel('setup')">
+        <i class="bi bi-plus-circle me-2"></i>New Meeting
+      </button>
+      <button class="btn btn-outline-secondary btn-lg ms-2" onclick="brShowPanel('history')">
+        <i class="bi bi-clock-history me-1"></i>History
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Main Navigation Tabs ═══ -->
+<ul class="nav nav-pills mb-3" id="brMainTabs">
+  <li class="nav-item"><a class="nav-link active" href="#" onclick="brShowPanel('setup');return false;"><i class="bi bi-plus-circle me-1"></i> New Meeting</a></li>
+  <li class="nav-item"><a class="nav-link" href="#" onclick="brShowPanel('history');return false;"><i class="bi bi-clock-history me-1"></i> Meeting History</a></li>
+  <li class="nav-item"><a class="nav-link" href="#" onclick="brShowPanel('maturity');return false;"><i class="bi bi-speedometer2 me-1"></i> Maturity Index</a></li>
+  <li class="nav-item"><a class="nav-link" href="#" onclick="brShowPanel('context');return false;"><i class="bi bi-broadcast me-1"></i> Active Context</a></li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- PANEL 1: MEETING SETUP                                        -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="brSetupPanel" class="br-panel active">
+
+  <!-- Step 1: Choose Meeting Type -->
+  <div class="config-section" id="brStep1">
+    <h5 class="mb-3"><span class="badge bg-primary me-2">1</span> Choose Meeting Type</h5>
+    <div class="row g-3" id="brTemplateGrid">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+
+  <!-- Step 2: Select Agents -->
+  <div class="config-section" id="brStep2">
+    <h5 class="mb-3"><span class="badge bg-primary me-2">2</span> Select Participants <span class="text-muted small ms-2" id="brAgentCount">(0 selected)</span></h5>
+
+    <!-- Filter by workspace -->
+    <div class="btn-group btn-group-sm mb-3">
+      <button class="btn btn-outline-secondary active" onclick="brFilterAgents('all', this)">All</button>
+      <button class="btn btn-outline-info" onclick="brFilterAgents('business', this)">Business</button>
+      <button class="btn btn-outline-warning" onclick="brFilterAgents('agency', this)">Agency</button>
+      <button class="btn btn-outline-success" onclick="brFilterAgents('development', this)">Development</button>
+      <button class="btn btn-outline-danger" onclick="brFilterAgents('personal', this)">Personal</button>
+    </div>
+
+    <div id="brAgentGrid" class="d-flex flex-wrap gap-2">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+
+  <!-- Step 3: Configure & Launch -->
+  <div class="config-section" id="brStep3">
+    <h5 class="mb-3"><span class="badge bg-primary me-2">3</span> Configure & Launch</h5>
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label small text-muted">Meeting Title</label>
+        <input type="text" class="form-control bg-dark text-light border-secondary" id="brMeetingTitle" placeholder="e.g., Q1 Strategy Deep-Dive">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small text-muted">Rounds</label>
+        <select class="form-select bg-dark text-light border-secondary" id="brRounds">
+          <option value="1">1 — Quick</option>
+          <option value="2" selected>2 — Standard</option>
+          <option value="3">3 — Deep</option>
+          <option value="4">4 — Extended</option>
+          <option value="5">5 — Marathon</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small text-muted">Complexity</label>
+        <select class="form-select bg-dark text-light border-secondary" id="brComplexity">
+          <option value="low">Low — Casual</option>
+          <option value="medium" selected>Medium — Standard</option>
+          <option value="high">High — Deep Dive</option>
+          <option value="critical">Critical — War Room</option>
+        </select>
+      </div>
+      <div class="col-12">
+        <label class="form-label small text-muted">Topic / Agenda</label>
+        <textarea class="form-control bg-dark text-light border-secondary" id="brTopic" rows="3" placeholder="Describe the meeting topic, agenda, or specific questions to address..."></textarea>
+      </div>
+      <div class="col-12 text-end">
+        <button class="btn btn-lg btn-success" onclick="brRunMeeting()" id="brLaunchBtn">
+          <i class="bi bi-play-circle me-2"></i>Launch Meeting
+          <span class="badge bg-light text-dark ms-2" id="brLaunchInfo">0 agents · 2 rounds</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- PANEL 2: MEETING TRANSCRIPT (after run or viewing history)    -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="brTranscriptPanel" class="br-panel">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h4 id="brTransTitle" class="mb-0">Meeting Title</h4>
+      <div class="text-muted small" id="brTransMeta">template · agents · duration</div>
+    </div>
+    <div>
+      <button class="btn btn-outline-info btn-sm me-1" onclick="brExportMeeting()"><i class="bi bi-download me-1"></i>Export</button>
+      <button class="btn btn-outline-secondary btn-sm" onclick="brShowPanel('setup')"><i class="bi bi-arrow-left me-1"></i>Back</button>
+    </div>
+  </div>
+
+  <!-- Summary Card -->
+  <div class="card bg-dark border-info mb-3" id="brSummaryCard" style="display:none;">
+    <div class="card-header bg-info bg-opacity-10 fw-bold"><i class="bi bi-card-text me-2"></i>Meeting Summary</div>
+    <div class="card-body" id="brSummaryText"></div>
+  </div>
+
+  <!-- Action Items -->
+  <div class="card bg-dark border-warning mb-3" id="brActionsCard" style="display:none;">
+    <div class="card-header bg-warning bg-opacity-10 fw-bold"><i class="bi bi-check2-square me-2"></i>Action Items</div>
+    <div class="card-body p-2" id="brActionsContent"></div>
+  </div>
+
+  <!-- Transcript -->
+  <div class="card bg-dark border-secondary">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span class="fw-bold"><i class="bi bi-chat-square-text me-2"></i>Full Transcript</span>
+      <span class="badge bg-secondary" id="brTransCount">0 messages</span>
+    </div>
+    <div class="card-body" id="brTranscriptContent" style="max-height: 600px; overflow-y: auto;">
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- PANEL 3: MEETING HISTORY                                      -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="brHistoryPanel" class="br-panel">
+  <h4 class="mb-3"><i class="bi bi-clock-history me-2"></i>Meeting History</h4>
+  <div id="brHistoryList">
+    <div class="text-center py-4"><span class="spinner-border"></span></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- PANEL 4: MATURITY INDEX                                       -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="brMaturityPanel" class="br-panel">
+  <h4 class="mb-3"><i class="bi bi-speedometer2 me-2"></i>Core Maturity Index (CMI)</h4>
+  <div id="brMaturityContent">
+    <div class="text-center py-4"><span class="spinner-border"></span></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- PANEL 5: ACTIVE CONTEXT                                       -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="brContextPanel" class="br-panel">
+  <h4 class="mb-3"><i class="bi bi-broadcast me-2"></i>Active Context</h4>
+  <div id="brContextContent">
+    <div class="text-center py-4"><span class="spinner-border"></span></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- JAVASCRIPT ENGINE                                             -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<script>
+// ── State ─────────────────────────────────────────────────────────
+const brState = {
+  templates: [],
+  agents: [],
+  selectedTemplate: null,
+  selectedAgents: new Set(),
+  currentMeeting: null,
+  agentFilter: 'all',
+};
+
+// Agent color map
+const agentColors = {};
+
+// ── Init ──────────────────────────────────────────────────────────
+async function brInit() {
+  try {
+    const [tRes, aRes] = await Promise.all([
+      fetch('/api/boardroom/templates'),
+      fetch('/api/boardroom/agents'),
+    ]);
+    const tData = await tRes.json();
+    const aData = await aRes.json();
+    brState.templates = tData.templates || [];
+    brState.agents = aData.agents || [];
+
+    // Build color map
+    brState.agents.forEach(a => { agentColors[a.slug] = a.color; });
+
+    brRenderTemplates();
+    brRenderAgents();
+  } catch (e) { console.error('Boardroom init error:', e); }
+}
+
+// ── Panel Switching ───────────────────────────────────────────────
+function brShowPanel(name) {
+  document.querySelectorAll('.br-panel').forEach(p => p.classList.remove('active'));
+  const panel = document.getElementById('br' + name.charAt(0).toUpperCase() + name.slice(1) + 'Panel');
+  if (panel) panel.classList.add('active');
+
+  // Update tabs
+  document.querySelectorAll('#brMainTabs .nav-link').forEach(t => t.classList.remove('active'));
+  const tabNames = ['setup', 'history', 'maturity', 'context'];
+  const idx = tabNames.indexOf(name);
+  if (idx >= 0) document.querySelectorAll('#brMainTabs .nav-link')[idx].classList.add('active');
+
+  // Lazy-load data
+  if (name === 'history') brLoadHistory();
+  if (name === 'maturity') brLoadMaturity();
+  if (name === 'context') brLoadContext();
+}
+
+// ── Render Templates Grid ─────────────────────────────────────────
+function brRenderTemplates() {
+  const grid = document.getElementById('brTemplateGrid');
+  grid.innerHTML = '';
+  brState.templates.forEach(t => {
+    const complexityColors = { low: 'success', medium: 'info', high: 'warning', critical: 'danger', custom: 'light' };
+    const isSelected = brState.selectedTemplate === t.id;
+    grid.innerHTML += `
+      <div class="col-md-4 col-lg-3">
+        <div class="card meeting-card h-100 ${isSelected ? 'selected' : ''}" onclick="brSelectTemplate('${t.id}')" data-tmpl="${t.id}">
+          <div class="card-body p-3">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <i class="bi ${t.icon} fs-3 text-${t.color}"></i>
+              <span class="complexity-badge bg-${complexityColors[t.complexity]} bg-opacity-25 text-${complexityColors[t.complexity]}">${t.complexity}</span>
+            </div>
+            <h6 class="mb-1">${t.name}</h6>
+            <p class="text-muted small mb-2" style="font-size:0.78rem;">${t.description}</p>
+            <div class="text-muted small">
+              <i class="bi bi-people me-1"></i>${t.suggested_agents.length || '∞'} suggested
+              <i class="bi bi-arrow-repeat ms-2 me-1"></i>${t.default_rounds} rounds
+            </div>
+          </div>
+        </div>
+      </div>`;
+  });
+}
+
+function brSelectTemplate(id) {
+  brState.selectedTemplate = id;
+  const tmpl = brState.templates.find(t => t.id === id);
+
+  // Visual update
+  document.querySelectorAll('.meeting-card').forEach(c => c.classList.remove('selected'));
+  document.querySelector(`.meeting-card[data-tmpl="${id}"]`)?.classList.add('selected');
+
+  // Auto-select suggested agents
+  if (tmpl && tmpl.suggested_agents.length > 0) {
+    brState.selectedAgents = new Set(tmpl.suggested_agents);
+    brRenderAgents();
+  }
+
+  // Auto-fill config
+  if (tmpl) {
+    document.getElementById('brRounds').value = tmpl.default_rounds;
+    const complexMap = { low: 'low', medium: 'medium', high: 'high', critical: 'critical', custom: 'medium' };
+    document.getElementById('brComplexity').value = complexMap[tmpl.complexity] || 'medium';
+  }
+
+  brUpdateLaunchInfo();
+}
+
+// ── Render Agents Chips ───────────────────────────────────────────
+function brRenderAgents() {
+  const grid = document.getElementById('brAgentGrid');
+  grid.innerHTML = '';
+  const filter = brState.agentFilter;
+
+  brState.agents.forEach(a => {
+    if (filter !== 'all' && a.ws !== filter) return;
+    const isActive = brState.selectedAgents.has(a.slug);
+    const avatarSvg = window.CamaradAvatars ? window.CamaradAvatars.getSVG(a.slug, 'neutral', 22) : '';
+    grid.innerHTML += `
+      <div class="agent-chip ${isActive ? 'active' : ''}" onclick="brToggleAgent('${a.slug}')" data-agent="${a.slug}" data-ws="${a.ws}">
+        <span style="width:22px;height:22px;display:inline-flex;flex-shrink:0">${avatarSvg}</span>
+        <span>${a.name}</span>
+      </div>`;
+  });
+
+  brUpdateLaunchInfo();
+}
+
+function brToggleAgent(slug) {
+  if (brState.selectedAgents.has(slug)) {
+    brState.selectedAgents.delete(slug);
+  } else {
+    brState.selectedAgents.add(slug);
+  }
+
+  // Visual update
+  const chip = document.querySelector(`.agent-chip[data-agent="${slug}"]`);
+  if (chip) chip.classList.toggle('active');
+  brUpdateLaunchInfo();
+}
+
+function brFilterAgents(ws, btn) {
+  brState.agentFilter = ws;
+  document.querySelectorAll('#brStep2 .btn-group .btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  brRenderAgents();
+}
+
+function brUpdateLaunchInfo() {
+  const count = brState.selectedAgents.size;
+  const rounds = document.getElementById('brRounds').value;
+  document.getElementById('brAgentCount').textContent = `(${count} selected)`;
+  document.getElementById('brLaunchInfo').textContent = `${count} agents · ${rounds} rounds`;
+  document.getElementById('brLaunchBtn').disabled = count < 2;
+}
+
+// ── Run Meeting ───────────────────────────────────────────────────
+async function brRunMeeting() {
+  const agents = Array.from(brState.selectedAgents);
+  if (agents.length < 2) {
+    if (window.showToast) window.showToast('Boardroom', 'Select at least 2 agents.', 'warning');
+    return;
+  }
+
+  const title = document.getElementById('brMeetingTitle').value.trim() || 'Untitled Meeting';
+  const topic = document.getElementById('brTopic').value.trim() || 'General discussion';
+  const rounds = parseInt(document.getElementById('brRounds').value);
+  const complexity = document.getElementById('brComplexity').value;
+
+
+  // CT spend gate for heavy multi-agent runs
+  const meetingCost = Math.max(100, Math.min(250, 40 + (agents.length * 22) + (rounds * 18)));
+  if (window.spendCT && typeof window.spendCT === 'function') {
+    const spend = await window.spendCT(meetingCost, 'boardroom_run', 'Boardroom meeting: ' + title, { silentSuccess: false });
+    if (!spend || spend.success !== true) {
+      return;
+    }
+  }
+
+  // Show overlay
+  const overlay = document.getElementById('meetingRunOverlay');
+  overlay.classList.add('show');
+  const statusText = document.getElementById('runStatusText');
+  const subText = document.getElementById('runSubText');
+
+  // Animate status messages
+  const stages = [
+    ['Agents entering the boardroom...', 'Loading context & RAG knowledge'],
+    ['Setting the agenda...', `Topic: ${topic.substring(0, 60)}...`],
+    ['Round 1 in progress...', `${agents.length} agents deliberating`],
+    ['Synthesizing insights...', 'Cross-referencing perspectives'],
+    ['Generating summary & action items...', 'Almost done'],
+  ];
+  let stageIdx = 0;
+  const stageInterval = setInterval(() => {
+    stageIdx = Math.min(stageIdx + 1, stages.length - 1);
+    statusText.textContent = stages[stageIdx][0];
+    subText.textContent = stages[stageIdx][1];
+  }, 1200);
+
+  try {
+    const res = await fetch('/api/boardroom/meetings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template_id: brState.selectedTemplate || 'custom-sandbox',
+        title, agents, topic, rounds,
+        config: { complexity },
+      }),
+    });
+    const meeting = await res.json();
+
+    clearInterval(stageInterval);
+    overlay.classList.remove('show');
+
+    if (meeting.error) {
+      if (window.showToast) window.showToast('Error', meeting.error, 'danger');
+      return;
+    }
+
+    brState.currentMeeting = meeting;
+    brRenderTranscript(meeting);
+    brShowPanel('transcript');
+
+    if (window.showToast) window.showToast('Meeting Complete', `${title} — ${meeting.transcript.length} messages generated.`, 'success');
+  } catch (e) {
+    clearInterval(stageInterval);
+    overlay.classList.remove('show');
+    if (window.showToast) window.showToast('Error', 'Meeting failed: ' + e.message, 'danger');
+  }
+}
+
+// ── Render Transcript ─────────────────────────────────────────────
+function brRenderTranscript(meeting) {
+  document.getElementById('brTransTitle').textContent = meeting.title;
+
+  const agentNames = meeting.agents.map(s => {
+    const a = brState.agents.find(x => x.slug === s);
+    return a ? a.name : s;
+  });
+  document.getElementById('brTransMeta').textContent =
+    `${meeting.template_id.replace(/-/g, ' ')} · ${agentNames.join(', ')} · ${meeting.duration_min || '?'}min · ${meeting.rounds} rounds`;
+
+  // Summary
+  if (meeting.summary) {
+    document.getElementById('brSummaryCard').style.display = 'block';
+    document.getElementById('brSummaryText').textContent = meeting.summary;
+  } else {
+    document.getElementById('brSummaryCard').style.display = 'none';
+  }
+
+  // Action Items
+  const actions = meeting.action_items || [];
+  if (actions.length) {
+    document.getElementById('brActionsCard').style.display = 'block';
+    let aHtml = '';
+    actions.forEach(ai => {
+      const ownerAgent = brState.agents.find(a => a.slug === ai.owner);
+      const ownerName = ownerAgent ? ownerAgent.name : ai.owner;
+      aHtml += `<div class="action-item d-flex align-items-center gap-2">
+        <span class="priority-dot ${ai.priority}"></span>
+        <strong style="color:${agentColors[ai.owner] || '#8b949e'}">${ownerName}</strong>
+        <span class="flex-fill">${ai.task}</span>
+        <span class="badge bg-dark border border-secondary">${ai.deadline}</span>
+      </div>`;
+    });
+    document.getElementById('brActionsContent').innerHTML = aHtml;
+  } else {
+    document.getElementById('brActionsCard').style.display = 'none';
+  }
+
+  // Transcript
+  const transcript = meeting.transcript || [];
+  document.getElementById('brTransCount').textContent = `${transcript.length} messages`;
+
+  let html = '';
+  let currentRound = 0;
+  transcript.forEach(msg => {
+    if (msg.round !== currentRound) {
+      currentRound = msg.round;
+      html += `<div class="round-divider"><i class="bi bi-arrow-repeat me-1"></i> ROUND ${currentRound}</div>`;
+    }
+    const agent = brState.agents.find(a => a.slug === msg.agent);
+    const color = agent ? agent.color : '#8b949e';
+    const icon = agent ? agent.icon : 'bi-person';
+    const name = agent ? agent.name : msg.agent;
+
+    html += `<div class="transcript-bubble" style="border-color:${color}">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span class="fw-bold d-flex align-items-center gap-2" style="color:${color}">
+          <span class="chat-avatar-wrap" style="width:28px;height:28px;">${window.CamaradAvatars ? window.CamaradAvatars.getSVG(msg.agent, 'neutral', 28) : ''}</span>
+          <i class="bi ${icon}"></i>${name}
+        </span>
+        <span class="d-flex gap-2">
+          <span class="badge bg-dark border border-secondary" style="font-size:0.7rem;">${msg.sentiment || ''}</span>
+          <span class="small text-muted">${msg.confidence ? (msg.confidence * 100).toFixed(0) + '% conf.' : ''}</span>
+        </span>
+      </div>
+      <div class="small">${msg.message}</div>
+    </div>`;
+  });
+
+  document.getElementById('brTranscriptContent').innerHTML = html;
+}
+
+// ── Meeting History ───────────────────────────────────────────────
+async function brLoadHistory() {
+  const container = document.getElementById('brHistoryList');
+  container.innerHTML = '<div class="text-center py-4"><span class="spinner-border spinner-border-sm"></span></div>';
+
+  try {
+    const res = await fetch('/api/boardroom/meetings');
+    const data = await res.json();
+    const meetings = data.meetings || [];
+
+    if (!meetings.length) {
+      container.innerHTML = '<div class="text-center text-muted py-4">No meetings yet. Start your first one!</div>';
+      return;
+    }
+
+    let html = '';
+    meetings.forEach(m => {
+      const tmpl = brState.templates.find(t => t.id === m.template_id);
+      const icon = tmpl ? tmpl.icon : 'bi-calendar-event';
+      const color = tmpl ? tmpl.color : 'secondary';
+      const agentNames = m.agents.map(s => {
+        const a = brState.agents.find(x => x.slug === s);
+        return a ? a.name : s;
+      });
+
+      html += `<div class="meeting-hist-item d-flex align-items-center gap-3" onclick="brViewMeeting('${m.id}')">
+        <i class="bi ${icon} fs-4 text-${color}"></i>
+        <div class="flex-fill">
+          <div class="fw-semibold">${m.title}</div>
+          <div class="small text-muted">${agentNames.join(', ')}</div>
+          <div class="small text-muted">${m.rounds} rounds · ${m.duration_min || '?'}min · ${new Date(m.created_at).toLocaleDateString()}</div>
+        </div>
+        <span class="badge bg-${m.status === 'completed' ? 'success' : 'secondary'}">${m.status}</span>
+      </div>`;
+    });
+
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<div class="alert alert-danger">Error loading history.</div>';
+  }
+}
+
+async function brViewMeeting(id) {
+  try {
+    const res = await fetch(`/api/boardroom/meetings/${id}`);
+    const meeting = await res.json();
+    brState.currentMeeting = meeting;
+    brRenderTranscript(meeting);
+    brShowPanel('transcript');
+  } catch (e) {
+    if (window.showToast) window.showToast('Error', 'Could not load meeting.', 'danger');
+  }
+}
+
+// ── Export Meeting ────────────────────────────────────────────────
+function brExportMeeting() {
+  const m = brState.currentMeeting;
+  if (!m) return;
+
+  let md = `# ${m.title}\n\n`;
+  md += `**Template:** ${m.template_id} | **Rounds:** ${m.rounds} | **Duration:** ${m.duration_min}min\n`;
+  md += `**Participants:** ${m.agents.join(', ')}\n`;
+  md += `**Topic:** ${m.topic}\n\n`;
+
+  if (m.summary) md += `## Summary\n${m.summary}\n\n`;
+
+  if (m.action_items && m.action_items.length) {
+    md += `## Action Items\n`;
+    m.action_items.forEach(ai => {
+      md += `- **[${ai.priority.toUpperCase()}]** ${ai.owner}: ${ai.task} _(deadline: ${ai.deadline})_\n`;
+    });
+    md += '\n';
+  }
+
+  md += `## Transcript\n\n`;
+  let curRound = 0;
+  (m.transcript || []).forEach(msg => {
+    if (msg.round !== curRound) { curRound = msg.round; md += `### Round ${curRound}\n\n`; }
+    md += `**${msg.agent}** _(${msg.sentiment}, ${(msg.confidence*100).toFixed(0)}% conf.)_:\n${msg.message}\n\n`;
+  });
+
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `meeting-${m.id || 'export'}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Maturity Index Panel ──────────────────────────────────────────
+async function brLoadMaturity() {
+  const container = document.getElementById('brMaturityContent');
+  container.innerHTML = '<div class="text-center py-4"><span class="spinner-border spinner-border-sm"></span></div>';
+
+  try {
+    const res = await fetch('/api/maturity');
+    const d = await res.json();
+
+    const ringColor = { success: '#3fb950', info: '#58a6ff', primary: '#1f6feb', warning: '#d29922', secondary: '#8b949e' };
+    const cmiColor = ringColor[d.cmi.level.color] || '#58a6ff';
+    const circumference = 2 * Math.PI * 42;
+    const offset = circumference - (d.cmi.pct / 100) * circumference;
+
+    let html = `
+      <div class="row g-4">
+        <!-- CMI Ring -->
+        <div class="col-md-4 text-center">
+          <div class="maturity-ring mx-auto mb-3">
+            <svg width="100" height="100" viewBox="0 0 100 100">
+              <circle cx="50" cy="50" r="42" stroke="#21262d" stroke-width="8" fill="none"/>
+              <circle cx="50" cy="50" r="42" stroke="${cmiColor}" stroke-width="8" fill="none"
+                      stroke-dasharray="${circumference}" stroke-dashoffset="${offset}"
+                      stroke-linecap="round" style="transition: stroke-dashoffset 1s ease;"/>
+            </svg>
+            <div class="ring-label" style="color:${cmiColor}">${d.cmi.score}</div>
+          </div>
+          <h5>CMI <span class="badge bg-${d.cmi.level.color}">${d.cmi.level.label}</span></h5>
+          <p class="text-muted small">Core Maturity Index</p>
+        </div>
+
+        <!-- Sub-indices -->
+        <div class="col-md-8">
+          <div class="row g-3">`;
+
+    // PMI, AMI, DMI bars
+    [d.pmi, d.ami, d.dmi].forEach(sub => {
+      const subColor = ringColor[sub.level.color] || '#58a6ff';
+      html += `
+            <div class="col-12">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="fw-semibold">${sub.label} <span class="badge bg-${sub.level.color} bg-opacity-25 text-${sub.level.color} ms-1">${sub.level.label}</span></span>
+                <span class="fw-bold" style="color:${subColor}">${sub.score} / ${sub.max}</span>
+              </div>
+              <div class="sub-index-bar">
+                <div class="fill" style="width:${sub.pct}%; background:${subColor}"></div>
+              </div>
+            </div>`;
+    });
+
+    html += `</div></div></div>`;
+
+    // Factor breakdown
+    html += `<h5 class="mt-4 mb-3"><i class="bi bi-list-check me-2"></i>Factor Breakdown</h5>
+      <div class="row g-2">`;
+
+    const factorLabels = {
+      connectors_active: ['Connected Tools', 'bi-plug'],
+      connectors_configured: ['Configured Connectors', 'bi-gear'],
+      agents_configured: ['Agent Configs', 'bi-robot'],
+      agents_with_rag: ['RAG-Enabled Agents', 'bi-database'],
+      meetings_held: ['Meetings Held', 'bi-people'],
+      conversations_total: ['Total Conversations', 'bi-chat'],
+      flows_created: ['Automation Flows', 'bi-diagram-3'],
+      businesses_count: ['Businesses', 'bi-building'],
+      monthly_budget: ['Monthly Budget', 'bi-cash-stack'],
+      employees_count: ['Team Size', 'bi-person-badge'],
+      digital_assets: ['Digital Assets', 'bi-file-earmark-richtext'],
+      premium_status: ['Premium Status', 'bi-star'],
+      active_days: ['Active Days', 'bi-calendar-check'],
+    };
+
+    for (const [key, data] of Object.entries(d.factors)) {
+      const [label, icon] = factorLabels[key] || [key, 'bi-dot'];
+      const pct = (data.normalized * 100).toFixed(0);
+      const barColor = pct >= 70 ? '#3fb950' : (pct >= 40 ? '#58a6ff' : (pct >= 20 ? '#d29922' : '#f85149'));
+      html += `
+        <div class="col-md-4 col-6">
+          <div class="card bg-dark border-secondary h-100">
+            <div class="card-body py-2 px-3">
+              <div class="d-flex justify-content-between small mb-1">
+                <span><i class="bi ${icon} me-1 text-muted"></i>${label}</span>
+                <span class="fw-bold">${data.raw}${key === 'monthly_budget' ? '$' : ''}</span>
+              </div>
+              <div class="progress" style="height:6px;">
+                <div class="progress-bar" style="width:${pct}%; background:${barColor}"></div>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }
+    html += '</div>';
+
+    // Accounting snapshot
+    if (d.accounting && d.accounting.monthly_revenue) {
+      const acc = d.accounting;
+      html += `
+        <h5 class="mt-4 mb-3"><i class="bi bi-wallet2 me-2"></i>Financial Snapshot</h5>
+        <div class="row g-2">
+          <div class="col-md-2 col-4"><div class="card bg-dark border-success h-100"><div class="card-body py-2 text-center">
+            <div class="text-muted small">MRR</div><div class="fs-6 fw-bold text-success">$${acc.monthly_revenue.toLocaleString()}</div>
+          </div></div></div>
+          <div class="col-md-2 col-4"><div class="card bg-dark border-danger h-100"><div class="card-body py-2 text-center">
+            <div class="text-muted small">Burn Rate</div><div class="fs-6 fw-bold text-danger">$${acc.burn_rate.toLocaleString()}</div>
+          </div></div></div>
+          <div class="col-md-2 col-4"><div class="card bg-dark border-info h-100"><div class="card-body py-2 text-center">
+            <div class="text-muted small">ARR</div><div class="fs-6 fw-bold text-info">$${acc.arr.toLocaleString()}</div>
+          </div></div></div>
+          <div class="col-md-2 col-4"><div class="card bg-dark border-warning h-100"><div class="card-body py-2 text-center">
+            <div class="text-muted small">Margin</div><div class="fs-6 fw-bold text-warning">${acc.profit_margin}%</div>
+          </div></div></div>
+          <div class="col-md-2 col-4"><div class="card bg-dark border-secondary h-100"><div class="card-body py-2 text-center">
+            <div class="text-muted small">Runway</div><div class="fs-6 fw-bold">${acc.runway_months} mo</div>
+          </div></div></div>
+          <div class="col-md-2 col-4"><div class="card bg-dark border-secondary h-100"><div class="card-body py-2 text-center">
+            <div class="text-muted small">Expenses</div><div class="fs-6 fw-bold">$${acc.monthly_expenses.toLocaleString()}</div>
+          </div></div></div>
+        </div>`;
+    }
+
+    // Recommendations
+    if (d.recommendations && d.recommendations.length) {
+      html += `<h5 class="mt-4 mb-3"><i class="bi bi-lightbulb me-2"></i>Recommendations</h5>`;
+      d.recommendations.forEach(r => {
+        const prioColor = r.priority === 'high' ? 'warning' : (r.priority === 'info' ? 'success' : 'info');
+        html += `<div class="alert alert-${prioColor} bg-${prioColor} bg-opacity-10 border-${prioColor} py-2">
+          <i class="bi ${r.icon} me-2"></i><strong>${r.title}</strong> — ${r.description}
+        </div>`;
+      });
+    }
+
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<div class="alert alert-danger">Error loading maturity data.</div>';
+  }
+}
+
+// ── Active Context Panel ──────────────────────────────────────────
+async function brLoadContext() {
+  const container = document.getElementById('brContextContent');
+  container.innerHTML = '<div class="text-center py-4"><span class="spinner-border spinner-border-sm"></span></div>';
+
+  try {
+    const res = await fetch('/api/active-context');
+    const d = await res.json();
+
+    let html = `
+      <div class="row g-3 mb-4">
+        <!-- Session Info -->
+        <div class="col-md-4">
+          <div class="card bg-dark border-info h-100">
+            <div class="card-header bg-info bg-opacity-10 small fw-bold"><i class="bi bi-broadcast me-2"></i>Current Session</div>
+            <div class="card-body">
+              <div class="mb-2"><span class="text-muted">Active Since:</span> ${new Date(d.session.active_since).toLocaleTimeString()}</div>
+              <div class="mb-2"><span class="text-muted">Workspace:</span> <span class="badge bg-primary">${d.session.current_workspace}</span></div>
+              <div><span class="text-muted">Interactions Today:</span> <span class="fw-bold">${d.session.interactions_today}</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Maturity Snapshot -->
+        <div class="col-md-4">
+          <div class="card bg-dark border-warning h-100">
+            <div class="card-header bg-warning bg-opacity-10 small fw-bold"><i class="bi bi-speedometer2 me-2"></i>Maturity Snapshot</div>
+            <div class="card-body text-center">
+              <div class="fs-2 fw-bold text-warning">${d.maturity_snapshot.cmi_score_approx}</div>
+              <div class="text-muted">CMI Score</div>
+              <span class="badge bg-warning bg-opacity-25 text-warning mt-1">${d.maturity_snapshot.cmi_tier}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Business Context -->
+        <div class="col-md-4">
+          <div class="card bg-dark border-success h-100">
+            <div class="card-header bg-success bg-opacity-10 small fw-bold"><i class="bi bi-building me-2"></i>Business Context</div>
+            <div class="card-body">
+              <div class="mb-1"><span class="text-muted">Businesses:</span> ${d.business_context.businesses}</div>
+              <div class="mb-1"><span class="text-muted">Budget:</span> $${d.business_context.total_budget.toLocaleString()}/mo</div>
+              <div class="mb-1"><span class="text-muted">Team:</span> ${d.business_context.team_size} people</div>
+              <div><span class="text-muted">Health:</span>
+                <span class="badge bg-${d.business_context.accounting_summary.health === 'healthy' ? 'success' : 'danger'}">${d.business_context.accounting_summary.health}</span>
+                <span class="small text-muted ms-1">(${d.business_context.accounting_summary.runway})</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Contextual Signals -->
+      <h5 class="mb-3"><i class="bi bi-lightning me-2"></i>Contextual Signals</h5>
+      <div class="row g-2 mb-4">`;
+
+    const signalIcons = { insight: 'bi-lightbulb text-info', alert: 'bi-exclamation-triangle text-warning', opportunity: 'bi-star text-success' };
+    const signalColors = { insight: 'info', alert: 'warning', opportunity: 'success' };
+    (d.contextual_signals || []).forEach(s => {
+      html += `<div class="col-md-4">
+        <div class="card bg-dark border-${signalColors[s.type]} h-100">
+          <div class="card-body py-2">
+            <div class="small"><i class="bi ${signalIcons[s.type]} me-1"></i><strong>${s.type.toUpperCase()}</strong></div>
+            <div class="small mt-1">${s.message}</div>
+            <div class="small text-muted mt-1">Source: ${s.source}</div>
+          </div>
+        </div>
+      </div>`;
+    });
+
+    html += `</div>`;
+
+    // Connected tools
+    html += `<h5 class="mb-3"><i class="bi bi-plug me-2"></i>Active Connectors (${d.active_connectors.length})</h5>
+      <div class="d-flex flex-wrap gap-2 mb-4">`;
+    if (d.active_connectors.length) {
+      d.active_connectors.forEach(c => {
+        html += `<span class="badge bg-success bg-opacity-25 text-success border border-success">${c}</span>`;
+      });
+    } else {
+      html += '<span class="text-muted small">No connectors active</span>';
+    }
+    html += '</div>';
+
+    // Active agents
+    html += `<h5 class="mb-3"><i class="bi bi-robot me-2"></i>Active Agents (${d.active_agents.length})</h5>
+      <div class="d-flex flex-wrap gap-2 mb-4">`;
+    if (d.active_agents.length) {
+      d.active_agents.forEach(a => {
+        const info = brState.agents.find(x => x.slug === a.slug);
+        const color = info ? info.color : '#8b949e';
+        html += `<span class="badge border" style="color:${color}; border-color:${color}!important;">${info ? info.name : a.slug}</span>`;
+      });
+    } else {
+      html += '<span class="text-muted small">No agents configured yet</span>';
+    }
+    html += '</div>';
+
+    // Next actions
+    html += `<h5 class="mb-3"><i class="bi bi-list-task me-2"></i>Suggested Next Actions</h5>`;
+    (d.next_actions || []).forEach((a, i) => {
+      html += `<div class="alert alert-secondary bg-dark border-secondary py-2"><i class="bi bi-arrow-right-circle me-2 text-primary"></i>${a}</div>`;
+    });
+
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<div class="alert alert-danger">Error loading active context.</div>';
+  }
+}
+
+// ── Listen for round changes ──────────────────────────────────────
+document.getElementById('brRounds').addEventListener('change', brUpdateLaunchInfo);
+
+// ── Boot ──────────────────────────────────────────────────────────
+brInit();
+</script>
+{% endblock %}

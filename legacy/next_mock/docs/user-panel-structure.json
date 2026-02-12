@@ -1,0 +1,813 @@
+{
+  "panel": {
+    "id": "user-panel",
+    "name": "Camarad Account",
+    "route": "/p/user",
+    "icon": "User",
+    "description": "User profile, preferences, billing, and security settings"
+  },
+  "sections": [
+    {
+      "id": "overview",
+      "title": "Overview / Profile",
+      "order": 1,
+      "components": [
+        {
+          "type": "ProfileCard",
+          "fields": [
+            {
+              "key": "avatar",
+              "label": "Avatar",
+              "type": "image",
+              "editable": true,
+              "source": "upload | gravatar | oauth"
+            },
+            {
+              "key": "displayName",
+              "label": "Display Name",
+              "type": "text",
+              "editable": true,
+              "maxLength": 50
+            },
+            {
+              "key": "email",
+              "label": "Email",
+              "type": "email",
+              "editable": false,
+              "note": "Managed by OAuth provider"
+            },
+            {
+              "key": "role",
+              "label": "Role",
+              "type": "badge",
+              "values": ["user", "admin", "dev", "beta-tester"],
+              "editable": false
+            },
+            {
+              "key": "lastLogin",
+              "label": "Last Login",
+              "type": "datetime",
+              "editable": false
+            },
+            {
+              "key": "activeSession",
+              "label": "Active Session",
+              "type": "boolean",
+              "editable": false
+            }
+          ],
+          "actions": [
+            {
+              "label": "Edit Profile",
+              "type": "modal",
+              "modalId": "edit-profile"
+            },
+            {
+              "label": "Manage Plan",
+              "type": "navigate",
+              "target": "#billing"
+            }
+          ]
+        }
+      ],
+      "apiEndpoints": [
+        {
+          "method": "GET",
+          "path": "/api/user",
+          "description": "Fetch user profile data"
+        },
+        {
+          "method": "PATCH",
+          "path": "/api/user",
+          "description": "Update profile fields",
+          "body": {
+            "displayName": "string",
+            "avatar": "string (URL)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "preferences",
+      "title": "Preferences",
+      "order": 2,
+      "components": [
+        {
+          "type": "SettingsGroup",
+          "settings": [
+            {
+              "key": "theme",
+              "label": "Theme",
+              "icon": "Moon",
+              "type": "select",
+              "options": ["light", "dark", "auto"],
+              "default": "dark"
+            },
+            {
+              "key": "accentColor",
+              "label": "Accent Color",
+              "icon": "Palette",
+              "type": "color-picker",
+              "options": ["cyan", "blue", "purple", "green", "orange", "red"],
+              "default": "cyan",
+              "note": "Syncs with sidebar ThemeAccentToggle"
+            },
+            {
+              "key": "personalityTone",
+              "label": "Personality Tone",
+              "icon": "Brain",
+              "type": "select",
+              "options": ["neutral", "technical", "conversational"],
+              "default": "neutral",
+              "description": "Controls Camarad's response style"
+            },
+            {
+              "key": "timezone",
+              "label": "Timezone",
+              "icon": "Clock",
+              "type": "timezone-picker",
+              "default": "auto",
+              "note": "Auto-detected from browser"
+            },
+            {
+              "key": "locale",
+              "label": "Locale",
+              "icon": "Globe",
+              "type": "select",
+              "options": ["en-US", "ro-RO", "de-DE", "fr-FR"],
+              "default": "en-US"
+            }
+          ]
+        },
+        {
+          "type": "NotificationSettings",
+          "title": "Notifications",
+          "icon": "Bell",
+          "settings": [
+            {
+              "key": "systemUpdates",
+              "label": "System updates",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "key": "billingNotifications",
+              "label": "Billing notifications",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "key": "aiActivitySummaries",
+              "label": "AI activity summaries",
+              "type": "toggle",
+              "default": false
+            },
+            {
+              "key": "emailPreferences",
+              "label": "Email preferences",
+              "type": "multi-select",
+              "options": ["weekly-digest", "monthly-report", "security-alerts"],
+              "default": ["security-alerts"]
+            }
+          ]
+        }
+      ],
+      "apiEndpoints": [
+        {
+          "method": "GET",
+          "path": "/api/user/preferences",
+          "description": "Fetch user preferences"
+        },
+        {
+          "method": "PATCH",
+          "path": "/api/user/preferences",
+          "description": "Update preferences",
+          "body": {
+            "theme": "string",
+            "accentColor": "string",
+            "personalityTone": "string",
+            "timezone": "string",
+            "locale": "string",
+            "notifications": "object"
+          }
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "title": "Security",
+      "order": 3,
+      "components": [
+        {
+          "type": "SecuritySettings",
+          "settings": [
+            {
+              "key": "changePassword",
+              "label": "Change Password",
+              "icon": "Key",
+              "type": "action",
+              "action": "modal",
+              "modalId": "change-password",
+              "note": "Only for email/password accounts"
+            },
+            {
+              "key": "twoFactorAuth",
+              "label": "Two-Factor Authentication",
+              "icon": "ShieldCheck",
+              "type": "toggle",
+              "methods": ["totp", "email"],
+              "status": "disabled | enabled",
+              "action": "modal",
+              "modalId": "setup-2fa"
+            },
+            {
+              "key": "apiKeys",
+              "label": "API Keys / Tokens",
+              "icon": "Key",
+              "type": "list",
+              "description": "For developers integrating with Camarad",
+              "actions": [
+                {
+                  "label": "Create API Key",
+                  "type": "modal",
+                  "modalId": "create-api-key"
+                }
+              ]
+            },
+            {
+              "key": "activeSessions",
+              "label": "Active Sessions",
+              "icon": "Smartphone",
+              "type": "list",
+              "fields": ["device", "location", "lastActive"],
+              "actions": [
+                {
+                  "label": "Revoke",
+                  "type": "action",
+                  "confirm": true
+                }
+              ]
+            },
+            {
+              "key": "terminateAllSessions",
+              "label": "Terminate All Sessions",
+              "icon": "AlertTriangle",
+              "type": "button",
+              "variant": "destructive",
+              "confirm": true,
+              "confirmMessage": "This will log you out from all devices except this one."
+            }
+          ]
+        }
+      ],
+      "apiEndpoints": [
+        {
+          "method": "POST",
+          "path": "/api/user/security/change-password",
+          "description": "Change user password",
+          "body": {
+            "currentPassword": "string",
+            "newPassword": "string"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/user/security/2fa/enable",
+          "description": "Enable two-factor authentication",
+          "body": {
+            "method": "totp | email"
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/user/security/2fa/disable",
+          "description": "Disable two-factor authentication"
+        },
+        {
+          "method": "GET",
+          "path": "/api/user/security/api-keys",
+          "description": "List all API keys"
+        },
+        {
+          "method": "POST",
+          "path": "/api/user/security/api-keys",
+          "description": "Create new API key",
+          "body": {
+            "name": "string",
+            "scopes": "array"
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/user/security/api-keys/:id",
+          "description": "Revoke API key"
+        },
+        {
+          "method": "GET",
+          "path": "/api/user/security/sessions",
+          "description": "List active sessions"
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/user/security/sessions/:id",
+          "description": "Revoke specific session"
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/user/security/sessions",
+          "description": "Terminate all sessions except current"
+        }
+      ]
+    },
+    {
+      "id": "billing",
+      "title": "Billing & Plans",
+      "order": 4,
+      "components": [
+        {
+          "type": "PlanCard",
+          "fields": [
+            {
+              "key": "currentPlan",
+              "label": "Current Plan",
+              "type": "badge",
+              "values": ["free", "pro", "agency", "custom"],
+              "display": "Free | Pro ($29/mo) | Agency ($99/mo) | Custom"
+            },
+            {
+              "key": "billingCycle",
+              "label": "Billing Cycle",
+              "type": "text",
+              "values": ["monthly", "yearly"]
+            },
+            {
+              "key": "nextBillingDate",
+              "label": "Next Billing Date",
+              "type": "date"
+            },
+            {
+              "key": "cbTBalance",
+              "label": "cbT Balance",
+              "type": "number",
+              "unit": "tokens",
+              "note": "Camarad tokens for API usage"
+            }
+          ],
+          "actions": [
+            {
+              "label": "Upgrade Plan",
+              "type": "navigate",
+              "target": "/pricing"
+            },
+            {
+              "label": "Manage Subscription",
+              "type": "external",
+              "url": "https://billing.stripe.com/p/session/{session_id}",
+              "note": "Stripe Customer Portal"
+            },
+            {
+              "label": "Add Credits",
+              "type": "modal",
+              "modalId": "add-credits"
+            }
+          ]
+        },
+        {
+          "type": "PaymentMethod",
+          "fields": [
+            {
+              "key": "cardBrand",
+              "label": "Card Brand",
+              "type": "text"
+            },
+            {
+              "key": "last4",
+              "label": "Last 4 Digits",
+              "type": "text"
+            },
+            {
+              "key": "expiry",
+              "label": "Expiry",
+              "type": "text"
+            }
+          ],
+          "actions": [
+            {
+              "label": "Update Payment Method",
+              "type": "modal",
+              "modalId": "update-payment"
+            }
+          ]
+        },
+        {
+          "type": "InvoicesList",
+          "title": "Invoices History",
+          "fields": ["date", "amount", "status", "downloadLink"],
+          "apiSource": "/api/billing/invoices",
+          "pagination": true
+        }
+      ],
+      "apiEndpoints": [
+        {
+          "method": "GET",
+          "path": "/api/billing/plan",
+          "description": "Get current plan and billing info"
+        },
+        {
+          "method": "POST",
+          "path": "/api/billing/upgrade",
+          "description": "Upgrade to a new plan",
+          "body": {
+            "planId": "string"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/billing/cancel",
+          "description": "Cancel subscription"
+        },
+        {
+          "method": "GET",
+          "path": "/api/billing/payment-method",
+          "description": "Get stored payment method"
+        },
+        {
+          "method": "POST",
+          "path": "/api/billing/payment-method",
+          "description": "Update payment method",
+          "body": {
+            "paymentMethodId": "string (Stripe)"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/billing/invoices",
+          "description": "List all invoices (via Stripe API)"
+        },
+        {
+          "method": "GET",
+          "path": "/api/billing/invoices/:id",
+          "description": "Download specific invoice"
+        },
+        {
+          "method": "POST",
+          "path": "/api/billing/portal",
+          "description": "Generate Stripe Customer Portal session",
+          "response": {
+            "url": "string"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/webhook",
+          "description": "Stripe webhook handler",
+          "note": "Already configured ✅",
+          "events": [
+            "checkout.session.completed",
+            "invoice.paid",
+            "invoice.payment_failed",
+            "customer.subscription.updated",
+            "customer.subscription.deleted"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "usage",
+      "title": "Usage & Tokens",
+      "order": 5,
+      "components": [
+        {
+          "type": "UsageGraph",
+          "title": "cbT Usage",
+          "metrics": [
+            {
+              "key": "totalTokens",
+              "label": "Total Tokens",
+              "type": "number",
+              "icon": "Zap"
+            },
+            {
+              "key": "apiCalls",
+              "label": "API Calls",
+              "type": "number",
+              "icon": "Activity"
+            },
+            {
+              "key": "requests",
+              "label": "Requests",
+              "type": "number",
+              "icon": "Send"
+            }
+          ],
+          "timeRanges": ["today", "week", "month", "year"],
+          "chartType": "line | bar"
+        },
+        {
+          "type": "CostBreakdown",
+          "title": "Cost Breakdown by Agent",
+          "agents": [
+            {
+              "name": "oGPT",
+              "icon": "Brain",
+              "cost": "number",
+              "percentage": "number"
+            },
+            {
+              "name": "oPipe",
+              "icon": "GitBranch",
+              "cost": "number",
+              "percentage": "number"
+            },
+            {
+              "name": "RAG",
+              "icon": "Database",
+              "cost": "number",
+              "percentage": "number"
+            },
+            {
+              "name": "Other",
+              "icon": "MoreHorizontal",
+              "cost": "number",
+              "percentage": "number"
+            }
+          ]
+        },
+        {
+          "type": "UsageInfo",
+          "fields": [
+            {
+              "key": "resetDate",
+              "label": "Reset Date",
+              "type": "date",
+              "description": "Monthly usage resets on this date"
+            },
+            {
+              "key": "currentPeriod",
+              "label": "Current Period",
+              "type": "text",
+              "format": "MMM 1 - MMM 30"
+            }
+          ],
+          "actions": [
+            {
+              "label": "Export Usage Report (CSV)",
+              "type": "download",
+              "endpoint": "/api/usage/export"
+            }
+          ]
+        }
+      ],
+      "apiEndpoints": [
+        {
+          "method": "GET",
+          "path": "/api/usage",
+          "description": "Get usage statistics",
+          "query": {
+            "range": "today | week | month | year"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/usage/breakdown",
+          "description": "Get cost breakdown by agent"
+        },
+        {
+          "method": "GET",
+          "path": "/api/usage/export",
+          "description": "Export usage report as CSV"
+        }
+      ]
+    },
+    {
+      "id": "danger-zone",
+      "title": "Danger Zone",
+      "order": 6,
+      "components": [
+        {
+          "type": "DangerZone",
+          "actions": [
+            {
+              "key": "deleteAccount",
+              "label": "Delete Account",
+              "icon": "Trash2",
+              "description": "Permanently delete your account and all associated data",
+              "variant": "destructive",
+              "confirm": true,
+              "confirmMessage": "This action cannot be undone. Type 'DELETE' to confirm.",
+              "endpoint": "/api/user/delete"
+            },
+            {
+              "key": "clearSessions",
+              "label": "Clear Stored Sessions",
+              "icon": "LogOut",
+              "description": "Remove all stored session data",
+              "variant": "warning",
+              "confirm": true,
+              "endpoint": "/api/user/sessions/clear"
+            },
+            {
+              "key": "revokeIntegrations",
+              "label": "Revoke All Integrations",
+              "icon": "Unplug",
+              "description": "Disconnect Google, GitHub, and all OAuth providers",
+              "variant": "warning",
+              "confirm": true,
+              "endpoint": "/api/user/integrations/revoke-all"
+            }
+          ]
+        }
+      ],
+      "apiEndpoints": [
+        {
+          "method": "DELETE",
+          "path": "/api/user/delete",
+          "description": "Delete user account permanently",
+          "body": {
+            "confirmation": "DELETE"
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/user/sessions/clear",
+          "description": "Clear all stored sessions"
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/user/integrations/revoke-all",
+          "description": "Revoke all OAuth integrations"
+        }
+      ]
+    }
+  ],
+  "navigation": {
+    "trigger": {
+      "location": "sidebar",
+      "element": "avatar",
+      "action": "click",
+      "menu": [
+        {
+          "label": "Profile",
+          "icon": "User",
+          "action": "navigate",
+          "target": "/p/user"
+        },
+        {
+          "label": "Settings",
+          "icon": "Settings",
+          "action": "navigate",
+          "target": "/p/user#preferences"
+        },
+        {
+          "label": "Billing",
+          "icon": "CreditCard",
+          "action": "navigate",
+          "target": "/p/user#billing"
+        },
+        {
+          "divider": true
+        },
+        {
+          "label": "Sign Out",
+          "icon": "LogOut",
+          "action": "auth",
+          "method": "logout"
+        }
+      ]
+    }
+  },
+  "context": {
+    "provider": "UserContext",
+    "file": "components/providers/UserProvider.tsx",
+    "state": {
+      "user": {
+        "id": "string",
+        "email": "string",
+        "displayName": "string",
+        "avatar": "string",
+        "role": "string",
+        "plan": "string",
+        "preferences": "object"
+      },
+      "isLoading": "boolean",
+      "error": "string | null"
+    },
+    "methods": [
+      "updateProfile",
+      "updatePreferences",
+      "logout",
+      "refreshUser"
+    ]
+  },
+  "fileStructure": {
+    "components": {
+      "user": [
+        "ProfileCard.tsx",
+        "SettingsGroup.tsx",
+        "NotificationSettings.tsx",
+        "SecuritySettings.tsx",
+        "PlanCard.tsx",
+        "PaymentMethod.tsx",
+        "InvoicesList.tsx",
+        "UsageGraph.tsx",
+        "CostBreakdown.tsx",
+        "UsageInfo.tsx",
+        "DangerZone.tsx"
+      ],
+      "modals": [
+        "EditProfileModal.tsx",
+        "ChangePasswordModal.tsx",
+        "Setup2FAModal.tsx",
+        "CreateAPIKeyModal.tsx",
+        "UpdatePaymentModal.tsx",
+        "AddCreditsModal.tsx"
+      ]
+    },
+    "pages": {
+      "p": [
+        "user.tsx"
+      ]
+    },
+    "api": {
+      "user": [
+        "index.ts",
+        "preferences.ts",
+        "security.ts"
+      ],
+      "billing": [
+        "plan.ts",
+        "payment-method.ts",
+        "invoices.ts",
+        "portal.ts"
+      ],
+      "usage": [
+        "index.ts",
+        "breakdown.ts",
+        "export.ts"
+      ],
+      "webhook": [
+        "stripe.ts"
+      ]
+    },
+    "lib": [
+      "stripe.ts",
+      "auth.ts"
+    ]
+  },
+  "integrations": {
+    "stripe": {
+      "products": [
+        {
+          "id": "free",
+          "name": "Free",
+          "price": 0,
+          "features": ["Basic AI access", "100 cbT/month", "Community support"]
+        },
+        {
+          "id": "pro",
+          "name": "Pro",
+          "price": 29,
+          "interval": "month",
+          "features": ["Advanced AI models", "10,000 cbT/month", "Priority support", "API access"]
+        },
+        {
+          "id": "agency",
+          "name": "Agency",
+          "price": 99,
+          "interval": "month",
+          "features": ["Unlimited AI access", "100,000 cbT/month", "White-label options", "Dedicated support"]
+        },
+        {
+          "id": "custom",
+          "name": "Custom",
+          "price": "Contact",
+          "features": ["Custom integrations", "Unlimited cbT", "SLA guarantee", "Enterprise support"]
+        }
+      ],
+      "webhookEvents": [
+        "checkout.session.completed",
+        "invoice.paid",
+        "invoice.payment_failed",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+        "payment_method.attached",
+        "payment_method.detached"
+      ]
+    }
+  },
+  "meta": {
+    "version": "1.0.0",
+    "created": "2025-11-13",
+    "author": "GitHub Copilot",
+    "status": "blueprint",
+    "nextSteps": [
+      "Generate component scaffolding",
+      "Implement API routes",
+      "Set up Stripe integration",
+      "Create UserContext provider",
+      "Build modals",
+      "Add form validation",
+      "Implement tests"
+    ]
+  }
+}

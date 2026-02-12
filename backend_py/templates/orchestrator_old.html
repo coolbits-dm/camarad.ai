@@ -1,0 +1,984 @@
+{% extends "base.html" %}
+
+{% block title %}Orchestrator{% endblock %}
+
+{% block content %}
+<style>
+  body { background: #0d1117; color: #c9d1d9; overflow: hidden; height: 100vh; margin: 0; }
+  #canvas {
+    background: #0d1117;
+    background-image: 
+      linear-gradient(#161b22 1px, transparent 1px),
+      linear-gradient(90deg, #161b22 1px, transparent 1px);
+    background-size: 40px 40px;
+    overflow: hidden;
+    cursor: grab;
+    position: relative;
+  }
+  .node {
+    position: absolute;
+    width: 200px;
+    background: #21262d;
+    border: 2px solid #444c56;
+    border-radius: 8px;
+    padding: 12px;
+    cursor: move;
+    user-select: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+    z-index: 1;
+  }
+  .node-header {
+    font-weight: bold;
+    margin-bottom: 8px;
+    color: #58a6ff;
+  }
+  .node-type-trigger { border-color: #58a6ff; }
+  .node-type-agent { border-color: #f0883e; }
+  .node-type-connector { border-color: #3fb950; }
+  .node-type-condition { border-color: #d29922; }
+  .node-type-output { border-color: #ff6bcb; }
+  .condition-badge {
+    border: 1px solid #d29922;
+    background: #3c2a00;
+    color: #ffd700;
+    font-weight: bold;
+  }
+</style>
+<div class="d-flex">
+  {% include "sidebar.html" %}
+  <main class="flex-grow-1 p-0 overflow-hidden" style="margin-left: 280px; height: calc(100vh - 56px);">
+    <!-- Header orchestrator -->
+    <div class="bg-dark border-bottom border-secondary p-3 d-flex justify-content-between align-items-center">
+      <h4 class="mb-0">Orchestrator (Mock)</h4>
+      <div class="d-flex gap-2">
+        <button class="btn btn-sm btn-outline-primary" onclick="addNode('trigger')">+ Trigger</button>
+        <button class="btn btn-sm btn-outline-primary" onclick="addNode('agent')">+ Agent</button>
+        <button class="btn btn-sm btn-outline-primary" onclick="addNode('connector')">+ Connector</button>
+        <button class="btn btn-sm btn-outline-primary" onclick="addNode('condition')">+ Condition</button>
+        <button class="btn btn-sm btn-outline-primary" onclick="addNode('output')">+ Output</button>
+        <button class="btn btn-sm btn-outline-success" onclick="saveFlow()">Save</button>
+        <button class="btn btn-sm btn-outline-danger" onclick="clearFlow()">Clear</button>
+        <button class="btn btn-sm btn-outline-info" onclick="exportFlow()">Export JSON</button>
+        <input type="file" id="importFile" accept=".json" style="display:none;" onchange="importFlow(event)">
+        <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('importFile').click()">Import JSON</button>
+        <button class="btn btn-sm btn-outline-success" onclick="saveToDb()">Save to DB</button>
+        <button class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#loadFlowsModal">Load from DB</button>
+        <button class="btn btn-sm btn-outline-warning" onclick="runFlow()">Run Mock</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="resetZoom()">Reset Zoom</button>
+        <button class="btn btn-sm btn-outline-info" id="snapToggleBtn" onclick="toggleSnap()">
+          Snap: <span id="snapStatus">ON</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Canvas full-height -->
+    <div id="canvas" style="height: calc(100% - 60px);"></div>
+
+    <!-- Zoom controls -->
+    <div class="position-absolute bottom-0 end-0 m-3">
+      <button class="btn btn-sm btn-outline-light mb-1" onclick="zoomIn()">+</button>
+      <button class="btn btn-sm btn-outline-light" onclick="zoomOut()">-</button>
+    </div>
+  </main>
+</div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const GRID_SIZE = 40; // px – ajustează după gust (20, 40, 50)
+
+    function snapToGrid(x, y) {
+      return {
+        x: Math.round(x / GRID_SIZE) * GRID_SIZE,
+        y: Math.round(y / GRID_SIZE) * GRID_SIZE
+      };
+    }
+    let scale = 1;
+    let translateX = 0, translateY = 0;
+    let snapEnabled = true;
+
+    function toggleSnap() {
+      snapEnabled = !snapEnabled;
+      document.getElementById('snapStatus').textContent = snapEnabled ? 'ON' : 'OFF';
+      document.getElementById('snapToggleBtn').classList.toggle('btn-outline-info', snapEnabled);
+      document.getElementById('snapToggleBtn').classList.toggle('btn-outline-secondary', !snapEnabled);
+      alert(`Snap to grid is now ${snapEnabled ? 'ENABLED' : 'DISABLED'}`);
+    }
+    let lines = []; // pentru conexiuni LeaderLine
+
+    // Pan & Zoom pe canvas
+    interact(canvas)
+      .draggable({
+        inertia: true,
+        listeners: {
+          move(event) {
+            translateX += event.dx / scale;
+            translateY += event.dy / scale;
+            updateTransform();
+          }
+        }
+      })
+      .gestures({ pan: true });
+
+    function updateTransform() {
+      canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    }
+
+    function zoomIn() { scale = Math.min(scale + 0.1, 3); updateTransform(); }
+    function zoomOut() { scale = Math.max(scale - 0.1, 0.3); updateTransform(); }
+
+    // Adaugă nod nou
+    function addNode(type, x = 400, y = 300) {
+      const node = document.createElement('div');
+      node.className = `node node-type-${type}`;
+      
+      let extraContent = '';
+      if (type === 'condition') {
+        extraContent = '<div class="condition-badge mt-2 p-1 bg-warning text-dark rounded small text-center" style="font-size:0.8rem;">IF: unset</div>';
+      }
+
+      const nodeLabel = getMockLabel(type);
+
+      node.innerHTML = `
+        <div class="node-header">${type.toUpperCase()}</div>
+        <div>${nodeLabel}</div>
+        ${extraContent}
+        <button class="btn btn-sm btn-outline-danger position-absolute top-0 end-0 m-1" onclick="deleteNode(this.parentElement)">×</button>
+      `;
+      
+      node.style.left = x + 'px';
+      node.style.top  = y + 'px';
+      node.id = `node-${Date.now()}`;
+      node.dataset.type = type;
+
+      if (snapEnabled) {
+        const snapped = snapToGrid(x, y);
+        node.style.left = snapped.x + 'px';
+        node.style.top  = snapped.y + 'px';
+        node.setAttribute('data-x', snapped.x);
+        node.setAttribute('data-y', snapped.y);
+      } else {
+        node.setAttribute('data-x', x);
+        node.setAttribute('data-y', y);
+      }
+
+      canvas.appendChild(node);
+      makeDraggable(node);
+      makeConnectable(node);
+
+      return node;
+    }
+
+    function getMockLabel(type) {
+      const labels = {
+        trigger: "New incoming message",
+        agent: "CEO / Vision & Strategy",
+        connector: "Google Ads API",
+        condition: "If ROAS > 3x",
+        output: "Send response to user"
+      };
+      return labels[type] || type;
+    }
+
+    // Drag nod
+    function makeDraggable(el) {
+      interact(el)
+        .draggable({
+          inertia: true,
+          modifiers: [
+            interact.modifiers.restrictRect({
+              restriction: canvas,
+              endOnly: true
+            }),
+            ...(snapEnabled ? [interact.modifiers.snap({
+              targets: [interact.snappers.grid({ x: GRID_SIZE, y: GRID_SIZE })],
+              range: Infinity,
+              relativePoints: [{ x: 0, y: 0 }]
+            })] : [])
+          ],
+          listeners: {
+            move(event) {
+              const target = event.target;
+              let x = (parseFloat(target.getAttribute('data-x')) || 0) + event.dx / scale;
+              let y = (parseFloat(target.getAttribute('data-y')) || 0) + event.dy / scale;
+
+              if (snapEnabled) {
+                const snapped = snapToGrid(x, y);
+                x = snapped.x;
+                y = snapped.y;
+              }
+
+              target.style.transform = `translate(${x}px, ${y}px)`;
+              target.setAttribute('data-x', x);
+              target.setAttribute('data-y', y);
+
+              updateAllLines();
+            },
+            end(event) {
+              const target = event.target;
+              let x = parseFloat(target.getAttribute('data-x')) || 0;
+              let y = parseFloat(target.getAttribute('data-y')) || 0;
+
+              if (snapEnabled) {
+                const snapped = snapToGrid(x, y);
+                x = snapped.x;
+                y = snapped.y;
+                target.style.transform = `translate(${x}px, ${y}px)`;
+                target.setAttribute('data-x', x);
+                target.setAttribute('data-y', y);
+              }
+
+              updateAllLines();
+              saveFlow();
+            }
+          }
+        });
+    }
+
+    // Conexiuni (click dreapta pe nod → click pe alt nod)
+    let connectingFrom = null;
+    function makeConnectable(node) {
+      node.addEventListener('contextmenu', e => {
+        e.preventDefault();
+        if (connectingFrom) {
+          connectNodes(connectingFrom, node);
+          connectingFrom = null;
+        } else {
+          connectingFrom = node;
+          alert('Click dreapta pe nodul țintă pentru a conecta');
+        }
+      });
+    }
+
+    function connectNodes(from, to) {
+      const fromType = from.dataset.type;
+      const toType   = to.dataset.type;
+
+      let color = '#58a6ff';  // default: blue
+      let dash  = false;
+      let arrow = true;       // most connections have arrow
+
+      // Rules for color & style
+      if (fromType === 'trigger') {
+        color = '#58a6ff'; // blue - initiation
+      } 
+      else if (fromType === 'agent' && toType === 'connector') {
+        color = '#3fb950'; // green - agent calls external data
+      } 
+      else if (fromType === 'connector' && toType === 'agent') {
+        color = '#f0883e'; // orange - data back to decision
+      } 
+      else if (fromType === 'condition') {
+        color = '#d29922'; // yellow - branching logic
+        dash  = true;      // dashed for conditional paths
+      } 
+      else if (fromType === 'agent' && toType === 'agent') {
+        color = '#a371f7'; // purple - internal handover
+      } 
+      else if (toType === 'output') {
+        color = '#ff6bcb'; // pink - final output
+      }
+
+      const line = new LeaderLine(
+        from,
+        to,
+        {
+          color: color,
+          size: 3.5,
+          path: 'fluid',
+          startSocket: 'auto',
+          endSocket: 'auto',
+          dash: dash ? { len: 6, gap: 4, animation: true } : false,
+          endPlug: arrow ? 'arrow3' : 'behind',
+          endPlugSize: 2,
+          startPlugColor: color,
+          endPlugColor: color
+        }
+      );
+
+      lines.push(line);
+      saveFlow();
+    }
+
+    function updateAllLines() {
+      lines.forEach(line => line.position());
+    }
+
+    function deleteNode(node) {
+      // Șterge linii conectate la nod
+      lines = lines.filter(line => {
+        if (line.start === node || line.end === node) {
+          line.remove();
+          return false;
+        }
+        return true;
+      });
+      node.remove();
+      saveFlow();
+    }
+
+    // Save / Load / New / Clear
+    function saveFlow() {
+      const nodes = Array.from(canvas.querySelectorAll('.node')).map(n => ({
+        id: n.id,
+        type: n.dataset.type,
+        x: parseFloat(n.getAttribute('data-x') || 0) + parseFloat(n.style.left || 0),
+        y: parseFloat(n.getAttribute('data-y') || 0) + parseFloat(n.style.top || 0),
+        label: n.querySelector('div:nth-child(2)').textContent
+      }));
+
+      const connections = lines.map(l => ({
+        from: l.start.id,
+        to: l.end.id
+      }));
+
+      const flow = { nodes, connections, scale, translateX, translateY };
+      localStorage.setItem('camarad_orchestrator_flow', JSON.stringify(flow));
+      alert('Flow salvat!');
+    }
+
+    function loadFlow() {
+      const saved = localStorage.getItem('camarad_orchestrator_flow');
+      if (!saved) return;
+
+      const flow = JSON.parse(saved);
+      canvas.innerHTML = ''; // curăță
+      lines = [];
+
+      flow.nodes.forEach(n => {
+        addNode(n.type, n.x, n.y);
+        const node = document.getElementById(n.id);
+        node.style.transform = `translate(${n.x}px, ${n.y}px)`;
+        node.setAttribute('data-x', n.x);
+        node.setAttribute('data-y', n.y);
+      });
+
+      // Reconectează după ce toate nodurile sunt adăugate
+      setTimeout(() => {
+        flow.connections.forEach(c => {
+          const from = document.getElementById(c.from);
+          const to = document.getElementById(c.to);
+          if (from && to) connectNodes(from, to);
+        });
+      }, 100);
+
+      scale = flow.scale || 1;
+      translateX = flow.translateX || 0;
+      translateY = flow.translateY || 0;
+      updateTransform();
+    }
+
+    function newFlow() {
+      if (confirm('Clear current flow and start new?')) {
+        clearFlow();
+      }
+    }
+
+    function clearFlow() {
+      canvas.innerHTML = '';
+      lines.forEach(l => l.remove());
+      lines = [];
+      localStorage.removeItem('camarad_orchestrator_flow');
+    }
+
+    function exportFlow() {
+      const nodes = Array.from(canvas.querySelectorAll('.node')).map(n => ({
+        id: n.id,
+        type: n.dataset.type,
+        x: parseFloat(n.getAttribute('data-x') || 0) + parseFloat(n.style.left || 0),
+        y: parseFloat(n.getAttribute('data-y') || 0) + parseFloat(n.style.top || 0),
+        label: n.querySelector('div:nth-child(2)').textContent,
+        config: {
+          agent: n.dataset.agent || null,
+          connector: n.dataset.connector || null,
+          condition: n.dataset.condition || null,
+          output: n.dataset.output || null
+        }
+      }));
+
+      const connections = lines.map(l => ({
+        from: l.start.id,
+        to: l.end.id
+      }));
+
+      const flow = {
+        version: "1.0",
+        created: new Date().toISOString(),
+        scale,
+        translateX,
+        translateY,
+        nodes,
+        connections
+      };
+
+      const jsonStr = JSON.stringify(flow, null, 2);
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `camarad-flow-${new Date().toISOString().slice(0,10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      alert('Flow exported as JSON! Check your downloads folder.');
+    }
+
+    function importFlow(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const flow = JSON.parse(e.target.result);
+          clearFlow(); // curăță canvas-ul actual
+
+          // Re-creează nodurile
+          flow.nodes.forEach(n => {
+            addNode(n.type, n.x, n.y);
+            const node = document.getElementById(n.id);
+            if (node) {
+              node.style.transform = `translate(${n.x}px, ${n.y}px)`;
+              node.setAttribute('data-x', n.x);
+              node.setAttribute('data-y', n.y);
+              node.querySelector('div:nth-child(2)').textContent = n.label;
+
+              // Restaurează config
+              if (n.config.agent) node.dataset.agent = n.config.agent;
+              if (n.config.connector) node.dataset.connector = n.config.connector;
+              if (n.config.condition) node.dataset.condition = n.config.condition;
+              if (n.config.output) node.dataset.output = n.config.output;
+            }
+          });
+
+          // Re-creează conexiunile după un mic delay
+          setTimeout(() => {
+            flow.connections.forEach(c => {
+              const from = document.getElementById(c.from);
+              const to = document.getElementById(c.to);
+              if (from && to) connectNodes(from, to);
+            });
+          }, 200);
+
+          scale = flow.scale || 1;
+          translateX = flow.translateX || 0;
+          translateY = flow.translateY || 0;
+          updateTransform();
+
+          alert('Flow imported successfully!');
+        } catch (err) {
+          alert('Invalid JSON file: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    let currentEditingNode = null;
+
+    function openNodeEdit(node) {
+      currentEditingNode = node;
+      const type = node.dataset.type;
+      
+      document.getElementById('nodeType').value = type.charAt(0).toUpperCase() + type.slice(1);
+      document.getElementById('nodeLabel').value = node.querySelector('div:nth-child(2)').textContent;
+
+      // Afișează grupuri specifice după tip
+      document.getElementById('agentSelectGroup').style.display = (type === 'agent') ? 'block' : 'none';
+      document.getElementById('connectorSelectGroup').style.display = (type === 'connector') ? 'block' : 'none';
+      document.getElementById('conditionGroup').style.display = (type === 'condition') ? 'block' : 'none';
+      document.getElementById('outputGroup').style.display = (type === 'output') ? 'block' : 'none';
+
+      // Dacă există deja valori salvate în dataset
+      if (node.dataset.agent) document.getElementById('agentSelect').value = node.dataset.agent;
+      if (node.dataset.connector) document.getElementById('connectorSelect').value = node.dataset.connector;
+      if (node.dataset.condition) document.getElementById('conditionExpr').value = node.dataset.condition;
+      if (node.dataset.output) document.getElementById('outputFormat').value = node.dataset.output;
+
+      new bootstrap.Modal(document.getElementById('nodeEditModal')).show();
+    }
+
+    // Double-click pe nod → edit
+    canvas.addEventListener('dblclick', e => {
+      if (e.target.closest('.node')) {
+        openNodeEdit(e.target.closest('.node'));
+      }
+    });
+
+    // Salvează editare
+    function saveNodeEdit() {
+      if (!currentEditingNode) return;
+
+      const label = document.getElementById('nodeLabel').value.trim();
+      if (label) {
+        currentEditingNode.querySelector('div:nth-child(2)').textContent = label;
+      }
+
+      const type = currentEditingNode.dataset.type;
+
+      if (type === 'agent') {
+        currentEditingNode.dataset.agent = document.getElementById('agentSelect').value;
+      } else if (type === 'connector') {
+        currentEditingNode.dataset.connector = document.getElementById('connectorSelect').value;
+      } else if (type === 'condition') {
+        currentEditingNode.dataset.condition = document.getElementById('conditionExpr').value;
+      } else if (type === 'output') {
+        currentEditingNode.dataset.output = document.getElementById('outputFormat').value;
+      }
+
+      bootstrap.Modal.getInstance(document.getElementById('nodeEditModal')).hide();
+      saveFlow(); // salvează și noul config
+
+      // Refresh visual condition badge if it's a condition node
+      if (currentEditingNode.dataset.type === 'condition') {
+        const badge = currentEditingNode.querySelector('.condition-badge');
+        if (badge) {
+          const expr = currentEditingNode.dataset.condition || 'unset';
+          badge.textContent = `IF: ${expr}`;
+          badge.className = `condition-badge mt-2 p-1 rounded small text-center ${expr === 'unset' ? 'bg-warning text-dark' : 'bg-success text-white'}`;
+        }
+      }
+    }
+
+    // Load la pornire
+    loadFlow();
+
+    // Pan cu mouse wheel + drag canvas
+    canvas.addEventListener('wheel', e => {
+      e.preventDefault();
+      if (e.deltaY < 0) zoomIn(); else zoomOut();
+    });
+
+    async function saveToDb() {
+      const currentFlow = {
+        version: "1.0",
+        created: new Date().toISOString(),
+        scale,
+        translateX,
+        translateY,
+        nodes: Array.from(canvas.querySelectorAll('.node')).map(n => ({
+          id: n.id,
+          type: n.dataset.type,
+          x: parseFloat(n.getAttribute('data-x') || 0) + parseFloat(n.style.left || 0),
+          y: parseFloat(n.getAttribute('data-y') || 0) + parseFloat(n.style.top || 0),
+          label: n.querySelector('div:nth-child(2)').textContent,
+          config: {
+            agent: n.dataset.agent || null,
+            connector: n.dataset.connector || null,
+            condition: n.dataset.condition || null,
+            output: n.dataset.output || null
+          }
+        })),
+        connections: lines.map(l => ({
+          from: l.start.id,
+          to: l.end.id
+        }))
+      };
+
+      const name = prompt("Flow name:", "My Camarad Flow");
+      if (!name) return;
+
+      try {
+        const res = await fetch('/api/flows', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, flow: currentFlow })
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+          alert(`Flow saved! ID: ${data.flow_id}`);
+        } else {
+          alert('Error: ' + (data.error || 'Unknown'));
+        }
+      } catch (err) {
+        alert('Network error: ' + err.message);
+      }
+    }
+
+    async function loadFlowsList() {
+      try {
+        const res = await fetch('/api/flows');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        let flows = await res.json();
+
+        const searchTerm = document.getElementById('flowSearch').value.toLowerCase().trim();
+        if (searchTerm) {
+          flows = flows.filter(f => f.name.toLowerCase().includes(searchTerm));
+        }
+
+        const list = document.getElementById('flowsList');
+        list.innerHTML = '';
+
+        if (flows.length === 0) {
+          list.innerHTML = '<li class="list-group-item bg-dark text-muted">No matching flows found.</li>';
+          return;
+        }
+
+        flows.forEach(flow => {
+          const item = document.createElement('li');
+          item.className = 'list-group-item bg-transparent border-secondary d-flex justify-content-between align-items-center py-2';
+          item.innerHTML = `
+            <div class="d-flex align-items-center flex-grow-1">
+              <span class="flow-name me-2" onclick="editFlowName(${flow.id}, this)" style="cursor:pointer; min-width:150px;">
+                ${flow.name}
+              </span>
+              <small class="text-muted">${new Date(flow.updated).toLocaleString()}</small>
+            </div>
+            <div>
+              <button class="btn btn-sm btn-outline-primary me-1" onclick="loadFlowFromDb(${flow.id})">Load</button>
+              <button class="btn btn-sm btn-outline-success me-1" onclick="duplicateFlow(${flow.id})">Duplicate</button>
+              <button class="btn btn-sm btn-outline-danger" onclick="deleteFlow(${flow.id}, this)">Delete</button>
+            </div>
+          `;
+          list.appendChild(item);
+        });
+      } catch (err) {
+        alert('Error loading flows: ' + err.message);
+      }
+    }
+
+    async function deleteFlow(flowId, buttonElement) {
+      if (!confirm(`Delete flow ID ${flowId}? This cannot be undone.`)) return;
+
+      try {
+        const res = await fetch(`/api/flows/${flowId}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const data = await res.json();
+        if (data.success) {
+          alert(data.message || 'Flow deleted successfully');
+          // Reîncarcă lista
+          loadFlowsList();
+        } else {
+          alert('Error: ' + (data.error || 'Unknown'));
+        }
+      } catch (err) {
+        alert('Network error deleting flow: ' + err.message);
+      }
+    }
+
+    async function loadFlowFromDb(flowId) {
+      try {
+        const res = await fetch(`/api/flows/${flowId}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        
+        const data = await res.json();
+        const flow = data.flow;
+
+        clearFlow(); // curăță canvas-ul actual
+
+        // Re-creează nodurile
+        flow.nodes.forEach(n => {
+          addNode(n.type, n.x, n.y);
+          const node = document.getElementById(n.id);
+          if (node) {
+            node.style.transform = `translate(${n.x}px, ${n.y}px)`;
+            node.setAttribute('data-x', n.x);
+            node.setAttribute('data-y', n.y);
+            node.querySelector('div:nth-child(2)').textContent = n.label;
+
+            // Restaurează config din DB
+            if (n.config.agent) node.dataset.agent = n.config.agent;
+            if (n.config.connector) node.dataset.connector = n.config.connector;
+            if (n.config.condition) node.dataset.condition = n.config.condition;
+            if (n.config.output) node.dataset.output = n.config.output;
+          }
+        });
+
+        // Re-creează conexiunile
+        setTimeout(() => {
+          flow.connections.forEach(c => {
+            const from = document.getElementById(c.from);
+            const to = document.getElementById(c.to);
+            if (from && to) connectNodes(from, to);
+          });
+        }, 200);
+
+        scale = flow.scale || 1;
+        translateX = flow.translateX || 0;
+        translateY = flow.translateY || 0;
+        updateTransform();
+
+        alert(`Loaded flow: ${data.name} (ID ${flowId})`);
+        bootstrap.Modal.getInstance(document.getElementById('loadFlowsModal')).hide();
+      } catch (err) {
+        alert('Error loading flow: ' + err.message);
+      }
+    }
+
+    // Deschide modal → load listă
+    document.getElementById('loadFlowsModal').addEventListener('show.bs.modal', loadFlowsList);
+
+    // Reîncarcă lista la fiecare tastă în search
+    document.getElementById('flowSearch').addEventListener('input', loadFlowsList);
+
+    function editFlowName(flowId, spanElement) {
+      const currentName = spanElement.textContent.trim();
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = currentName;
+      input.className = 'form-control form-control-sm bg-dark text-light border-primary';
+      input.style.width = '200px';
+      input.style.display = 'inline-block';
+
+      // Înlocuiește span-ul cu input
+      spanElement.replaceWith(input);
+      input.focus();
+      input.select();
+
+      const saveEdit = async () => {
+        const newName = input.value.trim();
+        if (!newName || newName === currentName) {
+          // Anulează edit dacă nu s-a schimbat sau gol
+          input.replaceWith(spanElement);
+          spanElement.textContent = currentName;
+          return;
+        }
+
+        try {
+          const res = await fetch(`/api/flows/${flowId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName })
+          });
+
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+          const data = await res.json();
+          if (data.success) {
+            spanElement.textContent = newName;
+            input.replaceWith(spanElement);
+            alert(`Renamed to "${newName}"`);
+          } else {
+            alert('Error: ' + (data.error || 'Unknown'));
+            input.replaceWith(spanElement);
+            spanElement.textContent = currentName;
+          }
+        } catch (err) {
+          alert('Network error: ' + err.message);
+          input.replaceWith(spanElement);
+          spanElement.textContent = currentName;
+        }
+      };
+
+      input.onblur = saveEdit;
+      input.onkeydown = e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          saveEdit();
+        } else if (e.key === 'Escape') {
+          input.replaceWith(spanElement);
+          spanElement.textContent = currentName;
+        }
+      };
+    }
+
+    // Simple graph traversal for mock run
+    function runFlow() {
+      if (document.querySelectorAll('.node[data-type="trigger"]').length === 0) {
+        alert("No Trigger node found! Add at least one starting point.");
+        return;
+      }
+      if (document.querySelectorAll('.node[data-type="output"]').length === 0) {
+        alert("No Output node found! Flow needs an end point.");
+        return;
+      }
+
+      // Build simple graph: nodeId → list of outgoing nodeIds
+      const graph = {};
+      const nodeMap = {}; // id → node element + type + config
+
+      canvas.querySelectorAll('.node').forEach(node => {
+        const id = node.id;
+        nodeMap[id] = {
+          element: node,
+          type: node.dataset.type,
+          label: node.querySelector('div:nth-child(2)').textContent,
+          config: {
+            agent: node.dataset.agent,
+            connector: node.dataset.connector,
+            condition: node.dataset.condition,
+            output: node.dataset.output
+          }
+        };
+        graph[id] = [];
+      });
+
+      lines.forEach(line => {
+        const fromId = line.start.id;
+        const toId   = line.end.id;
+        if (graph[fromId]) graph[fromId].push(toId);
+      });
+
+      // Find all starting points (Triggers)
+      const starts = Object.keys(nodeMap).filter(id => nodeMap[id].type === 'trigger');
+
+      if (starts.length === 0) {
+        alert("No valid starting points.");
+        return;
+      }
+
+      // BFS traversal from each start (support multiple paths)
+      const visited = new Set();
+      const executionLog = [];
+
+      function traverse(nodeId, path = []) {
+        if (visited.has(nodeId)) return;
+        visited.add(nodeId);
+
+        const node = nodeMap[nodeId];
+        let stepMsg = `${node.type.toUpperCase()} (${node.label})`;
+
+        if (node.config.agent)    stepMsg += ` → Agent: ${node.config.agent}`;
+        if (node.config.connector) stepMsg += ` → Connector: ${node.config.connector}`;
+        if (node.config.condition) stepMsg += ` → IF: ${node.config.condition || 'unset'}`;
+        if (node.config.output)   stepMsg += ` → Output format: ${node.config.output || 'default'}`;
+
+        executionLog.push(`Step: ${stepMsg} (path: ${path.join(' → ') || 'start'})`);
+
+        graph[nodeId].forEach(nextId => {
+          traverse(nextId, [...path, nodeId]);
+        });
+      }
+
+      starts.forEach(startId => {
+        traverse(startId);
+      });
+
+      // Show result
+      if (executionLog.length === 0) {
+        alert("Flow has no executable path.");
+        return;
+      }
+
+      const logText = executionLog.join('\n');
+      console.log("Mock Run Log:\n" + logText);
+
+      alert(`Mock execution complete!\n\nExecuted ${executionLog.length} steps.\n\nSee console for full log.\n\nSample:\n${executionLog.slice(0, 5).join('\n')}${executionLog.length > 5 ? '\n...' : ''}`);
+    }
+
+    async function duplicateFlow(flowId) {
+      if (!confirm(`Duplicate flow ID ${flowId}?`)) return;
+
+      try {
+        const res = await fetch(`/api/flows/${flowId}/duplicate`, { method: 'POST' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        
+        const data = await res.json();
+        if (data.success) {
+          alert(`Flow duplicated as "${data.new_name}" (ID ${data.new_flow_id})`);
+          loadFlowsList(); // refresh listă
+        } else {
+          alert('Error: ' + (data.error || 'Unknown'));
+        }
+      } catch (err) {
+        alert('Network error duplicating flow: ' + err.message);
+      }
+    }
+
+    function resetZoom() {
+      scale = 1;
+      translateX = 0;
+      translateY = 0;
+      updateTransform();
+      alert('Canvas reset to default zoom & position');
+    }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Modal Load Flows -->
+<div class="modal fade" id="loadFlowsModal" tabindex="-1" aria-labelledby="loadFlowsModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content bg-dark text-light border-secondary">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title" id="loadFlowsModalLabel">Load Saved Flows</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="input-group mb-3">
+          <input type="text" id="flowSearch" class="form-control bg-dark text-light border-secondary" placeholder="Search flows by name...">
+          <button class="btn btn-outline-secondary" type="button" onclick="document.getElementById('flowSearch').value=''; loadFlowsList();">Clear</button>
+        </div>
+        <ul id="flowsList" class="list-group list-group-flush">
+          <!-- flows populate aici via JS -->
+        </ul>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Edit Nod -->
+<div class="modal fade" id="nodeEditModal" tabindex="-1" aria-labelledby="nodeEditModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content bg-dark text-light border-secondary">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title" id="nodeEditModalLabel">Edit Node</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <form id="nodeEditForm">
+          <div class="mb-3">
+            <label for="nodeType" class="form-label">Type</label>
+            <input type="text" class="form-control bg-dark text-light border-secondary" id="nodeType" readonly>
+          </div>
+          <div class="mb-3">
+            <label for="nodeLabel" class="form-label">Label / Name</label>
+            <input type="text" class="form-control bg-dark text-light border-secondary" id="nodeLabel" required>
+          </div>
+          <div class="mb-3" id="agentSelectGroup" style="display:none;">
+            <label for="agentSelect" class="form-label">Select Agent</label>
+            <select class="form-select bg-dark text-light border-secondary" id="agentSelect">
+              <option value="life-coach">Personal Assistant</option>
+              <option value="psychologist">Psychologist</option>
+              <option value="personal-mentor">Personal Teacher / Mentor</option>
+              <option value="fitness-wellness">Fitness & Wellness Coach</option>
+              <option value="creative-muse">Creative Muse</option>
+              <option value="ceo-strategy">CEO / Vision & Strategy</option>
+              <option value="cto-innovation">CTO / Tech & Innovation</option>
+              <option value="cmo-growth">CMO / Marketing & Growth</option>
+              <option value="cfo-finance">CFO / Finance & Numbers</option>
+              <option value="coo-operations">COO / Operations & Execution</option>
+              <option value="ppc-specialist">PPC Specialist</option>
+              <option value="seo-content">SEO & Content Strategist</option>
+              <option value="creative-director">Creative Director / Designer</option>
+              <option value="social-media">Social Media Manager</option>
+              <option value="performance-analytics">Performance & Analytics Expert</option>
+              <option value="devops-infra">DevOps & Infrastructure Engineer</option>
+              <option value="fullstack-dev">Full-Stack Developer</option>
+              <option value="backend-architect">Backend Architect</option>
+              <option value="frontend-uiux">Frontend / UI-UX Specialist</option>
+              <option value="security-quality">Security & Code Quality Engineer</option>
+            </select>
+          </div>
+          <div class="mb-3" id="connectorSelectGroup" style="display:none;">
+            <label for="connectorSelect" class="form-label">Select Connector</label>
+            <select class="form-select bg-dark text-light border-secondary" id="connectorSelect">
+              <option value="google-ads">Google Ads</option>
+              <option value="ga4">GA4</option>
+              <option value="github">GitHub</option>
+              <option value="stripe">Stripe</option>
+            </select>
+          </div>
+          <div class="mb-3" id="conditionGroup" style="display:none;">
+            <label for="conditionExpr" class="form-label">Condition Expression</label>
+            <input type="text" class="form-control bg-dark text-light border-secondary" id="conditionExpr" placeholder="ex: ROAS > 3 OR conversions > 50">
+          </div>
+          <div class="mb-3" id="outputGroup" style="display:none;">
+            <label for="outputFormat" class="form-label">Output Format</label>
+            <textarea class="form-control bg-dark text-light border-secondary" id="outputFormat" rows="3" placeholder="ex: JSON response with campaign data"></textarea>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="saveNodeEdit()">Save Changes</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

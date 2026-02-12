@@ -1,0 +1,484 @@
+/* ═══════════════════════════════════════════════════════════════
+   Camarad.ai — Avatar Animation System
+   Level 2: Blink, micro-tilt, enhanced expressions, alive effects
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Core avatar container ── */
+.camarad-avatar {
+  display: inline-block;
+  vertical-align: middle;
+  transition: transform 0.3s ease;
+}
+
+.camarad-avatar:hover {
+  transform: scale(1.08);
+}
+
+/* ── Idle breathing animation (subtle scale) ── */
+.avatar-container {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.avatar-container.animate .camarad-avatar {
+  animation: avatarBreathe 4s ease-in-out infinite;
+}
+
+@keyframes avatarBreathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.015) translateY(-0.5px); }
+}
+
+/* ── Level 2: CSS-driven Blink animation ── */
+.avatar-container.animate .avatar-blink {
+  animation: avatarBlinkCSS 5s ease-in-out infinite;
+}
+
+@keyframes avatarBlinkCSS {
+  0%, 94%, 100% { opacity: 0; }
+  96%, 98% { opacity: 1; }
+}
+
+/* ── Level 2: Micro head-tilt idle (subtle) ── */
+.avatar-container.animate.micro-tilt .camarad-avatar {
+  animation: avatarBreathe 4s ease-in-out infinite, avatarMicroTilt 12s ease-in-out infinite;
+}
+
+@keyframes avatarMicroTilt {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  25% { transform: rotate(-1.5deg) scale(1.01); }
+  50% { transform: rotate(0deg) scale(1); }
+  75% { transform: rotate(1.5deg) scale(1.01); }
+}
+
+/* ── Level 2: Eye follow cursor simulation ── */
+.avatar-container.animate.eye-track .camarad-avatar {
+  --eye-x: 0;
+  --eye-y: 0;
+}
+
+/* ── Pulse glow on hover ── */
+.avatar-container:hover .camarad-avatar {
+  animation: avatarPulse 0.8s ease-in-out;
+  filter: drop-shadow(0 0 8px var(--avatar-accent, #58a6ff));
+}
+
+@keyframes avatarPulse {
+  0% { filter: drop-shadow(0 0 0 transparent); }
+  50% { filter: drop-shadow(0 0 12px var(--avatar-accent, #58a6ff)); }
+  100% { filter: drop-shadow(0 0 6px var(--avatar-accent, #58a6ff)); }
+}
+
+/* ── Expression transition (fade swap) ── */
+.avatar-expression-swap {
+  animation: exprSwap 0.3s ease;
+}
+
+@keyframes exprSwap {
+  0% { opacity: 0.6; transform: scale(0.97); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* ── Chat message avatar ── */
+.chat-avatar-wrap {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-avatar-wrap .camarad-avatar {
+  animation: avatarBreathe 5s ease-in-out infinite;
+}
+
+/* ── Sidebar mini avatar ── */
+.sidebar-avatar {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-avatar .camarad-avatar {
+  animation: none;
+}
+
+/* ── Agent detail page — large avatar ── */
+.agent-avatar-large {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.agent-avatar-large .camarad-avatar {
+  animation: avatarBreathe 4s ease-in-out infinite;
+}
+
+.agent-avatar-large:hover::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid var(--avatar-accent, #58a6ff);
+  animation: ringPulse 1.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes ringPulse {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
+}
+
+/* ── Expression selector buttons ── */
+.avatar-expr-picker {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.avatar-expr-picker .expr-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #30363d;
+  background: #161b22;
+  color: #e0e0e0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  transition: all 0.2s;
+  padding: 0;
+}
+
+.avatar-expr-picker .expr-btn:hover,
+.avatar-expr-picker .expr-btn.active {
+  border-color: var(--avatar-accent, #58a6ff);
+  background: #21262d;
+  transform: scale(1.15);
+}
+
+.avatar-expr-picker .expr-btn.active {
+  box-shadow: 0 0 6px var(--avatar-accent, #58a6ff);
+}
+
+/* ── Typing indicator with avatar ── */
+.typing-avatar {
+  animation: typingBounce 1s ease-in-out infinite;
+}
+
+@keyframes typingBounce {
+  0%, 100% { transform: translateY(0); }
+  25% { transform: translateY(-3px) rotate(-2deg); }
+  50% { transform: translateY(-1px) rotate(0deg); }
+  75% { transform: translateY(-3px) rotate(2deg); }
+}
+
+/* ── Level 2: Typing dots animation ── */
+.typing-dots {
+  display: inline-block;
+  animation: typingDotsAnim 1.4s ease-in-out infinite;
+  letter-spacing: 2px;
+}
+
+@keyframes typingDotsAnim {
+  0%, 20% { opacity: 0.3; }
+  50% { opacity: 1; }
+  80%, 100% { opacity: 0.3; }
+}
+
+/* ── Level 2: Custom uploaded avatar photo ── */
+.avatar-photo-wrap {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 3px solid var(--avatar-accent, #58a6ff);
+  box-shadow: 0 0 16px rgba(88,166,255,0.25);
+  animation: avatarPhotoGlow 3s ease-in-out infinite;
+  position: relative;
+}
+
+.avatar-photo-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s ease;
+}
+
+.avatar-photo-wrap:hover img {
+  transform: scale(1.08);
+}
+
+@keyframes avatarPhotoGlow {
+  0%, 100% { box-shadow: 0 0 8px rgba(88,166,255,0.2); }
+  50% { box-shadow: 0 0 20px rgba(88,166,255,0.4); }
+}
+
+.avatar-photo-mini {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid var(--avatar-accent, #58a6ff);
+  flex-shrink: 0;
+}
+
+.avatar-photo-mini img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-photo-card {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid var(--avatar-accent, #58a6ff);
+  flex-shrink: 0;
+}
+
+.avatar-photo-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ── Level 2: Agent name accent styling ── */
+.agent-name-accent {
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--avatar-accent, #58a6ff), #fff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Customization panel ── */
+.avatar-customize-panel {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.avatar-customize-panel .color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.avatar-customize-panel .color-swatch:hover,
+.avatar-customize-panel .color-swatch.active {
+  border-color: #fff;
+  transform: scale(1.15);
+  box-shadow: 0 0 8px rgba(255,255,255,0.3);
+}
+
+.avatar-customize-panel .swatch-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 6px 0 12px;
+}
+
+.avatar-customize-panel .customize-section {
+  margin-bottom: 14px;
+}
+
+.avatar-customize-panel .customize-section label {
+  font-size: 0.78rem;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+  display: block;
+}
+
+/* ── Orchestrator node avatar (small) ── */
+.orch-node-avatar {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CONTEXTUAL GESTURE ANIMATIONS
+   Micro-expressions: nod, shake, tilt, wave, bounce, lean, droop
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Nod (agreement) ── */
+.gesture-nod {
+  animation: gestureNod 0.5s ease-in-out !important;
+}
+@keyframes gestureNod {
+  0%   { transform: rotate(0deg); }
+  25%  { transform: rotate(4deg) translateY(2px); }
+  50%  { transform: rotate(0deg) translateY(0); }
+  75%  { transform: rotate(3deg) translateY(1.5px); }
+  100% { transform: rotate(0deg); }
+}
+
+/* ── Head shake (disagreement) ── */
+.gesture-shake {
+  animation: gestureShake 0.6s ease-in-out !important;
+}
+@keyframes gestureShake {
+  0%   { transform: translateX(0); }
+  20%  { transform: translateX(-3px) rotate(-2deg); }
+  40%  { transform: translateX(3px) rotate(2deg); }
+  60%  { transform: translateX(-2px) rotate(-1deg); }
+  80%  { transform: translateX(2px) rotate(1deg); }
+  100% { transform: translateX(0) rotate(0deg); }
+}
+
+/* ── Tilt left (thinking / curiosity) ── */
+.gesture-tilt-left {
+  animation: gestureTiltLeft 1.2s ease-in-out !important;
+}
+@keyframes gestureTiltLeft {
+  0%   { transform: rotate(0deg); }
+  30%  { transform: rotate(-6deg) translateX(-2px); }
+  70%  { transform: rotate(-4deg) translateX(-1px); }
+  100% { transform: rotate(0deg); }
+}
+
+/* ── Tilt right (concern / consideration) ── */
+.gesture-tilt-right {
+  animation: gestureTiltRight 1.2s ease-in-out !important;
+}
+@keyframes gestureTiltRight {
+  0%   { transform: rotate(0deg); }
+  30%  { transform: rotate(6deg) translateX(2px); }
+  70%  { transform: rotate(4deg) translateX(1px); }
+  100% { transform: rotate(0deg); }
+}
+
+/* ── Wave (greeting) ── */
+.gesture-wave {
+  animation: gestureWave 1s ease-in-out !important;
+}
+@keyframes gestureWave {
+  0%   { transform: rotate(0deg) scale(1); }
+  15%  { transform: rotate(-5deg) scale(1.05); }
+  30%  { transform: rotate(5deg) scale(1.05); }
+  45%  { transform: rotate(-4deg) scale(1.03); }
+  60%  { transform: rotate(4deg) scale(1.03); }
+  75%  { transform: rotate(-2deg) scale(1.01); }
+  100% { transform: rotate(0deg) scale(1); }
+}
+
+/* ── Bounce (excitement / celebration) ── */
+.gesture-bounce {
+  animation: gestureBounce 0.6s ease-out !important;
+}
+@keyframes gestureBounce {
+  0%   { transform: translateY(0) scale(1); }
+  20%  { transform: translateY(-6px) scale(1.06); }
+  40%  { transform: translateY(0) scale(0.97); }
+  60%  { transform: translateY(-3px) scale(1.03); }
+  80%  { transform: translateY(0) scale(0.99); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+/* ── Jump (surprise) ── */
+.gesture-jump {
+  animation: gestureJump 0.5s ease-out !important;
+}
+@keyframes gestureJump {
+  0%   { transform: translateY(0) scale(1); }
+  30%  { transform: translateY(-10px) scale(1.1); }
+  50%  { transform: translateY(-8px) scale(1.08); }
+  70%  { transform: translateY(2px) scale(0.96); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+/* ── Lean in (attentive listening) ── */
+.gesture-lean-in {
+  animation: gestureLeanIn 1.5s ease-in-out !important;
+}
+@keyframes gestureLeanIn {
+  0%   { transform: scale(1) translateY(0); }
+  40%  { transform: scale(1.04) translateY(-1px); }
+  100% { transform: scale(1) translateY(0); }
+}
+
+/* ── Droop (sadness / disappointment) ── */
+.gesture-droop {
+  animation: gestureDroop 1.5s ease-in-out !important;
+}
+@keyframes gestureDroop {
+  0%   { transform: rotate(0deg) translateY(0); }
+  40%  { transform: rotate(3deg) translateY(3px); }
+  70%  { transform: rotate(2deg) translateY(2px); }
+  100% { transform: rotate(0deg) translateY(0); }
+}
+
+/* ── Level 2: Celebrate (spin + bounce) ── */
+.gesture-celebrate {
+  animation: gestureCelebrate 1.2s ease-in-out !important;
+}
+@keyframes gestureCelebrate {
+  0%   { transform: scale(1) rotate(0deg); }
+  20%  { transform: scale(1.1) rotate(-5deg) translateY(-4px); }
+  40%  { transform: scale(1.05) rotate(5deg) translateY(-2px); }
+  60%  { transform: scale(1.1) rotate(-3deg) translateY(-4px); }
+  80%  { transform: scale(1.02) rotate(2deg) translateY(-1px); }
+  100% { transform: scale(1) rotate(0deg) translateY(0); }
+}
+
+/* ── Level 2: Speak (subtle jaw motion) ── */
+.gesture-speak {
+  animation: gestureSpeak 0.4s ease-in-out 3 !important;
+}
+@keyframes gestureSpeak {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(1.02) translateY(-0.5px); }
+}
+
+/* ── Level 2: Alert pulse ── */
+.gesture-alert {
+  animation: gestureAlert 0.8s ease-in-out !important;
+}
+@keyframes gestureAlert {
+  0%   { filter: drop-shadow(0 0 0 transparent); transform: scale(1); }
+  50%  { filter: drop-shadow(0 0 10px rgba(255,100,100,0.6)); transform: scale(1.06); }
+  100% { filter: drop-shadow(0 0 4px rgba(255,100,100,0.2)); transform: scale(1); }
+}
+
+/* ── Agent card avatar on agents list page ── */
+.agent-card-avatar {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+}
+
+.agent-card-avatar .camarad-avatar {
+  transition: transform 0.3s ease;
+}
+
+.card:hover .agent-card-avatar .camarad-avatar {
+  filter: drop-shadow(0 0 6px var(--avatar-accent, #58a6ff));
+}

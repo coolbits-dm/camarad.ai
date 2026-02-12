@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Search Results in {{ ws_slug|title }}{% endblock %}
+
+{% block content %}
+<h1 class="text-center mb-4">Search Results in {{ ws_slug|title }}</h1>
+<p>Query: "{{ query }}"</p>
+{% if results %}
+<ul class="list-group">
+    {% for conv in results %}
+    <li class="list-group-item">
+        <a href="{{ url_for('chat', ws_slug=ws_slug, agent_slug=conv.agent_slug) }}">{{ conv.title }}</a>
+        <small class="text-muted">{{ conv.last_msg }}</small>
+    </li>
+    {% endfor %}
+</ul>
+{% else %}
+<p>No results found.</p>
+{% endif %}
+<a href="{{ url_for('workspace', ws_slug=ws_slug) }}" class="btn btn-secondary">Back to Workspace</a>
+{% endblock %}

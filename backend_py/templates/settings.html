@@ -1,0 +1,1421 @@
+{% extends "base.html" %}
+
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<style>
+  .settings-nav .list-group-item {
+    background: #111722;
+    border-color: #2a3240;
+    color: #c8d2de;
+    font-size: 0.9rem;
+  }
+  .settings-nav .list-group-item.active {
+    background: #1f6feb;
+    border-color: #1f6feb;
+    color: #ffffff;
+  }
+  .settings-card {
+    background: #111722;
+    border: 1px solid #2a3240;
+    border-radius: 12px;
+  }
+  .settings-card .card-header {
+    border-bottom: 1px solid #2a3240;
+    background: transparent;
+  }
+  .settings-muted {
+    color: #93a1b3;
+  }
+  .settings-counter {
+    font-size: 1.6rem;
+    font-weight: 700;
+    line-height: 1;
+    color: #e6edf3;
+  }
+  .settings-kv {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 10px 16px;
+    align-items: center;
+  }
+  .settings-kv .k {
+    color: #95a3b5;
+    font-size: 0.86rem;
+  }
+  .settings-kv .v {
+    color: #e6edf3;
+    font-size: 0.9rem;
+  }
+  @media (max-width: 992px) {
+    .settings-kv {
+      grid-template-columns: 1fr;
+      gap: 4px 0;
+    }
+  }
+</style>
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+  <div>
+    <h2 class="mb-1">Settings</h2>
+    <div class="settings-muted small">Global controls for user profile, preferences, notifications, orchestrator behavior, and data policy.</div>
+    <small class="text-muted active-client-label d-block mt-1">Active Client: None</small>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-sm btn-outline-secondary" id="settings-reset-btn">
+      <i class="bi bi-arrow-counterclockwise me-1"></i>Reset Defaults
+    </button>
+    <button class="btn btn-sm btn-primary" id="settings-save-btn">
+      <i class="bi bi-check2 me-1"></i>Save Changes
+    </button>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-xl-3 col-lg-4">
+    <div class="list-group settings-nav sticky-top" style="top: 1rem;">
+      <button class="list-group-item list-group-item-action active" data-bs-toggle="list" data-bs-target="#settings-overview" type="button">
+        <i class="bi bi-sliders me-2"></i>Overview
+      </button>
+      <button class="list-group-item list-group-item-action" data-bs-toggle="list" data-bs-target="#settings-user" type="button">
+        <i class="bi bi-person me-2"></i>User
+      </button>
+      <button class="list-group-item list-group-item-action" data-bs-toggle="list" data-bs-target="#settings-billing" type="button">
+        <i class="bi bi-credit-card-2-front me-2"></i>Billing
+      </button>
+      <button class="list-group-item list-group-item-action" data-bs-toggle="list" data-bs-target="#settings-preferences" type="button">
+        <i class="bi bi-toggles me-2"></i>Preferences
+      </button>
+      <button class="list-group-item list-group-item-action" data-bs-toggle="list" data-bs-target="#settings-notifications" type="button">
+        <i class="bi bi-bell me-2"></i>Notifications
+      </button>
+      <button class="list-group-item list-group-item-action" data-bs-toggle="list" data-bs-target="#settings-orchestrator" type="button">
+        <i class="bi bi-diagram-3 me-2"></i>Orchestrator
+      </button>
+      <button class="list-group-item list-group-item-action" data-bs-toggle="list" data-bs-target="#settings-integrations" type="button">
+        <i class="bi bi-plug me-2"></i>Integrations
+      </button>
+      <button class="list-group-item list-group-item-action" data-bs-toggle="list" data-bs-target="#settings-privacy" type="button">
+        <i class="bi bi-shield-lock me-2"></i>Privacy & Data
+      </button>
+      <button class="list-group-item list-group-item-action" data-bs-toggle="list" data-bs-target="#settings-devtools" type="button">
+        <i class="bi bi-tools me-2"></i>Dev Tools
+      </button>
+    </div>
+  </div>
+
+  <div class="col-xl-9 col-lg-8">
+    <div class="tab-content" id="settingsTabContent">
+      <div class="tab-pane fade show active" id="settings-overview">
+        <div class="row g-3 mb-3">
+          <div class="col-md-4">
+            <div class="card settings-card h-100">
+              <div class="card-body">
+                <div class="settings-muted small">Agents</div>
+                <div class="settings-counter" id="sum-agents">0</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card settings-card h-100">
+              <div class="card-body">
+                <div class="settings-muted small">Connectors</div>
+                <div class="settings-counter" id="sum-connectors">0</div>
+                <div class="small settings-muted">Connected: <span id="sum-connectors-live">0</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card settings-card h-100">
+              <div class="card-body">
+                <div class="settings-muted small">Flows / Templates</div>
+                <div class="settings-counter"><span id="sum-flows">0</span> / <span id="sum-templates">0</span></div>
+                <div class="small settings-muted">Chats: <span id="sum-chats">0</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card settings-card mb-3">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-info-circle me-2"></i>Current Scope</span>
+            <span class="badge text-bg-secondary" id="sum-user">User 1</span>
+          </div>
+          <div class="card-body settings-kv">
+            <div class="k">Active Client</div>
+            <div class="v" id="sum-client">None</div>
+            <div class="k">Clients (Total)</div>
+            <div class="v" id="sum-clients">0</div>
+            <div class="k">Linked Accounts</div>
+            <div class="v" id="sum-client-accounts">0</div>
+          </div>
+        </div>
+
+        <div class="card settings-card">
+          <div class="card-header"><i class="bi bi-box me-2"></i>Site Modules</div>
+          <div class="card-body">
+            <div class="d-flex flex-wrap gap-2 mb-3">
+              <a href="/agents" class="btn btn-sm btn-outline-primary">Agents</a>
+              <a href="/connectors" class="btn btn-sm btn-outline-primary">Connectors</a>
+              <a href="/orchestrator" class="btn btn-sm btn-outline-primary">Orchestrator</a>
+              <a href="/boardroom" class="btn btn-sm btn-outline-primary">Boardroom</a>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+              <button class="btn btn-sm btn-outline-info" type="button" onclick="exportAllConfig()">
+                <i class="bi bi-box-arrow-up me-1"></i>Export Full Backup
+              </button>
+              <button class="btn btn-sm btn-outline-success" type="button" onclick="document.getElementById('importFile').click()">
+                <i class="bi bi-box-arrow-in-down me-1"></i>Import Backup
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="settings-user">
+        <div class="card settings-card">
+          <div class="card-header"><i class="bi bi-person-gear me-2"></i>User Profile</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label">Display Name</label>
+                <input id="st-display-name" type="text" class="form-control bg-dark text-light border-secondary" maxlength="80">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Email</label>
+                <input id="st-email" type="email" class="form-control bg-dark text-light border-secondary" maxlength="160">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Role</label>
+                <input id="st-role" type="text" class="form-control bg-dark text-light border-secondary" maxlength="80" placeholder="Founder / CTO / Growth Lead">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">Timezone</label>
+                <input id="st-timezone" type="text" class="form-control bg-dark text-light border-secondary" maxlength="80" placeholder="Europe/Bucharest">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">Language</label>
+                <select id="st-language" class="form-select bg-dark text-light border-secondary">
+                  <option value="en">English</option>
+                  <option value="ro">Romana</option>
+                  <option value="es">Español</option>
+                  <option value="de">Deutsch</option>
+                  <option value="fr">Français</option>
+                  <option value="it">Italiano</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="settings-billing">
+        <div class="card settings-card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-credit-card me-2"></i>Billing & Usage</span>
+            <button class="btn btn-sm btn-outline-info" type="button" id="st-usage-refresh">
+              <i class="bi bi-arrow-repeat me-1"></i>Refresh
+            </button>
+          </div>
+          <div class="card-body">
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <div class="settings-kv">
+                  <div class="k">Plan</div><div class="v" id="st-billing-plan-label">-</div>
+                  <div class="k">Price</div><div class="v" id="st-billing-plan-price">-</div>
+                  <div class="k">Stripe Status</div><div class="v" id="st-billing-stripe-status">-</div>
+                  <div class="k">Subscription ID</div><div class="v" id="st-billing-subscription-id">-</div>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="settings-kv">
+                  <div class="k">Stripe Mode</div><div class="v" id="st-billing-stripe-mode">-</div>
+                  <div class="k">Customer ID</div><div class="v" id="st-billing-customer-id">-</div>
+                  <div class="k">Current Period End</div><div class="v" id="st-billing-period-end">-</div>
+                  <div class="k">Source</div><div class="v" id="st-billing-source">-</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row g-3 mb-2">
+              <div class="col-md-6">
+                <div class="settings-kv">
+                  <div class="k">User</div><div class="v" id="st-usage-username">-</div>
+                  <div class="k">Active Client</div><div class="v" id="st-usage-client">None</div>
+                  <div class="k">Requests Today</div><div class="v" id="st-usage-requests-today">0</div>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="settings-kv">
+                  <div class="k">CT Balance</div><div class="v" id="st-usage-ct-balance">-</div>
+                  <div class="k">CT Used (30d)</div><div class="v" id="st-usage-ct-used">-</div>
+                  <div class="k">Plan Tier</div><div class="v" id="st-usage-plan">-</div>
+                </div>
+              </div>
+            </div>
+            <div class="progress mb-2" style="height:8px;">
+              <div id="st-usage-progress" class="progress-bar bg-info" role="progressbar" style="width:0%"></div>
+            </div>
+            <small class="text-muted" id="st-usage-progress-label">Usage not loaded yet.</small>
+            <div class="mt-3">
+              <h6 class="small text-uppercase text-muted mb-2">Usage Breakdown (last 30 days)</h6>
+              <div class="progress mb-2" id="st-usage-breakdown-bars" style="height:12px;"></div>
+              <small class="text-muted" id="st-usage-breakdown-label">Chat 0% • RAG 0% • Flows 0% • Assets/Boardroom 0%</small>
+            </div>
+            <div class="mt-2">
+              <button class="btn btn-sm btn-outline-primary" type="button" id="st-usage-topup-1000">
+                <i class="bi bi-plus-circle me-1"></i>Add 1,000 CT (mock)
+              </button>
+            </div>
+
+            <div class="mt-3 d-flex flex-wrap gap-2">
+              <button class="btn btn-sm btn-primary" type="button" id="st-billing-upgrade-pro">
+                <i class="bi bi-credit-card me-1"></i>Upgrade to Pro (Stripe)
+              </button>
+              <button class="btn btn-sm btn-outline-success" type="button" id="st-billing-upgrade-enterprise">
+                <i class="bi bi-bank me-1"></i>Upgrade to Enterprise
+              </button>
+            </div>
+            <div class="alert alert-info mt-3 mb-0 py-2" id="st-billing-managed-note">
+              Billing plans and paid upgrades are managed by Stripe/Coolbits. Local plan edits are disabled when source is live.
+            </div>
+
+            <div class="mt-3 pt-3 border-top border-secondary-subtle">
+              <h6 class="small text-uppercase text-muted mb-2">Pricing Plan</h6>
+              <div class="btn-group w-100 mb-2" role="group" aria-label="Pricing presets">
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="st-preset-free">Free</button>
+                <button class="btn btn-sm btn-outline-primary" type="button" id="st-preset-pro">Pro</button>
+                <button class="btn btn-sm btn-outline-success" type="button" id="st-preset-enterprise">Enterprise</button>
+              </div>
+              <small class="text-muted d-block" id="st-preset-preview">Current: Free • Monthly grant: 1,000 CT • Max/message: 80 CT • Multiplier: 1.00x</small>
+
+              <hr class="border-secondary my-3">
+
+              <h6 class="small text-uppercase text-muted mb-2">Manual Overrides (on top of preset)</h6>
+              <div class="row g-3">
+                <div class="col-md-3">
+                  <label class="form-label small">Cost Multiplier</label>
+                  <input id="st-override-multiplier" type="number" step="0.1" min="0.1" max="2.0" class="form-control bg-dark text-light border-secondary" value="1.0">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small">Max per Message (CT)</label>
+                  <input id="st-override-max-message" type="number" min="20" max="500" class="form-control bg-dark text-light border-secondary" value="80">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small">Daily Limit (CT)</label>
+                  <input id="st-override-daily-limit" type="number" min="50" max="500000" class="form-control bg-dark text-light border-secondary" value="200">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small">Monthly Grant (CT)</label>
+                  <input id="st-override-monthly-grant" type="number" min="100" max="500000" class="form-control bg-dark text-light border-secondary" value="1000">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small">Monthly Reset Day (1-28)</label>
+                  <input id="st-override-reset-day" type="number" min="1" max="28" class="form-control bg-dark text-light border-secondary" value="1">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small">Monthly Reset Hour (0-23)</label>
+                  <input id="st-override-reset-hour" type="number" min="0" max="23" class="form-control bg-dark text-light border-secondary" value="0">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small">Reset Minute (0/15/30/45)</label>
+                  <select id="st-override-reset-minute" class="form-select bg-dark text-light border-secondary">
+                    <option value="0">00</option>
+                    <option value="15">15</option>
+                    <option value="30">30</option>
+                    <option value="45">45</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="mt-3 d-flex align-items-center gap-2 flex-wrap">
+                <small class="text-muted" id="st-override-preview">Preview: multiplier 1.00x • max/message 80 CT • daily limit 200 CT • monthly grant 1,000 CT • reset day 1 @ 00:00</small>
+                <button class="btn btn-sm btn-outline-success" type="button" id="st-apply-overrides">Apply Overrides</button>
+              </div>
+            </div>
+
+            <div class="mt-3 pt-3 border-top border-secondary-subtle">
+              <h6 class="small text-uppercase text-muted mb-2">Plan Entitlements</h6>
+              <div class="settings-kv">
+                <div class="k">Workspaces</div><div class="v" id="st-plan-workspaces">-</div>
+                <div class="k">Projects</div><div class="v" id="st-plan-projects">-</div>
+                <div class="k">Agents</div><div class="v" id="st-plan-agents">-</div>
+                <div class="k">Connectors</div><div class="v" id="st-plan-connectors">-</div>
+                <div class="k">Tokens / Month</div><div class="v" id="st-plan-tokens">-</div>
+                <div class="k">Max / Message</div><div class="v" id="st-plan-max-message">-</div>
+                <div class="k">Daily Limit</div><div class="v" id="st-plan-daily-limit">-</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="settings-preferences">
+        <div class="card settings-card">
+          <div class="card-header"><i class="bi bi-toggles2 me-2"></i>General Preferences</div>
+          <div class="card-body">
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <label class="form-label">Default Workspace</label>
+                <select id="st-default-workspace" class="form-select bg-dark text-light border-secondary">
+                  <option value="personal">Personal</option>
+                  <option value="business">Business</option>
+                  <option value="agency">Agency</option>
+                  <option value="development">Development</option>
+                </select>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Default Landing Page</label>
+                <select id="st-default-landing" class="form-select bg-dark text-light border-secondary">
+                  <option value="orchestrator">Orchestrator</option>
+                  <option value="chat">Chat</option>
+                  <option value="agents">Agents</option>
+                  <option value="connectors">Connectors</option>
+                  <option value="boardroom">Boardroom</option>
+                  <option value="settings">Settings</option>
+                  <option value="workspace">Workspace</option>
+                  <option value="home">Home</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="st-chat-home-v2">
+              <label class="form-check-label" for="st-chat-home-v2">Use compact Chat Home as default `/chat` hub</label>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="st-always-open-home">
+              <label class="form-check-label" for="st-always-open-home">Always open Home on refresh / login</label>
+              <small class="d-block text-muted">Bypasses default landing and keeps the classic Home page.</small>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="st-compact-sidebar">
+              <label class="form-check-label" for="st-compact-sidebar">Compact sidebar width</label>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="st-reduce-motion">
+              <label class="form-check-label" for="st-reduce-motion">Reduce motion and animation</label>
+            </div>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="st-show-tips">
+              <label class="form-check-label" for="st-show-tips">Show contextual tips and helper hints</label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="settings-notifications">
+        <div class="card settings-card">
+          <div class="card-header"><i class="bi bi-bell-fill me-2"></i>Notifications</div>
+          <div class="card-body">
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="st-toast-enabled">
+              <label class="form-check-label" for="st-toast-enabled">Enable in-app toast notifications</label>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="st-chat-alerts">
+              <label class="form-check-label" for="st-chat-alerts">Chat activity alerts</label>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="st-connector-alerts">
+              <label class="form-check-label" for="st-connector-alerts">Connector status and sync alerts</label>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="st-boardroom-alerts">
+              <label class="form-check-label" for="st-boardroom-alerts">Boardroom meeting alerts</label>
+            </div>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="st-daily-digest">
+              <label class="form-check-label" for="st-daily-digest">Daily digest summary</label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="settings-orchestrator">
+        <div class="card settings-card">
+          <div class="card-header"><i class="bi bi-diagram-3-fill me-2"></i>Orchestrator Defaults</div>
+          <div class="card-body">
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <label class="form-label">Grid Style</label>
+                <select id="st-grid-style" class="form-select bg-dark text-light border-secondary">
+                  <option value="dots">Dots</option>
+                  <option value="lines">Lines</option>
+                  <option value="off">Off</option>
+                </select>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Default Zoom: <span id="st-default-zoom-label">100%</span></label>
+                <input id="st-default-zoom" type="range" class="form-range" min="40" max="200" step="5" value="100">
+              </div>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="st-snap-to-grid">
+              <label class="form-check-label" for="st-snap-to-grid">Snap-to-grid enabled by default</label>
+            </div>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="st-auto-route">
+              <label class="form-check-label" for="st-auto-route">Enable route suggestions by default</label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="settings-integrations">
+        <div class="card settings-card">
+          <div class="card-header"><i class="bi bi-plug-fill me-2"></i>Integrations & API</div>
+          <div class="card-body">
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <label class="form-label">Preferred LLM</label>
+                <select id="st-preferred-llm" class="form-select bg-dark text-light border-secondary">
+                  <option value="Grok">Grok</option>
+                  <option value="OpenAI">OpenAI</option>
+                  <option value="Anthropic">Anthropic</option>
+                  <option value="Gemini">Gemini</option>
+                  <option value="Custom">Custom</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="st-byok-enabled">
+              <label class="form-check-label" for="st-byok-enabled">Enable BYOK mode by default</label>
+            </div>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="st-strict-client-scope">
+              <label class="form-check-label" for="st-strict-client-scope">Strict client scope for lists and filters</label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="settings-privacy">
+        <div class="card settings-card">
+          <div class="card-header"><i class="bi bi-shield-check me-2"></i>Privacy & Data Policy</div>
+          <div class="card-body">
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <label class="form-label">Message Retention (days)</label>
+                <input id="st-retain-days" type="number" min="7" max="3650" class="form-control bg-dark text-light border-secondary">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Theme</label>
+                <select id="st-theme" class="form-select bg-dark text-light border-secondary">
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="st-mask-api-keys">
+              <label class="form-check-label" for="st-mask-api-keys">Mask API keys by default</label>
+            </div>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="st-share-telemetry">
+              <label class="form-check-label" for="st-share-telemetry">Share anonymous telemetry (mock analytics)</label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="settings-devtools">
+        <div class="card settings-card">
+          <div class="card-header"><i class="bi bi-tools me-2"></i>Dev Tools (mock multi-user)</div>
+          <div class="card-body">
+            <p class="text-muted small mb-3">Used only for QA/testing local mock isolation. Production should use one authenticated account.</p>
+            <div class="dropdown mb-2">
+              <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown">
+                <i class="bi bi-person-circle me-2"></i>Current User: <span id="devCurrentUser">dev</span>
+              </button>
+              <ul class="dropdown-menu bg-dark border-secondary w-100">
+                <li><a class="dropdown-item text-light" href="#" onclick="switchDevUser(1, 'dev'); return false;">dev (User 1)</a></li>
+                <li><a class="dropdown-item text-light" href="#" onclick="switchDevUser(2, 'Alice'); return false;">Alice (User 2)</a></li>
+                <li><a class="dropdown-item text-light" href="#" onclick="switchDevUser(3, 'Bob'); return false;">Bob (User 3 Premium)</a></li>
+              </ul>
+            </div>
+            <small class="text-muted">Switching user here resets active client scope and reloads the app.</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-3 d-flex justify-content-end">
+        <button class="btn btn-primary" type="button" data-save-settings>
+          <i class="bi bi-check2-circle me-1"></i>Save Settings
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+  'use strict';
+
+  var defaults = {
+    profile: { display_name: '', email: '', role: '', timezone: 'Europe/Bucharest', language: 'en' },
+    appearance: { theme: 'dark', density: 'comfortable', accent: 'blue' },
+    preferences: { default_workspace: 'agency', default_landing: 'orchestrator', chat_home_v2: true, always_open_home: false, compact_sidebar: false, reduce_motion: false, show_tips: true },
+    notifications: { toast_enabled: true, chat_alerts: true, connector_alerts: true, boardroom_alerts: true, daily_digest: false },
+    orchestrator: { snap_to_grid: true, grid_style: 'dots', auto_route: true, default_zoom: 100 },
+    privacy: { mask_api_keys: true, share_telemetry: false, retain_days: 180 },
+    integrations: { byok_enabled: false, preferred_llm: 'Grok', strict_client_scope: true },
+    economy: { preset: 'free', cost_multiplier: 1.0, monthly_grant: 1000, max_per_message: 80, daily_limit: 200, monthly_reset_day: 1, monthly_reset_hour: 0, monthly_reset_minute: 0 }
+  };
+
+  function deepMerge(base, incoming) {
+    var out = JSON.parse(JSON.stringify(base || {}));
+    if (!incoming || typeof incoming !== 'object') return out;
+    Object.keys(incoming).forEach(function(k) {
+      var v = incoming[k];
+      if (v && typeof v === 'object' && !Array.isArray(v) && out[k] && typeof out[k] === 'object' && !Array.isArray(out[k])) {
+        out[k] = deepMerge(out[k], v);
+      } else {
+        out[k] = v;
+      }
+    });
+    return out;
+  }
+
+  function el(id) { return document.getElementById(id); }
+  function bool(id, value) { var n = el(id); if (n) n.checked = !!value; }
+  function val(id, value) { var n = el(id); if (n) n.value = value == null ? '' : String(value); }
+  function num(id, value, fallback) {
+    var n = el(id);
+    if (!n) return;
+    var v = Number(value);
+    if (!isFinite(v)) v = fallback;
+    n.value = String(v);
+  }
+
+  function renderSummary(resp) {
+    var counts = (resp && resp.counts) || {};
+    var activeClient = (resp && resp.active_client) || null;
+    var userId = (resp && resp.user_id) || 1;
+
+    if (el('sum-agents')) el('sum-agents').textContent = String(counts.agents || 0);
+    if (el('sum-connectors')) el('sum-connectors').textContent = String(counts.connectors || 0);
+    if (el('sum-connectors-live')) el('sum-connectors-live').textContent = String(counts.connected_connectors || 0);
+    if (el('sum-flows')) el('sum-flows').textContent = String(counts.flows || 0);
+    if (el('sum-templates')) el('sum-templates').textContent = String(counts.templates || 0);
+    if (el('sum-chats')) el('sum-chats').textContent = String(counts.chats || 0);
+    if (el('sum-clients')) el('sum-clients').textContent = String(counts.clients || 0);
+    if (el('sum-client-accounts')) el('sum-client-accounts').textContent = String(counts.client_accounts || 0);
+    if (el('sum-user')) el('sum-user').textContent = 'User ' + String(userId);
+
+    var cText = 'None';
+    if (activeClient && activeClient.display_name) cText = activeClient.display_name;
+    if (el('sum-client')) el('sum-client').textContent = cText;
+  }
+
+  var currentSettingsModel = deepMerge(defaults, {});
+  var currentUsageSnapshot = {};
+
+  function formatNum(v) {
+    var n = Number(v || 0);
+    if (!isFinite(n)) n = 0;
+    return n.toLocaleString('en-US');
+  }
+
+  function humanPreset(preset) {
+    var p = String(preset || 'free').trim().toLowerCase();
+    if (p === 'enterprise') return 'Enterprise';
+    if (p === 'pro') return 'Pro';
+    return 'Free';
+  }
+
+  function setPresetButtonState(preset) {
+    var map = {
+      free: { id: 'st-preset-free', on: 'btn-secondary', off: 'btn-outline-secondary' },
+      pro: { id: 'st-preset-pro', on: 'btn-primary', off: 'btn-outline-primary' },
+      enterprise: { id: 'st-preset-enterprise', on: 'btn-success', off: 'btn-outline-success' }
+    };
+
+    Object.keys(map).forEach(function(key) {
+      var cfg = map[key];
+      var btn = el(cfg.id);
+      if (!btn) return;
+      var active = key === preset;
+      btn.classList.remove(cfg.on, cfg.off, 'active');
+      btn.classList.add(active ? cfg.on : cfg.off);
+      if (active) btn.classList.add('active');
+    });
+  }
+
+  function renderPresetPreview(settings, snapshot) {
+    var previewEl = el('st-preset-preview');
+    if (!previewEl) return;
+
+    var s = settings && typeof settings === 'object' ? settings : currentSettingsModel;
+    var snap = snapshot && typeof snapshot === 'object' ? snapshot : currentUsageSnapshot;
+    var econ = (s && s.economy && typeof s.economy === 'object') ? s.economy : {};
+
+    var preset = String(econ.preset || snap.economy_preset || 'free').trim().toLowerCase();
+    if (!preset || (preset !== 'free' && preset !== 'pro' && preset !== 'enterprise')) preset = 'free';
+
+    var monthlyGrant = Number(econ.monthly_grant || snap.monthly_grant || snap.ct_monthly_limit || 0);
+    if (!isFinite(monthlyGrant) || monthlyGrant <= 0) monthlyGrant = 1000;
+
+    var maxPerMessage = Number(econ.max_per_message || snap.max_per_message || 80);
+    if (!isFinite(maxPerMessage) || maxPerMessage <= 0) maxPerMessage = 80;
+
+    var multiplier = Number(econ.cost_multiplier || snap.cost_multiplier || 1);
+    if (!isFinite(multiplier) || multiplier <= 0) multiplier = 1;
+
+    var dailyLimit = Number(econ.daily_limit || snap.daily_limit || 0);
+    if (!isFinite(dailyLimit) || dailyLimit < 0) dailyLimit = 0;
+
+    previewEl.textContent = 'Current: ' + humanPreset(preset)
+      + ' • Monthly grant: ' + formatNum(monthlyGrant) + ' CT'
+      + ' • Max/message: ' + Math.round(maxPerMessage) + ' CT'
+      + ' • Daily limit: ' + formatNum(dailyLimit) + ' CT'
+      + ' • Multiplier: ' + multiplier.toFixed(2) + 'x';
+
+    setPresetButtonState(preset);
+  }
+
+  function clampNumber(value, min, max, fallback) {
+    var n = Number(value);
+    if (!isFinite(n)) n = Number(fallback);
+    if (!isFinite(n)) n = 0;
+    if (isFinite(min)) n = Math.max(Number(min), n);
+    if (isFinite(max)) n = Math.min(Number(max), n);
+    return n;
+  }
+
+  function previewOverrides() {
+    var multEl = el('st-override-multiplier');
+    var maxMsgEl = el('st-override-max-message');
+    var dailyEl = el('st-override-daily-limit');
+    var monthlyEl = el('st-override-monthly-grant');
+    var resetEl = el('st-override-reset-day');
+    var resetHourEl = el('st-override-reset-hour');
+    var resetMinuteEl = el('st-override-reset-minute');
+    var previewEl = el('st-override-preview');
+    if (!multEl || !maxMsgEl || !dailyEl || !monthlyEl || !resetEl || !resetHourEl || !resetMinuteEl || !previewEl) return;
+
+    var mult = clampNumber(multEl.value, 0.1, 2.0, 1.0);
+    var maxMsg = Math.round(clampNumber(maxMsgEl.value, 20, 500, 80));
+    var daily = Math.round(clampNumber(dailyEl.value, 50, 500000, 200));
+    var monthly = Math.round(clampNumber(monthlyEl.value, 100, 500000, 1000));
+    var resetDay = Math.round(clampNumber(resetEl.value, 1, 28, 1));
+    var resetHour = Math.round(clampNumber(resetHourEl.value, 0, 23, 0));
+    var resetMinute = Math.round(clampNumber(resetMinuteEl.value, 0, 59, 0));
+    if ([0, 15, 30, 45].indexOf(resetMinute) < 0) resetMinute = 0;
+
+    previewEl.textContent = 'Preview: multiplier ' + mult.toFixed(2) + 'x • max/message ' + maxMsg + ' CT • daily limit ' + formatNum(daily) + ' CT • monthly grant ' + formatNum(monthly) + ' CT • reset day ' + resetDay + ' @ ' + String(resetHour).padStart(2, '0') + ':' + String(resetMinute).padStart(2, '0');
+  }
+
+  function renderUsageBreakdown(snapshot) {
+    var barsEl = el('st-usage-breakdown-bars');
+    var labelEl = el('st-usage-breakdown-label');
+    if (!barsEl || !labelEl) return;
+
+    var b = (snapshot && snapshot.usage_breakdown && typeof snapshot.usage_breakdown === 'object')
+      ? snapshot.usage_breakdown
+      : { chat: 40, rag: 25, flow: 20, asset: 15 };
+
+    var keys = [
+      { key: 'chat', label: 'Chat', cls: 'info' },
+      { key: 'rag', label: 'RAG', cls: 'primary' },
+      { key: 'flow', label: 'Flows', cls: 'success' },
+      { key: 'asset', label: 'Assets/Boardroom', cls: 'warning' }
+    ];
+
+    var total = 0;
+    keys.forEach(function(k) {
+      var v = Number(b[k.key] || 0);
+      if (!isFinite(v) || v < 0) v = 0;
+      total += v;
+    });
+    if (total <= 0) total = 1;
+
+    var barHtml = '';
+    var labels = [];
+    keys.forEach(function(k) {
+      var raw = Number(b[k.key] || 0);
+      if (!isFinite(raw) || raw < 0) raw = 0;
+      var pct = Math.round((raw / total) * 100);
+      barHtml += '<div class="progress-bar bg-' + k.cls + '" role="progressbar" style="width:' + pct + '%" title="' + k.label + ': ' + pct + '%"></div>';
+      labels.push(k.label + ' ' + pct + '%');
+    });
+
+    barsEl.innerHTML = barHtml;
+    labelEl.textContent = labels.join(' • ');
+  }
+  function renderUsageSnapshot(snapshot) {
+    var s = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    currentUsageSnapshot = s;
+
+    var username = String(s.display_name || s.username || '-').trim() || '-';
+    var plan = String(s.plan || s.tier || 'free').trim().toUpperCase();
+    var activeClient = (s.active_client && s.active_client.display_name)
+      ? String(s.active_client.display_name)
+      : 'None';
+    var ctBalance = Number(s.ct_balance || 0);
+    var ctUsed = Number(s.ct_used_month || 0);
+    var ctLimit = Number(s.ct_monthly_limit || 0);
+    var reqToday = Number(s.requests_today || 0);
+    var pct = Number(s.ct_usage_pct || 0);
+
+    if (!isFinite(ctBalance) || ctBalance < 0) ctBalance = 0;
+    if (!isFinite(ctUsed) || ctUsed < 0) ctUsed = 0;
+    if (!isFinite(ctLimit) || ctLimit < 0) ctLimit = 0;
+    if (!isFinite(reqToday) || reqToday < 0) reqToday = 0;
+    if (!isFinite(pct) || pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+
+    if (el('st-usage-username')) el('st-usage-username').textContent = username;
+    if (el('st-usage-plan')) el('st-usage-plan').textContent = plan;
+    if (el('st-usage-client')) el('st-usage-client').textContent = activeClient;
+    if (el('st-usage-ct-balance')) el('st-usage-ct-balance').textContent = ctBalance.toLocaleString('en-US') + ' CT';
+    if (el('st-usage-ct-used')) el('st-usage-ct-used').textContent = ctUsed.toLocaleString('en-US') + ' / ' + ctLimit.toLocaleString('en-US') + ' CT';
+    if (el('st-usage-requests-today')) el('st-usage-requests-today').textContent = String(reqToday);
+
+    if (el('st-usage-progress')) {
+      el('st-usage-progress').style.width = String(pct) + '%';
+      el('st-usage-progress').setAttribute('aria-valuenow', String(Math.round(pct)));
+    }
+    if (el('st-usage-progress-label')) {
+      el('st-usage-progress-label').textContent = String(Math.round(pct)) + '% used this month';
+    }
+
+    renderUsageBreakdown(s);
+    renderPresetPreview(currentSettingsModel, s);
+  }
+
+  function renderBillingSummary(resp) {
+    var data = (resp && typeof resp === 'object') ? resp : {};
+    var billing = (data.billing && typeof data.billing === 'object') ? data.billing : {};
+    var plan = (billing.plan && typeof billing.plan === 'object') ? billing.plan : {};
+    var price = (plan.price && typeof plan.price === 'object') ? plan.price : {};
+    var stripe = (billing.stripe && typeof billing.stripe === 'object') ? billing.stripe : {};
+    var source = String(data.source || 'unknown');
+    var plans = Array.isArray(data.plans) ? data.plans : [];
+    var currentPlanCode = String(data.current_plan_code || ((plan && plan.code) || '')).toLowerCase();
+
+    var amount = Number(price.amount || 0);
+    var currency = String(price.currency || '').toUpperCase();
+    var interval = String(price.interval || '').toLowerCase();
+    var priceText = '-';
+    if (isFinite(amount) && amount > 0) {
+      priceText = amount.toLocaleString('en-US') + (currency ? (' ' + currency) : '') + (interval ? (' / ' + interval) : '');
+    }
+
+    if (el('st-billing-plan-label')) el('st-billing-plan-label').textContent = String(plan.label || plan.code || '-');
+    if (el('st-billing-plan-price')) el('st-billing-plan-price').textContent = priceText;
+    if (el('st-billing-stripe-status')) el('st-billing-stripe-status').textContent = String(stripe.status || '-');
+    if (el('st-billing-subscription-id')) el('st-billing-subscription-id').textContent = String(stripe.subscriptionId || '-');
+    if (el('st-billing-stripe-mode')) el('st-billing-stripe-mode').textContent = String(stripe.mode || '-');
+    if (el('st-billing-customer-id')) el('st-billing-customer-id').textContent = String(stripe.customerId || '-');
+    if (el('st-billing-period-end')) el('st-billing-period-end').textContent = String(stripe.currentPeriodEnd || '-');
+    if (el('st-billing-source')) el('st-billing-source').textContent = source;
+
+    var topupBtn = el('st-usage-topup-1000');
+    if (topupBtn) {
+      // Hide mock top-up when billing is coming from real Coolbits source.
+      topupBtn.style.display = (source === 'coolbits') ? 'none' : '';
+    }
+
+    var managed = (source === 'coolbits');
+    var managedNote = el('st-billing-managed-note');
+    if (managedNote) managedNote.style.display = managed ? '' : 'none';
+
+    ['st-preset-free', 'st-preset-pro', 'st-preset-enterprise', 'st-apply-overrides',
+     'st-override-multiplier', 'st-override-max-message', 'st-override-daily-limit',
+     'st-override-monthly-grant', 'st-override-reset-day', 'st-override-reset-hour', 'st-override-reset-minute']
+      .forEach(function(id) {
+        var node = el(id);
+        if (!node) return;
+        node.disabled = managed;
+      });
+
+    var selectedPlan = null;
+    plans.forEach(function(p) {
+      if (!p || typeof p !== 'object') return;
+      var code = String(p.code || '').toLowerCase();
+      if (code === currentPlanCode || (code === 'starter' && currentPlanCode === 'free')) selectedPlan = p;
+    });
+    if (!selectedPlan && plans.length) selectedPlan = plans[0];
+    var ent = (selectedPlan && selectedPlan.entitlements && typeof selectedPlan.entitlements === 'object') ? selectedPlan.entitlements : {};
+    if (el('st-plan-workspaces')) el('st-plan-workspaces').textContent = String(ent.workspaces_max || '-');
+    if (el('st-plan-projects')) el('st-plan-projects').textContent = String(ent.projects_max || '-');
+    if (el('st-plan-agents')) el('st-plan-agents').textContent = String(ent.agents_max || '-');
+    if (el('st-plan-connectors')) el('st-plan-connectors').textContent = String(ent.connectors_max || '-');
+    if (el('st-plan-tokens')) el('st-plan-tokens').textContent = ent.tokens_monthly ? (Number(ent.tokens_monthly).toLocaleString('en-US') + ' tokens') : '-';
+    if (el('st-plan-max-message')) el('st-plan-max-message').textContent = ent.max_per_message ? (String(ent.max_per_message) + ' tokens') : '-';
+    if (el('st-plan-daily-limit')) el('st-plan-daily-limit').textContent = ent.daily_limit ? (Number(ent.daily_limit).toLocaleString('en-US') + ' tokens') : '-';
+  }
+
+  function loadBillingSummary() {
+    return fetch('/api/settings/billing', { cache: 'no-store' })
+      .then(function(r) { return r.json(); })
+      .then(function(resp) {
+        renderBillingSummary(resp || {});
+        var runtime = (resp && resp.runtime && typeof resp.runtime === 'object') ? resp.runtime : {};
+        if (Object.keys(runtime).length) {
+          renderUsageSnapshot(runtime);
+        }
+        return resp || {};
+      })
+      .catch(function() {
+        renderBillingSummary({});
+        return {};
+      });
+  }
+
+  function loadUsageSnapshot(force) {
+    var loader = null;
+    if (window.loadUserSnapshot && typeof window.loadUserSnapshot === 'function') {
+      loader = window.loadUserSnapshot(!!force);
+    } else {
+      loader = fetch('/api/user/snapshot', { cache: 'no-store' }).then(function(r) { return r.json(); });
+    }
+
+    return Promise.resolve(loader)
+      .then(function(snapshot) {
+        renderUsageSnapshot(snapshot || {});
+        return snapshot || {};
+      })
+      .catch(function() {
+        renderUsageSnapshot({});
+        return {};
+      });
+  }
+
+  function openBillingCheckout(plan) {
+    var p = String(plan || 'pro').trim().toLowerCase();
+    return fetch('/api/settings/billing/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan: p })
+    })
+      .then(function(r) {
+        return r.json().then(function(d) {
+          return { ok: r.ok, data: d || {} };
+        });
+      })
+      .then(function(res) {
+        if (!res.ok || !res.data || !res.data.success || !res.data.url) {
+          throw new Error((res.data && (res.data.detail || res.data.error)) || 'Checkout unavailable');
+        }
+        window.open(res.data.url, '_blank', 'noopener');
+      })
+      .catch(function(err) {
+        if (window.showToast) window.showToast('Billing', err.message || 'Checkout unavailable', 'error');
+      });
+  }
+
+  function topupUsage(amount) {
+    var amt = Number(amount || 0);
+    if (!isFinite(amt) || amt <= 0) return Promise.resolve();
+
+    return fetch('/api/user/topup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: Math.round(amt), description: 'Settings top-up mock' })
+    })
+      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d || {} }; }); })
+      .then(function(res) {
+        if (!res.ok || !res.data || res.data.success !== true) {
+          throw new Error((res.data && (res.data.error || res.data.message)) || 'Top-up failed');
+        }
+        if (window.showToast) window.showToast('Settings', 'Added ' + Math.round(amt) + ' CT.', 'success');
+        return loadUsageSnapshot(true).then(function() {
+          if (window.loadUserSnapshot && typeof window.loadUserSnapshot === 'function') {
+            return window.loadUserSnapshot(true);
+          }
+          return null;
+        });
+      })
+      .catch(function(err) {
+        if (window.showToast) window.showToast('Settings', err.message || 'Top-up failed', 'error');
+      });
+  }
+
+  function updateZoomLabel() {
+    var z = el('st-default-zoom');
+    var lbl = el('st-default-zoom-label');
+    if (!z || !lbl) return;
+    lbl.textContent = String(z.value || '100') + '%';
+  }
+
+  function applyForm(settings) {
+    var s = deepMerge(defaults, settings || {});
+
+    val('st-display-name', s.profile.display_name);
+    val('st-email', s.profile.email);
+    val('st-role', s.profile.role);
+    val('st-timezone', s.profile.timezone);
+    val('st-language', s.profile.language);
+
+    val('st-default-workspace', s.preferences.default_workspace);
+    val('st-default-landing', s.preferences.default_landing);
+    bool('st-chat-home-v2', s.preferences.chat_home_v2);
+    bool('st-always-open-home', s.preferences.always_open_home);
+    bool('st-compact-sidebar', s.preferences.compact_sidebar);
+    bool('st-reduce-motion', s.preferences.reduce_motion);
+    bool('st-show-tips', s.preferences.show_tips);
+
+    bool('st-toast-enabled', s.notifications.toast_enabled);
+    bool('st-chat-alerts', s.notifications.chat_alerts);
+    bool('st-connector-alerts', s.notifications.connector_alerts);
+    bool('st-boardroom-alerts', s.notifications.boardroom_alerts);
+    bool('st-daily-digest', s.notifications.daily_digest);
+
+    bool('st-snap-to-grid', s.orchestrator.snap_to_grid);
+    val('st-grid-style', s.orchestrator.grid_style);
+    bool('st-auto-route', s.orchestrator.auto_route);
+    num('st-default-zoom', s.orchestrator.default_zoom, 100);
+    updateZoomLabel();
+
+    bool('st-mask-api-keys', s.privacy.mask_api_keys);
+    bool('st-share-telemetry', s.privacy.share_telemetry);
+    num('st-retain-days', s.privacy.retain_days, 180);
+
+    bool('st-byok-enabled', s.integrations.byok_enabled);
+    val('st-preferred-llm', s.integrations.preferred_llm);
+    bool('st-strict-client-scope', s.integrations.strict_client_scope);
+
+    val('st-theme', (s.appearance && s.appearance.theme) || 'dark');
+
+    var econ = (s.economy && typeof s.economy === 'object') ? s.economy : {};
+    val('st-override-multiplier', clampNumber(econ.cost_multiplier, 0.1, 2.0, 1.0).toFixed(2));
+    val('st-override-max-message', Math.round(clampNumber(econ.max_per_message, 20, 500, 80)));
+    val('st-override-daily-limit', Math.round(clampNumber(econ.daily_limit, 50, 500000, 200)));
+    val('st-override-monthly-grant', Math.round(clampNumber(econ.monthly_grant, 100, 500000, 1000)));
+    val('st-override-reset-day', Math.round(clampNumber(econ.monthly_reset_day, 1, 28, 1)));
+    val('st-override-reset-hour', Math.round(clampNumber(econ.monthly_reset_hour, 0, 23, 0)));
+    val('st-override-reset-minute', Math.round(clampNumber(econ.monthly_reset_minute, 0, 59, 0)));
+
+    currentSettingsModel = s;
+
+    if (window.CamaradUserSettings && typeof window.CamaradUserSettings.apply === 'function') {
+      window.CamaradUserSettings.apply(s);
+    }
+
+    renderPresetPreview(s, currentUsageSnapshot);
+    previewOverrides();
+  }
+
+  function collectForm() {
+    return {
+      profile: {
+        display_name: (el('st-display-name') || {}).value || '',
+        email: (el('st-email') || {}).value || '',
+        role: (el('st-role') || {}).value || '',
+        timezone: (el('st-timezone') || {}).value || 'Europe/Bucharest',
+        language: (el('st-language') || {}).value || 'en'
+      },
+      appearance: {
+        theme: (el('st-theme') || {}).value || 'dark'
+      },
+      preferences: {
+        default_workspace: (el('st-default-workspace') || {}).value || 'agency',
+        default_landing: (el('st-default-landing') || {}).value || 'orchestrator',
+        chat_home_v2: !!((el('st-chat-home-v2') || {}).checked),
+        always_open_home: !!((el('st-always-open-home') || {}).checked),
+        compact_sidebar: !!((el('st-compact-sidebar') || {}).checked),
+        reduce_motion: !!((el('st-reduce-motion') || {}).checked),
+        show_tips: !!((el('st-show-tips') || {}).checked)
+      },
+      notifications: {
+        toast_enabled: !!((el('st-toast-enabled') || {}).checked),
+        chat_alerts: !!((el('st-chat-alerts') || {}).checked),
+        connector_alerts: !!((el('st-connector-alerts') || {}).checked),
+        boardroom_alerts: !!((el('st-boardroom-alerts') || {}).checked),
+        daily_digest: !!((el('st-daily-digest') || {}).checked)
+      },
+      orchestrator: {
+        snap_to_grid: !!((el('st-snap-to-grid') || {}).checked),
+        grid_style: (el('st-grid-style') || {}).value || 'dots',
+        auto_route: !!((el('st-auto-route') || {}).checked),
+        default_zoom: parseInt(((el('st-default-zoom') || {}).value || '100'), 10)
+      },
+      privacy: {
+        mask_api_keys: !!((el('st-mask-api-keys') || {}).checked),
+        share_telemetry: !!((el('st-share-telemetry') || {}).checked),
+        retain_days: parseInt(((el('st-retain-days') || {}).value || '180'), 10)
+      },
+      integrations: {
+        byok_enabled: !!((el('st-byok-enabled') || {}).checked),
+        preferred_llm: (el('st-preferred-llm') || {}).value || 'Grok',
+        strict_client_scope: !!((el('st-strict-client-scope') || {}).checked)
+      }
+    };
+  }
+
+  var liveFieldMap = {
+    'st-display-name': { section: 'profile', key: 'display_name', kind: 'text' },
+    'st-email': { section: 'profile', key: 'email', kind: 'text' },
+    'st-role': { section: 'profile', key: 'role', kind: 'text' },
+    'st-timezone': { section: 'profile', key: 'timezone', kind: 'text' },
+    'st-language': { section: 'profile', key: 'language', kind: 'text' },
+
+    'st-theme': { section: 'appearance', key: 'theme', kind: 'text' },
+
+    'st-default-workspace': { section: 'preferences', key: 'default_workspace', kind: 'text' },
+    'st-default-landing': { section: 'preferences', key: 'default_landing', kind: 'text' },
+    'st-chat-home-v2': { section: 'preferences', key: 'chat_home_v2', kind: 'bool' },
+    'st-always-open-home': { section: 'preferences', key: 'always_open_home', kind: 'bool' },
+    'st-compact-sidebar': { section: 'preferences', key: 'compact_sidebar', kind: 'bool' },
+    'st-reduce-motion': { section: 'preferences', key: 'reduce_motion', kind: 'bool' },
+    'st-show-tips': { section: 'preferences', key: 'show_tips', kind: 'bool' },
+
+    'st-toast-enabled': { section: 'notifications', key: 'toast_enabled', kind: 'bool' },
+    'st-chat-alerts': { section: 'notifications', key: 'chat_alerts', kind: 'bool' },
+    'st-connector-alerts': { section: 'notifications', key: 'connector_alerts', kind: 'bool' },
+    'st-boardroom-alerts': { section: 'notifications', key: 'boardroom_alerts', kind: 'bool' },
+    'st-daily-digest': { section: 'notifications', key: 'daily_digest', kind: 'bool' },
+
+    'st-snap-to-grid': { section: 'orchestrator', key: 'snap_to_grid', kind: 'bool' },
+    'st-grid-style': { section: 'orchestrator', key: 'grid_style', kind: 'text' },
+    'st-auto-route': { section: 'orchestrator', key: 'auto_route', kind: 'bool' },
+    'st-default-zoom': { section: 'orchestrator', key: 'default_zoom', kind: 'int' },
+
+    'st-mask-api-keys': { section: 'privacy', key: 'mask_api_keys', kind: 'bool' },
+    'st-share-telemetry': { section: 'privacy', key: 'share_telemetry', kind: 'bool' },
+    'st-retain-days': { section: 'privacy', key: 'retain_days', kind: 'int' },
+
+    'st-byok-enabled': { section: 'integrations', key: 'byok_enabled', kind: 'bool' },
+    'st-preferred-llm': { section: 'integrations', key: 'preferred_llm', kind: 'text' },
+    'st-strict-client-scope': { section: 'integrations', key: 'strict_client_scope', kind: 'bool' }
+  };
+
+  var livePatchQueue = {};
+  var liveSaveTimer = null;
+  var liveSaving = false;
+
+  function parseControlValue(control, meta) {
+    if (!control || !meta) return null;
+    if (meta.kind === 'bool') return !!control.checked;
+    if (meta.kind === 'int') {
+      var parsed = parseInt(control.value || '0', 10);
+      return isFinite(parsed) ? parsed : 0;
+    }
+    return (control.value || '').toString();
+  }
+
+  function buildPatchForControl(controlId) {
+    var meta = liveFieldMap[controlId];
+    var control = el(controlId);
+    if (!meta || !control) return null;
+
+    var patch = {};
+    patch[meta.section] = {};
+    patch[meta.section][meta.key] = parseControlValue(control, meta);
+    return patch;
+  }
+
+  function applyLivePreview() {
+    var payload = collectForm();
+    if (window.CamaradUserSettings && typeof window.CamaradUserSettings.apply === 'function') {
+      window.CamaradUserSettings.apply(payload);
+    }
+  }
+
+  function flushLiveSave() {
+    if (liveSaving) return;
+    var hasSection = Object.keys(livePatchQueue || {}).length > 0;
+    if (!hasSection) return;
+
+    var payload = livePatchQueue;
+    livePatchQueue = {};
+    liveSaving = true;
+
+    fetch('/api/settings/user', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(resp) {
+        if (!resp.success) throw new Error(resp.error || 'Live save failed');
+        applyForm(resp.settings || collectForm());
+      })
+      .catch(function(err) {
+        if (window.showToast) window.showToast('Settings', err.message || 'Live save failed', 'error');
+      })
+      .finally(function() {
+        liveSaving = false;
+        if (Object.keys(livePatchQueue || {}).length > 0) {
+          flushLiveSave();
+        }
+      });
+  }
+
+  function scheduleLiveSave(partialPatch) {
+    if (!partialPatch || typeof partialPatch !== 'object') return;
+    livePatchQueue = deepMerge(livePatchQueue, partialPatch);
+    if (liveSaveTimer) clearTimeout(liveSaveTimer);
+    liveSaveTimer = setTimeout(flushLiveSave, 260);
+  }
+
+  function bindLiveSettings() {
+    Object.keys(liveFieldMap).forEach(function(controlId) {
+      var control = el(controlId);
+      if (!control) return;
+
+      var liveHandler = function() {
+        if (controlId === 'st-default-zoom') updateZoomLabel();
+        applyLivePreview();
+      };
+
+      var saveHandler = function() {
+        var partial = buildPatchForControl(controlId);
+        scheduleLiveSave(partial);
+      };
+
+      if (control.type === 'checkbox' || control.tagName === 'SELECT') {
+        control.addEventListener('change', function() {
+          liveHandler();
+          saveHandler();
+        });
+      } else if (controlId === 'st-default-zoom') {
+        control.addEventListener('input', liveHandler);
+        control.addEventListener('change', saveHandler);
+      } else {
+        control.addEventListener('input', liveHandler);
+        control.addEventListener('blur', saveHandler);
+      }
+    });
+  }
+
+  function applyPreset(preset) {
+    var p = String(preset || '').trim().toLowerCase();
+    if (p !== 'free' && p !== 'pro' && p !== 'enterprise') return Promise.resolve();
+
+    return fetch('/api/settings/billing/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan: p })
+    })
+      .then(function(r) {
+        return r.json().then(function(d) {
+          return { ok: r.ok, status: r.status, data: d || {} };
+        });
+      })
+      .then(function(res) {
+        var resp = res.data || {};
+        if (!res.ok || !resp.success) {
+          if (resp.requires_billing) {
+            if (window.showToast) window.showToast('Billing', resp.message || 'Subscription required for paid plans.', 'warning');
+            if (resp.checkout_url) {
+              window.open(resp.checkout_url, '_blank', 'noopener');
+            } else {
+              return openBillingCheckout(p);
+            }
+            return Promise.resolve();
+          }
+          throw new Error(resp.error || 'Could not apply preset');
+        }
+        applyForm(resp.settings || currentSettingsModel);
+        if (window.showToast) window.showToast('Settings', 'Switched to ' + humanPreset(p) + ' plan.', 'success');
+        return Promise.all([
+          loadUsageSnapshot(true),
+          loadBillingSummary(),
+          window.loadUserSnapshot && typeof window.loadUserSnapshot === 'function'
+            ? window.loadUserSnapshot(true)
+            : Promise.resolve(null)
+        ]);
+      })
+      .catch(function(err) {
+        if (window.showToast) window.showToast('Settings', err.message || 'Preset apply failed', 'error');
+      });
+  }
+
+  window.applyPreset = applyPreset;
+
+  function applyOverrides() {
+    var multEl = el('st-override-multiplier');
+    var maxMsgEl = el('st-override-max-message');
+    var dailyEl = el('st-override-daily-limit');
+    var monthlyEl = el('st-override-monthly-grant');
+    var resetEl = el('st-override-reset-day');
+    var resetHourEl = el('st-override-reset-hour');
+    var resetMinuteEl = el('st-override-reset-minute');
+    if (!multEl || !maxMsgEl || !dailyEl || !monthlyEl || !resetEl || !resetHourEl || !resetMinuteEl) return Promise.resolve();
+
+    var payload = {
+      cost_multiplier: clampNumber(multEl.value, 0.1, 2.0, 1.0),
+      max_per_message: Math.round(clampNumber(maxMsgEl.value, 20, 500, 80)),
+      daily_limit: Math.round(clampNumber(dailyEl.value, 50, 500000, 200)),
+      monthly_grant: Math.round(clampNumber(monthlyEl.value, 100, 500000, 1000)),
+      monthly_reset_day: Math.round(clampNumber(resetEl.value, 1, 28, 1)),
+      monthly_reset_hour: Math.round(clampNumber(resetHourEl.value, 0, 23, 0)),
+      monthly_reset_minute: (function(v){ v = Math.round(clampNumber(v, 0, 59, 0)); return [0,15,30,45].indexOf(v) >= 0 ? v : 0; })(resetMinuteEl.value)
+    };
+
+    return fetch('/api/settings/user', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(resp) {
+        if (!resp.success) throw new Error(resp.error || 'Could not apply overrides');
+        applyForm(resp.settings || currentSettingsModel);
+        if (window.showToast) window.showToast('Settings', 'Overrides applied live.', 'success');
+        return Promise.all([
+          loadUsageSnapshot(true),
+          window.loadUserSnapshot && typeof window.loadUserSnapshot === 'function'
+            ? window.loadUserSnapshot(true)
+            : Promise.resolve(null)
+        ]);
+      })
+      .catch(function(err) {
+        if (window.showToast) window.showToast('Settings', err.message || 'Override apply failed', 'error');
+      });
+  }
+
+  window.applyOverrides = applyOverrides;
+  window.previewOverrides = previewOverrides;
+
+  function saveSettings() {
+    var payload = collectForm();
+    return fetch('/api/settings/user', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(resp) {
+        if (!resp.success) throw new Error(resp.error || 'Could not save settings');
+        applyForm(resp.settings || payload);
+        if (window.showToast) window.showToast('Settings', 'Preferences saved.', 'success');
+      })
+      .catch(function(err) {
+        if (window.showToast) window.showToast('Settings', err.message || 'Save failed', 'error');
+      });
+  }
+
+  function resetSettings() {
+    return fetch('/api/settings/user/reset', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(resp) {
+        if (!resp.success) throw new Error(resp.error || 'Could not reset settings');
+        applyForm(resp.settings || defaults);
+        if (window.showToast) window.showToast('Settings', 'Defaults restored.', 'info');
+      })
+      .catch(function(err) {
+        if (window.showToast) window.showToast('Settings', err.message || 'Reset failed', 'error');
+      });
+  }
+
+  function loadAll() {
+    Promise.all([
+      fetch('/api/settings/user').then(function(r) { return r.json(); }),
+      fetch('/api/settings/summary').then(function(r) { return r.json(); }),
+      loadUsageSnapshot(false),
+      loadBillingSummary()
+    ])
+      .then(function(results) {
+        var settingsResp = results[0] || {};
+        var summaryResp = results[1] || {};
+        applyForm(settingsResp.settings || defaults);
+        renderSummary(summaryResp);
+      })
+      .catch(function() {
+        applyForm(defaults);
+        if (window.showToast) window.showToast('Settings', 'Loaded with fallback defaults.', 'warning');
+      });
+  }
+
+  function activateTabFromHash() {
+    var hash = String(window.location.hash || '').trim();
+    if (!hash || hash.indexOf('#settings-') !== 0) return;
+    var targetPane = document.querySelector(hash);
+    if (!targetPane) return;
+    var tabBtn = document.querySelector('[data-bs-target="' + hash + '"]');
+    if (!tabBtn) return;
+    try {
+      var tab = bootstrap.Tab.getOrCreateInstance(tabBtn);
+      tab.show();
+    } catch (e) {
+      tabBtn.click();
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    var saveTop = el('settings-save-btn');
+    if (saveTop) saveTop.addEventListener('click', saveSettings);
+
+    var resetBtn = el('settings-reset-btn');
+    if (resetBtn) resetBtn.addEventListener('click', resetSettings);
+
+    document.querySelectorAll('[data-save-settings]').forEach(function(btn) {
+      btn.addEventListener('click', saveSettings);
+    });
+
+    var zoomRange = el('st-default-zoom');
+    if (zoomRange) zoomRange.addEventListener('input', updateZoomLabel);
+
+    var usageRefresh = el('st-usage-refresh');
+    if (usageRefresh) {
+      usageRefresh.addEventListener('click', function() {
+        Promise.all([
+          loadUsageSnapshot(true),
+          loadBillingSummary()
+        ]);
+      });
+    }
+
+    var usageTopup = el('st-usage-topup-1000');
+    if (usageTopup) {
+      usageTopup.addEventListener('click', function() {
+        topupUsage(1000);
+      });
+    }
+    var billingUpgradePro = el('st-billing-upgrade-pro');
+    if (billingUpgradePro) {
+      billingUpgradePro.addEventListener('click', function() { openBillingCheckout('pro'); });
+    }
+    var billingUpgradeEnterprise = el('st-billing-upgrade-enterprise');
+    if (billingUpgradeEnterprise) {
+      billingUpgradeEnterprise.addEventListener('click', function() { openBillingCheckout('enterprise'); });
+    }
+
+    var presetFree = el('st-preset-free');
+    if (presetFree) presetFree.addEventListener('click', function() { applyPreset('free'); });
+    var presetPro = el('st-preset-pro');
+    if (presetPro) presetPro.addEventListener('click', function() { applyPreset('pro'); });
+    var presetEnterprise = el('st-preset-enterprise');
+    if (presetEnterprise) presetEnterprise.addEventListener('click', function() { applyPreset('enterprise'); });
+
+    var ovMult = el('st-override-multiplier');
+    if (ovMult) ovMult.addEventListener('input', previewOverrides);
+    var ovMsg = el('st-override-max-message');
+    if (ovMsg) ovMsg.addEventListener('input', previewOverrides);
+    var ovDaily = el('st-override-daily-limit');
+    if (ovDaily) ovDaily.addEventListener('input', previewOverrides);
+    var ovMonthly = el('st-override-monthly-grant');
+    if (ovMonthly) ovMonthly.addEventListener('input', previewOverrides);
+    var ovResetDay = el('st-override-reset-day');
+    if (ovResetDay) ovResetDay.addEventListener('input', previewOverrides);
+    var ovResetHour = el('st-override-reset-hour');
+    if (ovResetHour) ovResetHour.addEventListener('input', previewOverrides);
+    var ovResetMinute = el('st-override-reset-minute');
+    if (ovResetMinute) ovResetMinute.addEventListener('change', previewOverrides);
+    var ovApply = el('st-apply-overrides');
+    if (ovApply) ovApply.addEventListener('click', applyOverrides);
+
+    bindLiveSettings();
+    loadAll();
+    activateTabFromHash();
+
+    document.querySelectorAll('[data-bs-toggle="list"][data-bs-target^="#settings-"]').forEach(function(btn) {
+      btn.addEventListener('shown.bs.tab', function(ev) {
+        var t = ev.target && ev.target.getAttribute ? ev.target.getAttribute('data-bs-target') : '';
+        if (t && t.indexOf('#settings-') === 0) {
+          history.replaceState(null, '', t);
+        }
+      });
+    });
+  });
+})();
+</script>
+{% endblock %}
+
+
+

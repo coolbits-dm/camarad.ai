@@ -1,0 +1,374 @@
+{% extends "base.html" %}
+
+{% block title %}Chat Home{% endblock %}
+
+{% block content %}
+<style>
+  .chat-home-toolbar {
+    display: grid;
+    grid-template-columns: 1fr 190px auto;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .chat-home-toolbar .form-control,
+  .chat-home-toolbar .form-select {
+    background: #0f1827;
+    border-color: #2a3952;
+    color: #dbe3f0;
+  }
+  .chat-home-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .chat-stack {
+    margin-bottom: 10px;
+  }
+  .chat-stack-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 6px 0 8px;
+    color: #9fb0ca;
+    font-size: 0.84rem;
+  }
+  .chat-stack-head .left {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .chat-stack-head .count {
+    font-size: 0.72rem;
+    color: #7f91ac;
+  }
+  .agent-card-link {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    border: 1px solid #2a3952;
+    border-radius: 10px;
+    background: #0f1724;
+    padding: 8px;
+    color: #dbe3f0;
+    text-decoration: none;
+    min-height: 78px;
+    transition: border-color .15s ease, background .15s ease, transform .15s ease;
+  }
+  .agent-card-link:hover {
+    border-color: #3f82be;
+    background: #111c2d;
+    transform: translateY(-1px);
+    color: #eef5ff;
+  }
+  .agent-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: #0d1117;
+    border: 1px solid #2f3e57;
+    flex: 0 0 30px;
+    display: grid;
+    place-items: center;
+  }
+  .agent-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .agent-main {
+    min-width: 0;
+    flex: 1;
+  }
+  .agent-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 2px;
+  }
+  .agent-name {
+    font-size: 0.84rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .agent-time {
+    font-size: 0.68rem;
+    color: #7f91ac;
+    white-space: nowrap;
+  }
+  .agent-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  .agent-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .agent-status.online .agent-status-dot { background: #1fbe6b; }
+  .agent-status.away .agent-status-dot { background: #e5ab31; }
+  .agent-status.offline .agent-status-dot { background: #7d8590; }
+  .agent-status {
+    font-size: 0.68rem;
+    color: #9db0cc;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .agent-workspace-badge {
+    border: 1px solid #2b3d59;
+    border-radius: 999px;
+    padding: 1px 6px;
+    font-size: 0.66rem;
+    color: #98afcf;
+    white-space: nowrap;
+  }
+  .agent-preview {
+    font-size: 0.73rem;
+    color: #9ab0cf;
+    line-height: 1.25;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  #chat-home-empty {
+    border: 1px dashed #2b3e59;
+    border-radius: 12px;
+    padding: 18px;
+    text-align: center;
+    color: #8ea2bf;
+    margin-top: 8px;
+    background: #0f1724;
+  }
+  #chat-home-empty[hidden] {
+    display: none !important;
+  }
+  @media (max-width: 1700px) {
+    .chat-home-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+  @media (max-width: 1280px) {
+    .chat-home-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width: 1024px) {
+    .chat-home-toolbar { grid-template-columns: 1fr 1fr; }
+    .chat-home-toolbar .btn { grid-column: span 2; }
+    .chat-home-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 768px) {
+    .chat-home-toolbar { grid-template-columns: 1fr; }
+    .chat-home-toolbar .btn { grid-column: auto; }
+    .chat-home-grid { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-2">
+  <div>
+    <h3 class="mb-0">Chat Home</h3>
+    <small class="text-muted">Quick select your agent and open the right conversation in one click.</small>
+  </div>
+  <span class="badge bg-dark border border-secondary">{{ chat_home.total_agents }} agents</span>
+</div>
+
+<div class="chat-home-toolbar">
+  <input
+    id="chat-home-search"
+    class="form-control"
+    type="text"
+    placeholder="Search agents..."
+    value="{{ q|e }}"
+    autocomplete="off"
+  >
+  <select id="chat-home-workspace" class="form-select">
+    <option value="all" {% if ws_filter == "all" %}selected{% endif %}>All workspaces</option>
+    <option value="personal" {% if ws_filter == "personal" %}selected{% endif %}>Personal</option>
+    <option value="business" {% if ws_filter == "business" %}selected{% endif %}>Business</option>
+    <option value="agency" {% if ws_filter == "agency" %}selected{% endif %}>Agency</option>
+    <option value="development" {% if ws_filter == "development" %}selected{% endif %}>Development</option>
+    <option value="other" {% if ws_filter == "other" %}selected{% endif %}>Other</option>
+  </select>
+  <button
+    id="chat-home-new"
+    class="btn btn-success"
+    type="button"
+    data-default-ws="{{ chat_home.default_ws }}"
+    data-default-agent="{{ chat_home.default_agent }}"
+  >
+    <i class="bi bi-plus-lg me-1"></i>New Chat
+  </button>
+</div>
+
+{% for group in chat_home.groups %}
+<section class="chat-stack" data-workspace="{{ group.workspace_slug }}">
+  <div class="chat-stack-head">
+    <span class="left"><i class="bi {{ group.workspace_icon }}"></i>{{ group.workspace_name }}</span>
+    <span class="count">{{ group.count }}</span>
+  </div>
+  <div class="chat-home-grid">
+    {% for agent in group.agents %}
+      <a
+        class="agent-card-link"
+        href="{{ agent.open_url }}"
+        data-workspace="{{ agent.workspace_slug }}"
+        data-agent-slug="{{ agent.agent_slug }}"
+        data-agent-name="{{ agent.agent_name|e }}"
+        data-search="{{ agent.search_text|e }}"
+        data-open-url="{{ agent.open_url }}"
+      >
+        <span
+          class="agent-avatar"
+          data-agent-slug="{{ agent.agent_slug }}"
+          data-needs-svg="{% if not agent.has_photo %}1{% else %}0{% endif %}"
+        >
+          {% if agent.has_photo %}
+            <img src="data:image/png;base64,{{ agent.avatar_base64 }}" alt="{{ agent.agent_name }}">
+          {% endif %}
+        </span>
+        <span class="agent-main">
+          <span class="agent-top">
+            <span class="agent-name">{{ agent.agent_name }}</span>
+            <span class="agent-time" data-ts="{{ agent.last_activity|e }}">{{ agent.last_activity_label }}</span>
+          </span>
+          <span class="agent-meta">
+            <span class="agent-status {{ agent.status_class }}"><span class="agent-status-dot"></span>{{ agent.status }}</span>
+            <span class="agent-workspace-badge">{{ agent.workspace_name }}</span>
+          </span>
+          <span class="agent-preview">{{ agent.last_message }}</span>
+        </span>
+      </a>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+
+<div id="chat-home-empty" hidden>
+  No agents matched the current filters. Try clearing search or switching workspace.
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  function qs(id) { return document.getElementById(id); }
+  var searchEl = qs('chat-home-search');
+  var wsEl = qs('chat-home-workspace');
+  var emptyEl = qs('chat-home-empty');
+  var cards = Array.prototype.slice.call(document.querySelectorAll('.agent-card-link'));
+  var stackSections = Array.prototype.slice.call(document.querySelectorAll('.chat-stack'));
+  var newBtn = qs('chat-home-new');
+
+  function parseTs(raw) {
+    var txt = String(raw || '').trim();
+    if (!txt) return null;
+    var normalized = txt.indexOf('T') >= 0 ? txt : txt.replace(' ', 'T');
+    var d = new Date(normalized);
+    if (isNaN(d.getTime())) return null;
+    return d;
+  }
+
+  function relativeTimeLabel(raw) {
+    var d = parseTs(raw);
+    if (!d) return '';
+    var diffSec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+    if (diffSec < 60) return 'now';
+    if (diffSec < 3600) return Math.floor(diffSec / 60) + 'm';
+    if (diffSec < 86400) return Math.floor(diffSec / 3600) + 'h';
+    if (diffSec < 604800) return Math.floor(diffSec / 86400) + 'd';
+    var mm = String(d.getMonth() + 1).padStart(2, '0');
+    var dd = String(d.getDate()).padStart(2, '0');
+    return mm + '/' + dd;
+  }
+
+  function applyRelativeTimes() {
+    document.querySelectorAll('.agent-time[data-ts]').forEach(function (el) {
+      var lbl = relativeTimeLabel(el.getAttribute('data-ts'));
+      if (lbl) el.textContent = lbl;
+    });
+  }
+
+  function renderAgentAvatars() {
+    if (!window.CamaradAvatars) return;
+    document.querySelectorAll('.agent-avatar[data-needs-svg="1"]').forEach(function (el) {
+      var slug = String(el.getAttribute('data-agent-slug') || '').trim();
+      if (!slug) return;
+      el.innerHTML = window.CamaradAvatars.getMini(slug);
+    });
+  }
+
+  function applyFilters() {
+    var q = String((searchEl && searchEl.value) || '').trim().toLowerCase();
+    var ws = String((wsEl && wsEl.value) || 'all').trim().toLowerCase();
+    var visibleCards = 0;
+
+    cards.forEach(function (card) {
+      var search = String(card.getAttribute('data-search') || '').toLowerCase();
+      var cws = String(card.getAttribute('data-workspace') || '').toLowerCase();
+      var okWs = (ws === 'all') || (cws === ws);
+      var okQ = !q || (search.indexOf(q) >= 0);
+      var show = okWs && okQ;
+      card.style.display = show ? '' : 'none';
+      if (show) visibleCards += 1;
+    });
+
+    stackSections.forEach(function (section) {
+      var hasVisible = section.querySelector('.agent-card-link:not([style*="display: none"])');
+      section.hidden = !hasVisible;
+    });
+
+    emptyEl.hidden = visibleCards > 0;
+  }
+
+  function forceNewConversation(wsSlug, agentSlug) {
+    return fetch('/api/conversations/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ workspace_slug: wsSlug, agent_slug: agentSlug })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.redirect) {
+          window.location.href = d.redirect;
+          return;
+        }
+        var fallback = '/chat/' + encodeURIComponent(wsSlug) + '/' + encodeURIComponent(agentSlug);
+        window.location.href = fallback;
+      });
+  }
+
+  cards.forEach(function (card) {
+    card.addEventListener('click', function (ev) {
+      if (ev.ctrlKey || ev.metaKey) {
+        ev.preventDefault();
+        forceNewConversation(card.getAttribute('data-workspace'), card.getAttribute('data-agent-slug'));
+      }
+    });
+    card.addEventListener('dblclick', function (ev) {
+      ev.preventDefault();
+      forceNewConversation(card.getAttribute('data-workspace'), card.getAttribute('data-agent-slug'));
+    });
+  });
+
+  if (newBtn) {
+    newBtn.addEventListener('click', function () {
+      var ws = String(newBtn.getAttribute('data-default-ws') || 'personal');
+      var agent = String(newBtn.getAttribute('data-default-agent') || 'life-coach');
+      forceNewConversation(ws, agent);
+    });
+  }
+
+  if (searchEl) searchEl.addEventListener('input', applyFilters);
+  if (wsEl) wsEl.addEventListener('change', applyFilters);
+
+  renderAgentAvatars();
+  applyRelativeTimes();
+  applyFilters();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}{{ ws_data.name }} Workspace{% endblock %}
+
+{% block content %}
+<h1 class="text-center mb-4">{{ ws_data.name }} Workspace</h1>
+<div class="row">
+    {% for agent_slug, agent_name in ws_data.agents.items() %}
+    <div class="col-md-4 mb-3">
+        <div class="card bg-dark border-secondary">
+            <div class="card-body text-center">
+                <div class="workspace-agent-avatar mb-2" data-slug="{{ agent_slug }}"></div>
+                <h5 class="card-title">{{ agent_name }}</h5>
+                <div class="d-flex gap-2 justify-content-center mt-2">
+                  <a href="{{ url_for('chat', ws_slug=ws_slug, agent_slug=agent_slug) }}" class="btn btn-primary btn-sm">
+                    <i class="bi bi-chat-dots me-1"></i>Chat
+                  </a>
+                  <a href="/agent/{{ agent_slug }}" class="btn btn-outline-secondary btn-sm">
+                    <i class="bi bi-gear me-1"></i>Configure
+                  </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+<a href="{{ url_for('home') }}" class="btn btn-secondary mt-3">Back to Home</a>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Render avatars on workspace cards
+  if (window.CamaradAvatars) {
+    document.querySelectorAll('.workspace-agent-avatar').forEach(function(el) {
+      var slug = el.getAttribute('data-slug');
+      var profile = window.CamaradAvatars.getProfile(slug);
+      if (profile) {
+        el.style.setProperty('--avatar-accent', profile.accentColor);
+        el.parentElement.closest('.card').style.borderTop = '2px solid ' + profile.accentColor;
+      }
+      window.CamaradAvatars.render(el, slug, { size: 64, expression: 'smile', animate: true });
+    });
+  }
+</script>
+{% endblock %}

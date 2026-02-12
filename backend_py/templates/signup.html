@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  {% if google_site_verification %}
+  <meta name="google-site-verification" content="{{ google_site_verification }}">
+  {% endif %}
+  {% if gtm_container_id %}
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','{{ gtm_container_id }}');</script>
+  <!-- End Google Tag Manager -->
+  {% endif %}
+  <title>Sign Up - Camarad.AI</title>
+  <link rel="icon" type="image/x-icon" href="/static/brand/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/brand/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/brand/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/brand/apple-touch-icon.png">
+  <link rel="manifest" href="/static/brand/site.webmanifest">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <style>
+    :root {
+      --bg: #090d14;
+      --panel: #111827;
+      --border: #263349;
+      --text: #dbe3f0;
+      --muted: #8f9bb3;
+      --accent: #39a0ff;
+      --accent-2: #1c7ed6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      color: var(--text);
+      font-family: "Segoe UI", "SF Pro Text", "Helvetica Neue", sans-serif;
+      background:
+        radial-gradient(1000px 520px at 10% -180px, rgba(57, 160, 255, 0.18), transparent 70%),
+        radial-gradient(900px 500px at 110% 120%, rgba(28, 126, 214, 0.22), transparent 70%),
+        linear-gradient(180deg, #090d14 0%, #0b111b 100%);
+      padding: 1rem;
+    }
+    .card-shell {
+      width: min(520px, 100%);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: rgba(17, 24, 39, 0.92);
+      box-shadow: 0 28px 70px rgba(0, 0, 0, 0.45);
+      padding: 1.4rem;
+    }
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      color: #dfe9ff;
+      text-decoration: none;
+      margin-bottom: 0.8rem;
+    }
+    .logo-badge {
+      width: 34px;
+      height: 34px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: linear-gradient(145deg, #0f1a2d, #0c1422);
+    }
+    .logo-badge img {
+      width: 22px;
+      height: 22px;
+      object-fit: contain;
+    }
+    h1 {
+      margin: 0.3rem 0 0.4rem;
+      font-size: clamp(1.35rem, 3vw, 1.8rem);
+      letter-spacing: -0.02em;
+    }
+    p { margin: 0; color: var(--muted); }
+    .auth-btn {
+      margin-top: 1.2rem;
+      width: 100%;
+      border: 1px solid #2f4668;
+      border-radius: 12px;
+      background: linear-gradient(180deg, var(--accent), var(--accent-2));
+      color: #fff;
+      font-weight: 600;
+      padding: 0.82rem 1rem;
+    }
+    .auth-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+    .status {
+      margin-top: 0.85rem;
+      min-height: 22px;
+      color: #9cc8ff;
+      font-size: 0.9rem;
+    }
+    .meta {
+      margin-top: 0.9rem;
+      color: #95a4bb;
+      font-size: 0.82rem;
+    }
+  </style>
+</head>
+<body>
+  {% if gtm_container_id %}
+  <!-- Google Tag Manager (noscript) -->
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ gtm_container_id }}"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+  <!-- End Google Tag Manager (noscript) -->
+  {% endif %}
+  <section class="card-shell">
+    <a href="/landing" class="logo" aria-label="Camarad.AI landing">
+      <span class="logo-badge"><img src="/static/brand/camarad-logo-64.png" alt="Camarad logo"></span>
+      <span>Camarad.AI</span>
+    </a>
+    <h1>Create your real account</h1>
+    <p>Sign in with Google via Coolbits OAuth. Your Camarad user is provisioned automatically and onboarding starts right after signup.</p>
+    <button id="google-auth-btn" class="auth-btn" type="button">
+      <i class="bi bi-google me-2"></i>
+      Continue with Google
+    </button>
+    <div class="status" id="auth-status"></div>
+    <div class="meta">
+      Secure OAuth handled by Coolbits.
+    </div>
+  </section>
+
+  <script>
+    (function () {
+      var oauthStartUrl = {{ oauth_start_url|tojson }};
+      var nextPath = {{ next_path|tojson }};
+      var statusEl = document.getElementById("auth-status");
+      var btn = document.getElementById("google-auth-btn");
+
+      function setStatus(msg, isError) {
+        statusEl.textContent = msg || "";
+        statusEl.style.color = isError ? "#ff9ba5" : "#9cc8ff";
+      }
+
+      function openGooglePopup() {
+        var width = 560;
+        var height = 700;
+        var left = Math.max(0, (window.screen.width - width) / 2);
+        var top = Math.max(0, (window.screen.height - height) / 2);
+        var base = String(oauthStartUrl || "/api/auth/google/start");
+        var sep = base.indexOf("?") >= 0 ? "&" : "?";
+        var url = base + sep + "returnTo=" + encodeURIComponent(nextPath || "/app");
+        var popup = window.open(
+          url,
+          "camarad_google_oauth",
+          "width=" + width + ",height=" + height + ",left=" + left + ",top=" + top + ",resizable=yes,scrollbars=yes"
+        );
+        if (!popup) {
+          setStatus("Popup blocked. Allow popups and try again.", true);
+          btn.disabled = false;
+          return;
+        }
+        setStatus("Waiting for Google OAuth...");
+      }
+
+      async function completeSession(token) {
+        const resp = await fetch("/api/auth/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ token: token, next: nextPath || "/app" }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data || !data.success) {
+          throw new Error((data && (data.error || data.detail)) || "auth_session_failed");
+        }
+        window.location.href = data.next || "/app";
+      }
+
+      window.addEventListener("message", async function (event) {
+        var data = event && event.data;
+        if (!data || data.source !== "coolbits-oauth") return;
+        if (data.error) {
+          setStatus("OAuth failed: " + String(data.error), true);
+          btn.disabled = false;
+          return;
+        }
+        var payload = data.payload || {};
+        if (!payload.token) {
+          setStatus("OAuth completed but token is missing.", true);
+          btn.disabled = false;
+          return;
+        }
+        setStatus("Google account verified. Creating session...");
+        try {
+          await completeSession(payload.token);
+        } catch (err) {
+          setStatus("Session creation failed: " + String(err.message || err), true);
+          btn.disabled = false;
+        }
+      });
+
+      btn.addEventListener("click", function () {
+        btn.disabled = true;
+        openGooglePopup();
+      });
+    })();
+  </script>
+</body>
+</html>

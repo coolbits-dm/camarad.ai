@@ -1,0 +1,12 @@
+{
+  "description": "Index simplu cu nume fișier + sursă + temă pentru documentele din knowledge_base",
+  "files": [
+    {
+      "filename": "example.pdf",
+      "source": "https://example.com",
+      "theme": "Business Strategy",
+      "added_at": "2026-02-04T00:00:00Z",
+      "status": "raw"
+    }
+  ]
+}

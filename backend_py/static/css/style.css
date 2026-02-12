@@ -1,0 +1,16 @@
+/* Custom styles */
+body {
+    min-height: 100vh;
+}
+
+.card {
+    transition: transform 0.2s;
+}
+
+.card:hover {
+    transform: scale(1.05);
+}
+
+#chat-history {
+    border-radius: 10px;
+}

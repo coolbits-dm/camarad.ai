@@ -25,3 +25,41 @@ yarn-error.log*
 .vscode/
 *.swp
 
+
+# secrets / local artifacts
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+.ssh*
+
+# Python runtime artifacts
+backend_py/.venv/
+backend_py/venv/
+backend_py/__pycache__/
+backend_py/*.pyc
+backend_py/logs/
+backend_py/*.log
+backend_py/camarad.db
+backend_py/camarad.db.*
+backend_py/*.tar.gz
+backend_py/connectors_api_docs.db
+
+# Global runtime artifacts
+__pycache__/
+*.pyc
+*.db
+*.db.*
+*.log
+logs/
+backend_py/backups/
+backend_py/*.sqlite.gz
+backend_py/cf_*_backup_*.json
+backend_py/*.cpython-*.py
+backend_py/*.db
+backend_py/*.db.*
+backend_py/camarad.db-shm
+backend_py/camarad.db-wal
+backend_py/camarad.db-journal
+backend_py/.backup.lock

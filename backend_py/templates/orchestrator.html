@@ -1,0 +1,3680 @@
+{% extends "base.html" %}
+
+{% block title %}Orchestrator{% endblock %}
+
+{% block content %}
+<style>
+  /* Override base main padding for orchestrator - needs full height */
+  .orchestrator-wrapper {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 0px);
+    margin: -1.5rem; /* compensate base.html main p-4 */
+  }
+  .orch-header {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 12px 20px;
+    display: grid;
+    grid-template-columns: 1fr minmax(280px, auto) auto;
+    gap: 12px;
+    align-items: center;
+    flex-shrink: 0;
+    z-index: 50;
+    position: relative;
+    overflow: visible; /* allow dropdown menus to paint above the canvas */
+  }
+  .orch-header h4 { margin: 0; font-size: 1.1rem; }
+  .orch-controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+  }
+  #orch-user-slot { justify-self: end; }
+  .orch-user-strip .user-chip-btn {
+    border-color: #2b3440 !important;
+    padding: 0.25rem 0.5rem !important;
+    opacity: 0.92;
+  }
+  .orch-user-strip .user-chip-ct { font-size: 0.72rem; }
+  .orch-user-strip .user-chip-name { font-size: 0.82rem; }
+  .orch-user-strip .dropdown-menu { z-index: 2000; }
+  @media (max-width: 900px) {
+    .orch-header { grid-template-columns: 1fr auto; }
+    #orch-user-slot { grid-column: 2; }
+    .orch-controls { grid-column: 1 / -1; justify-content: flex-start; }
+  }
+  #canvas {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background-color: #0d1117;
+    cursor: grab;
+  }
+  #canvas.grid-dots {
+    background-image: radial-gradient(circle at 1px 1px, rgba(139, 148, 158, 0.28) 1px, transparent 0);
+    background-size: 28px 28px;
+  }
+  #canvas.grid-lines {
+    background-image:
+      linear-gradient(rgba(139, 148, 158, 0.18) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(139, 148, 158, 0.18) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  #canvas.grid-off {
+    background-image: none;
+  }
+  #canvas.grabbing { cursor: grabbing; }
+  #canvas-layer {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    transform-origin: 0 0;
+  }
+  .node {
+    position: absolute;
+    min-width: 160px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 2px solid #30363d;
+    background: #21262d;
+    color: #e0e0e0;
+    cursor: grab;
+    user-select: none;
+    z-index: 10;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    touch-action: none;
+  }
+  .node:hover { border-color: #58a6ff; }
+  .node.dragging {
+    cursor: grabbing;
+    z-index: 100;
+    box-shadow: 0 4px 16px rgba(88,166,255,0.4);
+    border-color: #58a6ff;
+  }
+  .node[data-type="trigger"] { border-left: 4px solid #3fb950; }
+  .node[data-type="agent"] { border-left: 4px solid #58a6ff; }
+  .node[data-type="connector"] { border-left: 4px solid #d29922; }
+  .node[data-type="condition"] { border-left: 4px solid #bc8cff; }
+  .node[data-type="output"] { border-left: 4px solid #f85149; }
+  .node .node-title { font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  .node .node-desc { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size: 0.8rem; color: #8b949e; margin-top: 4px; }
+  .node .node-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .node .node-status-badge { font-size: 0.62rem; letter-spacing:0.2px; flex-shrink:0; }
+  .node .node-delete {
+    position: absolute; top: 4px; right: 6px;
+    background: none; border: none; color: #f85149;
+    cursor: pointer; font-size: 1rem; line-height: 1;
+    opacity: 0; transition: opacity 0.2s;
+  }
+  .node:hover .node-delete { opacity: 1; }
+  .node .connect-dot {
+    position: absolute;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #58a6ff;
+    border: 2px solid #0d1117;
+    cursor: crosshair;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .node:hover .connect-dot { opacity: 1; }
+  .node .connect-dot.out { right: -6px; top: 50%; transform: translateY(-50%); }
+  .node .connect-dot.in  { left: -6px; top: 50%; transform: translateY(-50%); }
+  .zoom-controls {
+    position: absolute;
+    bottom: 16px; right: 16px;
+    display: flex; gap: 6px;
+    z-index: 60;
+  }
+  .zoom-controls button {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    border: 1px solid #30363d;
+    background: #21262d;
+    color: #e0e0e0;
+    cursor: pointer;
+    font-size: 1.1rem;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .zoom-controls button:hover { background: #30363d; }
+  .zoom-label {
+    position: absolute;
+    bottom: 20px; right: 160px;
+    color: #484f58;
+    font-size: 0.75rem;
+    z-index: 60;
+  }
+  .connecting-hint {
+    position: absolute;
+    top: 12px; left: 50%;
+    transform: translateX(-50%);
+    background: #58a6ff;
+    color: #0d1117;
+    padding: 4px 16px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    z-index: 100;
+    display: none;
+  }
+  /* Execution animation states */
+  .node.exec-running {
+    animation: execPulse 0.6s ease-in-out infinite;
+    border-color: #58a6ff !important;
+    box-shadow: 0 0 16px rgba(88,166,255,0.5);
+  }
+  .node.exec-ok {
+    border-color: #3fb950 !important;
+    box-shadow: 0 0 12px rgba(63,185,80,0.4);
+  }
+  .node.exec-warn {
+    border-color: #d29922 !important;
+    box-shadow: 0 0 12px rgba(210,153,34,0.45);
+  }
+  .node.exec-error {
+    border-color: #f85149 !important;
+    box-shadow: 0 0 12px rgba(248,81,73,0.4);
+  }
+  @keyframes execPulse {
+    0%, 100% { box-shadow: 0 0 8px rgba(88,166,255,0.3); }
+    50% { box-shadow: 0 0 20px rgba(88,166,255,0.7); }
+  }
+  .tpl-card {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 250px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .tpl-card:hover {
+    border-color: #58a6ff;
+    box-shadow: 0 2px 12px rgba(88,166,255,0.2);
+  }
+  .tpl-thumb {
+    width: 100%;
+    height: 120px;
+    object-fit: cover;
+    display: block;
+    border-bottom: 1px solid #30363d;
+    background: #0d1117;
+  }
+  .tpl-body {
+    padding: 12px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    height: 100%;
+  }
+  .tpl-desc {
+    color: #8b949e;
+    font-size: 0.76rem;
+    line-height: 1.35;
+    min-height: 38px;
+  }
+  .tpl-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .exec-step { padding: 10px 11px; border-radius: 8px; margin-bottom: 8px; font-size: 0.81rem; border: 1px solid #30363d; background: #11161d; }
+  .exec-step.ok { border-left: 3px solid #3fb950; }
+  .exec-step.warning { border-left: 3px solid #d29922; background: rgba(210,153,34,0.08); }
+  .exec-step.error { border-left: 3px solid #f85149; background: rgba(248,81,73,0.11); }
+  .exec-step .trace-meta { color: #8b949e; font-size: 0.72rem; }
+  .exec-step .trace-io { margin-top: 4px; font-size: 0.75rem; line-height: 1.35; color: #c9d1d9; }
+  .exec-step .trace-io .key { color: #8b949e; margin-right: 4px; }
+  .exec-step .trace-fail { margin-top: 5px; font-size: 0.74rem; color: #ff7b72; }
+  .exec-summary {
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    background: #11161d;
+    padding: 10px 11px;
+    margin-bottom: 10px;
+  }
+  .exec-summary .chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .exec-empty { color:#8b949e; text-align:center; padding:16px 8px; }
+  .exec-step .trace-progress {
+    margin-top: 7px;
+    height: 6px;
+    border-radius: 999px;
+    overflow: hidden;
+    border: 1px solid #30363d;
+    background: #0d1117;
+  }
+  .exec-step .trace-progress .bar { display:block; height:100%; }
+  .exec-step .trace-progress .bar.success { background:#3fb950; }
+  .exec-step .trace-progress .bar.warning { background:#d29922; }
+  .exec-step .trace-progress .bar.error { background:#f85149; }
+  .trace-expand-btn {
+    background: transparent;
+    border: 0;
+    color: #58a6ff;
+    font-size: 0.72rem;
+    padding: 0;
+    margin-left: 6px;
+    text-decoration: underline;
+  }
+  .trace-expand-btn:hover { color: #79c0ff; }
+  .active-context-widget {
+    position: absolute;
+    bottom: 72px;
+    right: 16px;
+    width: 360px;
+    max-height: 320px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    z-index: 79;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    overflow: hidden;
+  }
+  .active-context-widget.collapsed .active-context-body {
+    display: none;
+  }
+  .active-context-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid #30363d;
+    background: #1b2330;
+  }
+  .active-context-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #c9d1d9;
+    font-size: 0.84rem;
+    font-weight: 600;
+  }
+  .active-context-body {
+    padding: 10px 12px;
+    overflow-y: auto;
+    max-height: 260px;
+  }
+  .ctx-alert-item {
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 8px 9px;
+    margin-bottom: 8px;
+    background: #11161d;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .ctx-alert-item.selected {
+    border-color: #58a6ff;
+    background: #0f1f33;
+  }
+  .ctx-alert-title {
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .ctx-alert-detail {
+    color: #8b949e;
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+  .ctx-alert-title.level-high { color: #f85149; }
+  .ctx-alert-title.level-warning { color: #d29922; }
+  .ctx-alert-title.level-info { color: #58a6ff; }
+  .ctx-alert-title.level-ok { color: #3fb950; }
+  .active-context-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .active-context-selected {
+    font-size: 0.72rem;
+    color: #8b949e;
+    margin-bottom: 8px;
+  }
+  .ctx-alert-meta {
+    color: #8b949e;
+    font-size: 0.68rem;
+    margin-top: 3px;
+  }
+  .active-context-widget.is-hidden {
+    display: none;
+  }
+  .active-context-launcher {
+    position: absolute;
+    right: 16px;
+    bottom: 64px;
+    width: 42px;
+    height: 42px;
+    border-radius: 999px;
+    border: 1px solid #30363d;
+    background: #161b22;
+    color: #58a6ff;
+    z-index: 82;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+  }
+  .active-context-launcher:hover {
+    background: #1f2937;
+    color: #79c0ff;
+  }
+  .active-context-launcher.active {
+    color: #8b949e;
+    border-color: #484f58;
+  }
+  #routerPanel {
+    left: calc(16px + 1.5rem) !important;
+    max-width: min(420px, calc(100vw - 320px));
+  }
+  @media (max-width: 992px) {
+    #routerPanel {
+      left: 12px !important;
+      right: 12px;
+      width: auto !important;
+      max-width: none;
+      bottom: 12px !important;
+    }
+  }
+  @media (max-width: 900px) {
+    .active-context-widget {
+      width: calc(100% - 24px);
+      right: 12px;
+      bottom: 64px;
+      max-height: 290px;
+    }
+    .active-context-launcher { right: 12px; bottom: 56px; }
+    .zoom-label { display: none; }
+  }
+</style>
+
+<div class="orchestrator-wrapper">
+  <!-- Header -->
+  <div class="orch-header">
+    <div class="orch-left">
+      <h4><i class="bi bi-diagram-3 me-2"></i>Orchestrator</h4>
+      <small class="text-muted d-block active-client-label" style="font-size:0.72rem;">Active Client: None</small>
+    </div>
+    <div class="orch-controls" aria-label="Orchestrator toolbar">
+      <button class="btn btn-sm btn-outline-success" onclick="addNode('trigger')"><i class="bi bi-lightning"></i> Trigger</button>
+      <div class="dropdown d-inline-block">
+        <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" id="agentDropdownBtn">
+          <i class="bi bi-robot"></i> Agent
+        </button>
+        <ul class="dropdown-menu bg-dark border-secondary" id="agentDropdown">
+          <li><a class="dropdown-item text-light" href="#" onclick="addNode('agent')">Generic Agent</a></li>
+        </ul>
+      </div>
+      <div class="dropdown d-inline-block">
+        <button class="btn btn-sm btn-outline-warning dropdown-toggle" type="button" data-bs-toggle="dropdown" id="connectorDropdownBtn">
+          <i class="bi bi-plug"></i> Connector
+        </button>
+        <ul class="dropdown-menu bg-dark border-secondary" id="connectorDropdown" style="max-height:300px;overflow-y:auto;">
+          <li><a class="dropdown-item text-light" href="#" onclick="addNode('connector')">Generic Connector</a></li>
+        </ul>
+      </div>
+      <button class="btn btn-sm btn-outline-info" onclick="addNode('condition')"><i class="bi bi-signpost-split"></i> Condition</button>
+      <button class="btn btn-sm btn-outline-danger" onclick="addNode('output')"><i class="bi bi-box-arrow-right"></i> Output</button>
+      <div class="vr mx-1" style="border-color:#30363d;"></div>
+      <button class="btn btn-sm btn-outline-success" onclick="saveFlow()" title="Save flow"><i class="bi bi-save"></i> Save</button>
+
+      <div class="dropdown d-inline-block">
+        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" data-bs-display="static" aria-expanded="false">
+          <i class="bi bi-sliders"></i> Flow
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end bg-dark border-secondary shadow">
+          <li><a class="dropdown-item text-light" href="#" onclick="openLoadModal(); return false;"><i class="bi bi-folder2-open me-2"></i>Load</a></li>
+          <li><a class="dropdown-item text-light" href="#" onclick="exportFlow(); return false;"><i class="bi bi-download me-2"></i>Export</a></li>
+          <li><a class="dropdown-item text-light" href="#" onclick="openHistoryModal(); return false;"><i class="bi bi-clock-history me-2"></i>History</a></li>
+          <li><hr class="dropdown-divider border-secondary"></li>
+          <li><a class="dropdown-item text-warning" href="#" onclick="clearFlow(); return false;"><i class="bi bi-trash me-2"></i>Clear</a></li>
+        </ul>
+      </div>
+
+      <div class="dropdown d-inline-block">
+        <button class="btn btn-sm btn-outline-info dropdown-toggle" type="button" data-bs-toggle="dropdown" data-bs-display="static" aria-expanded="false">
+          <i class="bi bi-layout-text-sidebar-reverse"></i> Templates
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end bg-dark border-secondary shadow">
+          <li><a class="dropdown-item text-light" href="#" onclick="openSaveTemplateModal(); return false;"><i class="bi bi-bookmark-plus me-2"></i>Save as Template</a></li>
+          <li><a class="dropdown-item text-light" href="#" onclick="openTemplatesModal(); return false;"><i class="bi bi-collection me-2"></i>Open Gallery</a></li>
+        </ul>
+      </div>
+
+      <button class="btn btn-sm btn-warning" onclick="runFlow()" title="Run flow"><i class="bi bi-play-fill"></i> Run</button>
+      <div class="vr mx-1" style="border-color:#30363d;"></div>
+      <button class="btn btn-sm btn-outline-primary" onclick="toggleRouterPanel()"><i class="bi bi-signpost-2"></i> Route</button>
+      <div class="vr mx-1" style="border-color:#30363d;"></div>
+      <button class="btn btn-sm btn-outline-secondary" id="snapToggleBtn" onclick="toggleSnap()" title="Snap to grid (40px)"><i class="bi bi-grid-3x3"></i> Snap</button>
+      <button class="btn btn-sm btn-outline-secondary" id="gridStyleBtn" onclick="cycleGridStyle()" title="Grid style"><i class="bi bi-grid"></i></button>
+      <span class="badge bg-secondary ms-1" id="nodeCountBadge" title="Nodes / Connections">0 / 0</span>
+    </div>
+    <div id="orch-user-slot" aria-label="User menu slot"></div>
+  </div>
+
+  <script>
+    // Move the global user chip into the orchestrator header so it never gets covered by the toolbar.
+    (function () {
+      var strip = document.getElementById('global-user-strip');
+      var slot = document.getElementById('orch-user-slot');
+      if (!strip || !slot) return;
+      strip.classList.add('orch-user-strip');
+      slot.appendChild(strip);
+    })();
+  </script>
+
+  <!-- Canvas -->
+  <div id="canvas">
+    <div id="canvas-layer"></div>
+    <div class="connecting-hint" id="connect-hint">Click target node to connect (ESC to cancel)</div>
+    <div class="zoom-controls">
+      <button onclick="zoomIn()" title="Zoom In"><i class="bi bi-plus"></i></button>
+      <button onclick="zoomOut()" title="Zoom Out"><i class="bi bi-dash"></i></button>
+      <button onclick="resetView()" title="Reset View"><i class="bi bi-arrows-fullscreen"></i></button>
+    </div>
+    <div class="zoom-label" id="zoom-label">100%</div>
+  </div>
+
+  <!-- Load Flows Modal -->
+  <div class="modal fade" id="loadFlowsModal" tabindex="-1" aria-labelledby="loadFlowsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content bg-dark border-secondary">
+        <div class="modal-header border-secondary">
+          <h5 class="modal-title" id="loadFlowsModalLabel"><i class="bi bi-folder2-open me-2"></i>Saved Flows</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body" id="flowsModalBody">
+          <div class="text-center text-muted py-4"><i class="bi bi-hourglass-split"></i> Loading...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Templates Modal -->
+  <div class="modal fade" id="templatesModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+      <div class="modal-content bg-dark border-secondary">
+        <div class="modal-header border-secondary">
+          <h5 class="modal-title"><i class="bi bi-layout-text-sidebar-reverse me-2"></i>Flow Templates</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-2 align-items-end mb-3">
+            <div class="col-md-6">
+              <label class="form-label mb-1" for="templateCategoryFilter">Filter by Category</label>
+              <select id="templateCategoryFilter" class="form-select form-select-sm bg-dark text-light border-secondary" onchange="loadTemplates()">
+                <option value="all">All Categories</option>
+                <option value="Marketing">Marketing</option>
+                <option value="Finance">Finance</option>
+                <option value="Engineering">Engineering</option>
+                <option value="DevOps">DevOps</option>
+                <option value="SEO">SEO</option>
+                <option value="Creative">Creative</option>
+                <option value="Sales">Sales</option>
+                <option value="Social Media">Social Media</option>
+                <option value="Operations">Operations</option>
+                <option value="Personal">Personal</option>
+                <option value="Custom">Custom</option>
+              </select>
+            </div>
+            <div class="col-md-6 text-md-end">
+              <small class="text-muted" id="templatesCountLabel">Loading templates...</small>
+            </div>
+          </div>
+          <div id="templatesModalBody">
+            <div class="text-center text-muted py-4"><i class="bi bi-hourglass-split"></i> Loading templates...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- Save Template Modal -->
+  <div class="modal fade" id="saveTemplateModal" tabindex="-1" aria-labelledby="saveTemplateModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content bg-dark border-secondary text-light">
+        <div class="modal-header border-secondary">
+          <h5 class="modal-title" id="saveTemplateModalLabel"><i class="bi bi-bookmark-plus me-2"></i>Save Flow as Template</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label for="templateNameInput" class="form-label">Template Name</label>
+            <input id="templateNameInput" type="text" class="form-control bg-dark text-light border-secondary" placeholder="Daily PPC Review">
+          </div>
+          <div class="mb-3">
+            <label for="templateCategoryInput" class="form-label">Category</label>
+            <select id="templateCategoryInput" class="form-select bg-dark text-light border-secondary" onchange="toggleTemplateCategoryCustom()">
+              <option value="Marketing">Marketing</option>
+              <option value="Finance">Finance</option>
+              <option value="DevOps">DevOps</option>
+              <option value="SEO">SEO</option>
+              <option value="Creative">Creative</option>
+              <option value="Operations">Operations</option>
+              <option value="Custom">Custom</option>
+            </select>
+          </div>
+          <div class="mb-3" id="templateCategoryCustomWrap" style="display:none;">
+            <label for="templateCategoryCustomInput" class="form-label">Custom Category</label>
+            <input id="templateCategoryCustomInput" type="text" class="form-control bg-dark text-light border-secondary" placeholder="e.g. Sales Ops">
+          </div>
+          <div class="mb-0">
+            <label for="templateDescriptionInput" class="form-label">Description</label>
+            <textarea id="templateDescriptionInput" class="form-control bg-dark text-light border-secondary" rows="3" placeholder="Daily performance review with ROAS alerts"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer border-secondary">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" onclick="saveAsTemplate()"><i class="bi bi-check2 me-1"></i>Save Template</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- History Modal -->
+  <div class="modal fade" id="historyModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content bg-dark border-secondary">
+        <div class="modal-header border-secondary">
+          <h5 class="modal-title"><i class="bi bi-clock-history me-2"></i>Execution History</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body" id="historyModalBody">
+          <div class="text-center text-muted py-4"><i class="bi bi-hourglass-split"></i> Loading...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- Run Trace Panel (slides from right) -->
+  <div id="execResultsPanel" style="display:none;position:fixed;top:0;right:0;width:430px;max-width:92vw;height:100vh;background:#161b22;border-left:2px solid #30363d;z-index:120;overflow-y:auto;padding:16px 14px 14px;">
+    <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
+      <h6 class="mb-0 text-light"><i class="bi bi-terminal me-2"></i>Run Trace</h6>
+      <div class="d-flex gap-2">
+        <button class="btn btn-sm btn-outline-secondary" onclick="copyExecTrace()" title="Copy JSON trace"><i class="bi bi-clipboard me-1"></i>Copy JSON</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="exportExecTrace()" title="Export trace CSV"><i class="bi bi-file-earmark-spreadsheet me-1"></i>Export CSV</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="closeExecPanel()"><i class="bi bi-x-lg"></i></button>
+      </div>
+    </div>
+    <div id="execResultsBody"></div>
+  </div>
+
+  <!-- Smart Router Panel (bottom-left) -->
+  <div id="routerPanel" style="display:none;position:absolute;bottom:16px;left:16px;width:380px;max-height:300px;background:#161b22;border:1px solid #30363d;border-radius:10px;z-index:80;overflow-y:auto;padding:16px;box-shadow:0 4px 16px rgba(0,0,0,0.5);">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <h6 class="mb-0 text-light"><i class="bi bi-signpost-2 me-2"></i>Smart Router</h6>
+      <button class="btn btn-sm btn-outline-secondary py-0" onclick="document.getElementById('routerPanel').style.display='none'"><i class="bi bi-x"></i></button>
+    </div>
+    <div class="input-group input-group-sm mb-2">
+      <input type="text" class="form-control bg-dark text-light border-secondary" id="routerInput" placeholder="Describe your task..." />
+      <button class="btn btn-primary" onclick="runSmartRoute()"><i class="bi bi-search"></i></button>
+    </div>
+    <div id="routerResults" class="small"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/leader-line@1.0.7/leader-line.min.js"></script>
+<script>
+(function() {
+  'use strict';
+
+  const canvas = document.getElementById('canvas');
+  const layer = document.getElementById('canvas-layer');
+  const connectHint = document.getElementById('connect-hint');
+  const zoomLabel = document.getElementById('zoom-label');
+
+  let lines = [];
+  let scale = 1;
+  let panX = 0, panY = 0;
+  let isPanning = false;
+  let panStartX = 0, panStartY = 0;
+  let panPointerStartX = 0, panPointerStartY = 0;
+  let panMoved = false;
+  let nodeCounter = 0;
+  let connectionCounter = 0;
+  let connectingFrom = null;
+  let snapEnabled = false;
+  const SNAP_SIZE = 40;
+  let gridStyle = 'dots'; // 'dots' | 'lines' | 'off'
+  let agentsCatalog = [];
+  let connectorsCatalog = [];
+  let templatesCache = [];
+  let activeFlowId = null;
+  const ACTIVE_CONTEXT_QUEUE_KEY = 'camarad_active_context_flow_add';
+  let activeContextAlerts = [];
+  let activeContextSelected = 0;
+  let lastExecutionSummary = null;
+  let lastRunTrace = [];
+  let lastRunRawResult = null;
+  let execPlaybackTimers = [];
+  let traceOutputCache = {};
+  let traceOutputExpanded = {};
+  const agentBySlug = {};
+  const WORKSPACE_ORDER = ['Personal', 'Business', 'Agency', 'Development', 'Other'];
+  const LIVE_CONTEXT_SEED = [
+    {
+      level: 'ok',
+      title: 'Campaign pacing healthy',
+      message: 'Campaign Summer Sale RO: spend $89 / $150 daily - pacing OK',
+      minutes: 2,
+      agentSlug: 'cmo-growth',
+      add: { type: 'connector', slug: 'google-ads', name: 'Google Ads', status: 'Connected' }
+    },
+    {
+      level: 'warning',
+      title: 'ROAS under threshold',
+      message: 'ROAS dropped below 3x on Brand Awareness - alert CMO',
+      minutes: 15,
+      agentSlug: 'cmo-growth',
+      add: { type: 'condition', name: 'ROAS < 3x Guardrail' }
+    },
+    {
+      level: 'info',
+      title: 'Social sentiment signal',
+      message: 'New comment on IG post - positive sentiment',
+      minutes: 45,
+      agentSlug: 'social-media',
+      add: { type: 'agent', slug: 'social-media', name: 'Social Manager', status: 'Active', workspace_slug: 'agency' }
+    }
+  ];
+
+  function getStatusBadgeClass(status) {
+    var s = (status || '').toLowerCase();
+    if (!s) return 'bg-secondary';
+    if (s === 'active' || s === 'connected' || s === 'live') return 'bg-success';
+    if (s === 'error' || s === 'failed') return 'bg-danger';
+    if (s === 'ready' || s === 'pending' || s === 'disconnected') return 'bg-warning text-dark';
+    return 'bg-secondary';
+  }
+
+  function isConnectedStatus(status) {
+    var s = (status || '').toLowerCase();
+    return s === 'connected' || s === 'live' || s === 'active';
+  }
+
+  function workspaceToSlug(name) {
+    return String(name || 'other').toLowerCase().trim().replace(/\s+/g, '-');
+  }
+
+  // --- Snap / Grid helpers ---
+  window.toggleSnap = function() {
+    snapEnabled = !snapEnabled;
+    var btn = document.getElementById('snapToggleBtn');
+    btn.classList.toggle('active', snapEnabled);
+    btn.classList.toggle('btn-outline-secondary', !snapEnabled);
+    btn.classList.toggle('btn-secondary', snapEnabled);
+    if (snapEnabled) {
+      layer.querySelectorAll('.node').forEach(function(n) {
+        n.style.left = Math.round((parseFloat(n.style.left) || 0) / SNAP_SIZE) * SNAP_SIZE + 'px';
+        n.style.top = Math.round((parseFloat(n.style.top) || 0) / SNAP_SIZE) * SNAP_SIZE + 'px';
+      });
+      updateLines();
+      updateNodeCount();
+    }
+  };
+
+  window.cycleGridStyle = function() {
+    var styles = ['dots', 'lines', 'off'];
+    var idx = (styles.indexOf(gridStyle) + 1) % styles.length;
+    gridStyle = styles[idx];
+    applyGridStyle();
+  };
+
+  function applyGridStyle() {
+    var btn = document.getElementById('gridStyleBtn');
+    canvas.classList.remove('grid-dots', 'grid-lines', 'grid-off');
+    canvas.classList.add('grid-' + gridStyle);
+
+    if (gridStyle === 'dots') {
+      btn.innerHTML = '<i class="bi bi-grid"></i>';
+      btn.title = 'Grid: dots';
+    } else if (gridStyle === 'lines') {
+      btn.innerHTML = '<i class="bi bi-grid-3x3-gap"></i>';
+      btn.title = 'Grid: lines';
+    } else {
+      btn.innerHTML = '<i class="bi bi-grid-fill"></i>';
+      btn.title = 'Grid: off';
+    }
+  }
+
+  applyGridStyle();
+
+  function updateNodeCount() {
+    var nc = layer.querySelectorAll('.node').length;
+    var lc = lines.length;
+    document.getElementById('nodeCountBadge').textContent = nc + ' / ' + lc;
+    refreshActiveContext();
+  }
+
+  // --- Pan & Zoom (vanilla, no interact.js conflict) ---
+
+  canvas.addEventListener('mousedown', function(e) {
+    // Only pan when clicking on canvas background or layer, not on nodes
+    if (e.target === canvas || e.target === layer) {
+      isPanning = true;
+      panMoved = false;
+      panPointerStartX = e.clientX;
+      panPointerStartY = e.clientY;
+      panStartX = e.clientX - panX;
+      panStartY = e.clientY - panY;
+      canvas.classList.add('grabbing');
+      e.preventDefault();
+    }
+  });
+
+  window.addEventListener('mousemove', function(e) {
+    if (!isPanning) return;
+    if (Math.abs(e.clientX - panPointerStartX) > 3 || Math.abs(e.clientY - panPointerStartY) > 3) {
+      panMoved = true;
+    }
+    panX = e.clientX - panStartX;
+    panY = e.clientY - panStartY;
+    applyTransform();
+  });
+
+  window.addEventListener('mouseup', function() {
+    if (isPanning) {
+      isPanning = false;
+      canvas.classList.remove('grabbing');
+    }
+  });
+
+  canvas.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const oldScale = scale;
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    scale = Math.max(0.2, Math.min(3, scale * delta));
+
+    // Zoom toward mouse position
+    panX = mouseX - (mouseX - panX) * (scale / oldScale);
+    panY = mouseY - (mouseY - panY) * (scale / oldScale);
+
+    applyTransform();
+  }, { passive: false });
+
+  layer.addEventListener('click', function(e) {
+    if (e.target !== layer) return;
+    if (panMoved) {
+      panMoved = false;
+      return;
+    }
+    if (connectingFrom) {
+      cancelConnection();
+      return;
+    }
+    if (typeof window.setActiveContextSelection === 'function') {
+      window.setActiveContextSelection({ kind: 'canvas' });
+    }
+  });
+
+  function applyTransform() {
+    layer.style.transform = 'translate(' + panX + 'px, ' + panY + 'px) scale(' + scale + ')';
+    zoomLabel.textContent = Math.round(scale * 100) + '%';
+    updateLines();
+  }
+
+  window.zoomIn = function() {
+    scale = Math.min(3, scale * 1.2);
+    applyTransform();
+  };
+  window.zoomOut = function() {
+    scale = Math.max(0.2, scale / 1.2);
+    applyTransform();
+  };
+  window.resetView = function() {
+    scale = 1; panX = 0; panY = 0;
+    applyTransform();
+  };
+
+  // --- Nodes ---
+
+  function getStaggeredPosition() {
+    var cols = 3;
+    var idx = nodeCounter;
+    var col = idx % cols;
+    var row = Math.floor(idx / cols);
+    return {
+      x: 60 + col * 220,
+      y: 60 + row * 140
+    };
+  }
+
+  window.addNode = function(type, slug, name, status, workspaceSlug) {
+    var pos = getStaggeredPosition();
+    nodeCounter++;
+
+    var node = document.createElement('div');
+    node.className = 'node';
+    node.dataset.type = type;
+    node.dataset.slug = slug || '';
+    node.dataset.status = status || '';
+    node.dataset.workspace = workspaceSlug || '';
+    node.dataset.id = 'node-' + nodeCounter;
+    node.id = 'node-' + nodeCounter;
+    node.style.left = pos.x + 'px';
+    node.style.top = pos.y + 'px';
+
+    var typeIcons = {
+      trigger: 'bi-lightning',
+      agent: 'bi-robot',
+      connector: 'bi-plug',
+      condition: 'bi-signpost-split',
+      output: 'bi-box-arrow-right'
+    };
+
+    var displayName = name || slug || type;
+    var statusText = status || '';
+
+    if (type === 'trigger') {
+      node.dataset.triggerType = 'incoming_message';
+      node.dataset.triggerDescription = displayName || 'New incoming message';
+      node.dataset.triggerPriority = 'p2';
+      node.dataset.triggerEnabled = '1';
+    } else if (type === 'condition') {
+      node.dataset.conditionMetric = 'ROAS';
+      node.dataset.conditionOperator = '>';
+      node.dataset.conditionValue = '3.0';
+      node.dataset.conditionThenLabel = 'Yes';
+      node.dataset.conditionElseLabel = 'No';
+      if (!name && !slug) {
+        displayName = 'ROAS > 3.0';
+      }
+    } else if (type === 'output') {
+      node.dataset.outputFormat = 'text';
+      node.dataset.outputTemplate = 'Here is your result: {{last_agent_response}}';
+      node.dataset.outputDestination = 'chat';
+      if (!name && !slug) {
+        displayName = 'Chat response (text)';
+      }
+    }
+
+    var statusBadge = statusText
+      ? '<span class="badge ' + getStatusBadgeClass(statusText) + ' node-status-badge">' + escHtml(statusText) + '</span>'
+      : '';
+
+    node.innerHTML =
+      '<div class="node-title"><i class="bi ' + (typeIcons[type] || 'bi-circle') + ' me-1"></i>' + escHtml(type) + '</div>' +
+      '<div class="node-desc"><span class="node-label">' + escHtml(displayName) + '</span>' + statusBadge + '</div>' +
+      '<button class="node-delete" onclick="deleteNode(this.parentElement)" title="Delete">&times;</button>' +
+      '<div class="connect-dot out" data-dir="out" title="Drag to connect"></div>' +
+      '<div class="connect-dot in" data-dir="in" title="Drop connection here"></div>';
+
+    layer.appendChild(node);
+    initNodeDrag(node);
+    initNodeConnect(node);
+
+    node.addEventListener('click', function(e) {
+      if (e.target.classList.contains('connect-dot') || e.target.classList.contains('node-delete')) {
+        return;
+      }
+
+      var lastDragAt = parseInt(node.dataset.lastDragAt || '0', 10);
+      if (lastDragAt && (Date.now() - lastDragAt) < 240) {
+        return;
+      }
+
+      if (typeof window.setActiveContextSelection === 'function') {
+        e.stopPropagation();
+        var labelEl = node.querySelector('.node-label') || node.querySelector('.node-desc');
+        var connections = lines.filter(function(line) {
+          return line._startNode === node || line._endNode === node;
+        }).length;
+
+        window.setActiveContextSelection({
+          kind: 'node',
+          nodeType: node.dataset.type || '',
+          id: node.dataset.id || '',
+          label: labelEl ? labelEl.textContent : (node.dataset.type || 'node'),
+          slug: node.dataset.slug || '',
+          status: node.dataset.status || '',
+          workspace: node.dataset.workspace || '',
+          connections: connections,
+          trigger_type: node.dataset.triggerType || '',
+          trigger_description: node.dataset.triggerDescription || '',
+          trigger_priority: node.dataset.triggerPriority || '',
+          trigger_enabled: node.dataset.triggerEnabled !== '0',
+          condition_metric: node.dataset.conditionMetric || '',
+          condition_operator: node.dataset.conditionOperator || '',
+          condition_value: node.dataset.conditionValue || '',
+          condition_then_label: node.dataset.conditionThenLabel || '',
+          condition_else_label: node.dataset.conditionElseLabel || '',
+          output_format: node.dataset.outputFormat || '',
+          output_template: node.dataset.outputTemplate || '',
+          output_destination: node.dataset.outputDestination || ''
+        });
+      }
+    });
+
+    updateLines();
+    updateNodeCount();
+  };
+
+  function applyTriggerNodeConfig(node, cfg) {
+    if (!node || !node.dataset || node.dataset.type !== 'trigger') return false;
+    cfg = cfg || {};
+
+    var triggerType = String(cfg.trigger_type || cfg.type || node.dataset.triggerType || 'incoming_message').trim() || 'incoming_message';
+    var triggerDescription = String(cfg.trigger_description || cfg.description || node.dataset.triggerDescription || '').trim();
+    if (!triggerDescription) {
+      var currentLabel = node.querySelector('.node-label') || node.querySelector('.node-desc');
+      triggerDescription = currentLabel ? String(currentLabel.textContent || '').trim() : 'Trigger';
+    }
+    var triggerPriority = String(cfg.trigger_priority || cfg.priority || node.dataset.triggerPriority || 'p2').trim() || 'p2';
+    var triggerEnabled = (cfg.trigger_enabled === false || cfg.trigger_enabled === 0 || String(cfg.trigger_enabled || '').toLowerCase() === 'false') ? '0' : '1';
+
+    node.dataset.triggerType = triggerType;
+    node.dataset.triggerDescription = triggerDescription;
+    node.dataset.triggerPriority = triggerPriority;
+    node.dataset.triggerEnabled = triggerEnabled;
+
+    var labelEl = node.querySelector('.node-label');
+    if (labelEl) {
+      labelEl.textContent = triggerDescription;
+    }
+    return true;
+  }
+
+
+  function formatConditionNodeLabel(cfg) {
+    cfg = cfg || {};
+    var metric = String(cfg.condition_metric || cfg.metric || 'ROAS').trim() || 'ROAS';
+    var op = String(cfg.condition_operator || cfg.operator || '>').trim() || '>';
+    var value = cfg.condition_value;
+    if (value === undefined || value === null || String(value).trim() === '') {
+      value = cfg.value;
+    }
+    value = (value === undefined || value === null || String(value).trim() === '') ? '3.0' : String(value).trim();
+    return metric + ' ' + op + ' ' + value;
+  }
+
+  function applyConditionNodeConfig(node, cfg) {
+    if (!node || !node.dataset || node.dataset.type !== 'condition') return false;
+    cfg = cfg || {};
+
+    var metric = String(cfg.condition_metric || cfg.metric || node.dataset.conditionMetric || 'ROAS').trim() || 'ROAS';
+    var operator = String(cfg.condition_operator || cfg.operator || node.dataset.conditionOperator || '>').trim() || '>';
+
+    var rawValue = cfg.condition_value;
+    if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+      rawValue = (cfg.value !== undefined ? cfg.value : node.dataset.conditionValue);
+    }
+    var value = (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') ? '3.0' : String(rawValue).trim();
+
+    var thenLabel = String(
+      cfg.condition_then_label
+      || cfg.then_label
+      || cfg.thenLabel
+      || node.dataset.conditionThenLabel
+      || 'Yes'
+    ).trim() || 'Yes';
+
+    var elseLabel = String(
+      cfg.condition_else_label
+      || cfg.else_label
+      || cfg.elseLabel
+      || node.dataset.conditionElseLabel
+      || 'No'
+    ).trim() || 'No';
+
+    node.dataset.conditionMetric = metric;
+    node.dataset.conditionOperator = operator;
+    node.dataset.conditionValue = value;
+    node.dataset.conditionThenLabel = thenLabel;
+    node.dataset.conditionElseLabel = elseLabel;
+
+    var labelEl = node.querySelector('.node-label');
+    if (labelEl) {
+      labelEl.textContent = formatConditionNodeLabel({
+        condition_metric: metric,
+        condition_operator: operator,
+        condition_value: value
+      });
+    }
+    return true;
+  }
+  function formatOutputNodeLabel(cfg) {
+    cfg = cfg || {};
+    var format = String(cfg.output_format || cfg.format || 'text').trim().toLowerCase() || 'text';
+    var destination = String(cfg.output_destination || cfg.destination || 'chat').trim().toLowerCase() || 'chat';
+    var destinationLabels = {
+      chat: 'Chat response',
+      email: 'Email',
+      webhook: 'Webhook',
+      slack: 'Slack'
+    };
+    var destinationLabel = destinationLabels[destination] || ('Output to ' + destination);
+    return destinationLabel + ' (' + format + ')';
+  }
+
+  function applyOutputNodeConfig(node, cfg) {
+    if (!node || !node.dataset || node.dataset.type !== 'output') return false;
+    cfg = cfg || {};
+
+    var format = String(cfg.output_format || cfg.format || node.dataset.outputFormat || 'text').trim().toLowerCase() || 'text';
+    var template = cfg.output_template;
+    if (template === undefined || template === null || String(template).trim() === '') {
+      template = (cfg.template !== undefined ? cfg.template : node.dataset.outputTemplate);
+    }
+    template = (template === undefined || template === null || String(template).trim() === '')
+      ? 'Here is your result: {{last_agent_response}}'
+      : String(template);
+
+    var destination = String(cfg.output_destination || cfg.destination || node.dataset.outputDestination || 'chat').trim().toLowerCase() || 'chat';
+
+    node.dataset.outputFormat = format;
+    node.dataset.outputTemplate = template;
+    node.dataset.outputDestination = destination;
+
+    var labelEl = node.querySelector('.node-label');
+    if (labelEl) {
+      labelEl.textContent = formatOutputNodeLabel({
+        output_format: format,
+        output_destination: destination
+      });
+    }
+    return true;
+  }
+  function initNodeDrag(node) {
+    var isDragging = false;
+    var startX, startY, origLeft, origTop;
+    var moved = false;
+
+    node.addEventListener('mousedown', function(e) {
+      // Don't drag from connect dots or delete button
+      if (e.target.classList.contains('connect-dot') || e.target.classList.contains('node-delete')) return;
+
+      isDragging = true;
+      moved = false;
+      node.classList.add('dragging');
+
+      origLeft = parseFloat(node.style.left) || 0;
+      origTop = parseFloat(node.style.top) || 0;
+      startX = e.clientX;
+      startY = e.clientY;
+
+      e.stopPropagation(); // Prevent canvas pan
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', function(e) {
+      if (!isDragging) return;
+      var dx = (e.clientX - startX) / scale;
+      var dy = (e.clientY - startY) / scale;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) moved = true;
+      node.style.left = (origLeft + dx) + 'px';
+      node.style.top = (origTop + dy) + 'px';
+      updateLines();
+    });
+
+    window.addEventListener('mouseup', function() {
+      if (isDragging) {
+        isDragging = false;
+        if (moved) {
+          node.dataset.lastDragAt = String(Date.now());
+        }
+        node.classList.remove('dragging');
+        if (snapEnabled) {
+          var gx = Math.round((parseFloat(node.style.left) || 0) / SNAP_SIZE) * SNAP_SIZE;
+          var gy = Math.round((parseFloat(node.style.top) || 0) / SNAP_SIZE) * SNAP_SIZE;
+          node.style.left = gx + 'px';
+          node.style.top = gy + 'px';
+          updateLines();
+        }
+      }
+    });
+  }
+
+  // --- Connections ---
+
+  function initNodeConnect(node) {
+    var outDot = node.querySelector('.connect-dot.out');
+
+    // Start connection from output dot
+    outDot.addEventListener('mousedown', function(e) {
+      e.stopPropagation();
+      e.preventDefault();
+      connectingFrom = node;
+      connectHint.style.display = 'block';
+    });
+
+    // Complete connection on click on target node
+    node.addEventListener('mouseup', function(e) {
+      if (connectingFrom && connectingFrom !== node) {
+        finishConnection(node);
+      }
+    });
+  }
+
+  function finishConnection(targetNode) {
+    if (!connectingFrom || !targetNode || targetNode === connectingFrom) return;
+
+    // Check for duplicate connection
+    var exists = lines.some(function(l) {
+      return l._startNode === connectingFrom && l._endNode === targetNode;
+    });
+
+    if (!exists) {
+      try {
+        var line = new LeaderLine(connectingFrom, targetNode, {
+          color: '#58a6ff',
+          size: 2,
+          path: 'fluid',
+          startSocket: 'right',
+          endSocket: 'left',
+          startPlug: 'behind',
+          endPlug: 'arrow1'
+        });
+        line._startNode = connectingFrom;
+        line._endNode = targetNode;
+        ensureConnectionMeta(line, connectingFrom, targetNode);
+        lines.push(line);
+        bindLineInspector(line);
+        updateNodeCount();
+      } catch(err) {
+        console.error('LeaderLine error:', err);
+      }
+    }
+    cancelConnection();
+    updateNodeCount();
+  }
+
+  function cancelConnection() {
+    connectingFrom = null;
+    connectHint.style.display = 'none';
+  }
+
+    function getNodeInspectorLabel(node) {
+    if (!node) return 'Node';
+    var labelEl = node.querySelector('.node-label') || node.querySelector('.node-desc');
+    if (labelEl && labelEl.textContent) return labelEl.textContent.trim();
+    return node.dataset.type || node.id || 'Node';
+  }
+
+  function normalizeConnectionDataType(value) {
+    var type = String(value || '').trim().toLowerCase();
+    if (type === 'json' || type === 'metrics' || type === 'file' || type === 'event') return type;
+    return 'text';
+  }
+
+  function normalizeConnectionStatus(value) {
+    var status = String(value || '').trim().toLowerCase();
+    if (status === 'error' || status === 'pending') return status;
+    return 'active';
+  }
+
+  function defaultConnectionDataType(fromNode, toNode) {
+    var fromType = fromNode && fromNode.dataset ? String(fromNode.dataset.type || '').toLowerCase() : '';
+    var toType = toNode && toNode.dataset ? String(toNode.dataset.type || '').toLowerCase() : '';
+
+    if (fromType === 'trigger') return 'event';
+    if (fromType === 'connector' || toType === 'connector') return 'json';
+    if (fromType === 'condition' || toType === 'condition') return 'metrics';
+    if (fromType === 'output' || toType === 'output') return 'text';
+    return 'text';
+  }
+
+  function buildDefaultConnectionPayload(fromNode, toNode, dataType) {
+    var fromLabel = getNodeInspectorLabel(fromNode);
+    var toLabel = getNodeInspectorLabel(toNode);
+    var fromType = fromNode && fromNode.dataset ? (fromNode.dataset.type || 'node') : 'node';
+    var toType = toNode && toNode.dataset ? (toNode.dataset.type || 'node') : 'node';
+    var nowIso = new Date().toISOString();
+    var type = normalizeConnectionDataType(dataType);
+
+    if (type === 'json' || type === 'metrics') {
+      return JSON.stringify({
+        from: fromLabel,
+        to: toLabel,
+        channel: fromType + '->' + toType,
+        message: 'Mock payload delivered',
+        timestamp: nowIso
+      }, null, 2);
+    }
+
+    if (type === 'event') {
+      return 'event=' + fromType + '.completed; target=' + toType + '; at=' + nowIso;
+    }
+
+    if (type === 'file') {
+      return 'file://mock/' + fromType + '-to-' + toType + '-payload.csv';
+    }
+
+    return 'Flow message from ' + fromLabel + ' to ' + toLabel + ' @ ' + nowIso;
+  }
+
+  function ensureConnectionMeta(line, fromNode, toNode) {
+    if (!line) return null;
+
+    var src = fromNode || line._startNode || null;
+    var dst = toNode || line._endNode || null;
+
+    if (!line._dataType) {
+      line._dataType = defaultConnectionDataType(src, dst);
+    }
+    line._dataType = normalizeConnectionDataType(line._dataType);
+
+    if (!line._status) {
+      line._status = 'active';
+    }
+    line._status = normalizeConnectionStatus(line._status);
+
+    if (!line._lastTransmission) {
+      line._lastTransmission = new Date().toISOString();
+    }
+
+    if (line._lastPayload === undefined || line._lastPayload === null || !String(line._lastPayload).trim()) {
+      line._lastPayload = buildDefaultConnectionPayload(src, dst, line._dataType);
+    }
+
+    return {
+      dataType: line._dataType,
+      status: line._status,
+      lastTransmission: line._lastTransmission,
+      lastPayload: String(line._lastPayload)
+    };
+  }
+
+  function serializeConnectionConfig(line) {
+    var meta = ensureConnectionMeta(line, line && line._startNode, line && line._endNode);
+    if (!meta) return null;
+    return {
+      data_type: meta.dataType,
+      status: meta.status,
+      last_transmission: meta.lastTransmission,
+      last_payload: meta.lastPayload
+    };
+  }
+
+  function findConnectionById(connectionId) {
+    if (!connectionId) return null;
+
+    return lines.find(function(line) {
+      if (!line) return false;
+      if (line._connectionId === connectionId) return true;
+      var fromId = line._startNode && line._startNode.dataset ? (line._startNode.dataset.id || line._startNode.id || '') : '';
+      var toId = line._endNode && line._endNode.dataset ? (line._endNode.dataset.id || line._endNode.id || '') : '';
+      return (fromId + '->' + toId) === connectionId;
+    }) || null;
+  }
+
+  function applyConnectionConfig(line, cfg) {
+    if (!line) return false;
+    cfg = cfg || {};
+
+    ensureConnectionMeta(line, line._startNode, line._endNode);
+
+    var dataTypeRaw = cfg.connection_data_type;
+    if (dataTypeRaw === undefined) dataTypeRaw = cfg.data_type;
+    if (dataTypeRaw !== undefined && dataTypeRaw !== null) {
+      line._dataType = normalizeConnectionDataType(dataTypeRaw);
+    }
+
+    var statusRaw = cfg.connection_status;
+    if (statusRaw === undefined) statusRaw = cfg.status;
+    if (statusRaw !== undefined && statusRaw !== null) {
+      line._status = normalizeConnectionStatus(statusRaw);
+    }
+
+    var payloadRaw = cfg.last_payload;
+    if (payloadRaw === undefined) payloadRaw = cfg.payload;
+    if (payloadRaw !== undefined && payloadRaw !== null) {
+      var payloadText = String(payloadRaw);
+      line._lastPayload = payloadText.trim() ? payloadText : buildDefaultConnectionPayload(line._startNode, line._endNode, line._dataType);
+    }
+
+    var transmissionRaw = cfg.last_transmission;
+    if (transmissionRaw === undefined) transmissionRaw = cfg.lastTransmission;
+    if (transmissionRaw !== undefined && transmissionRaw !== null && String(transmissionRaw).trim()) {
+      line._lastTransmission = String(transmissionRaw).trim();
+    }
+
+    ensureConnectionMeta(line, line._startNode, line._endNode);
+    return true;
+  }
+
+    function emitConnectionSelection(line) {
+    if (typeof window.setActiveContextSelection !== 'function' || !line) return;
+
+    var fromNode = line._startNode || null;
+    var toNode = line._endNode || null;
+    var fromLabel = getNodeInspectorLabel(fromNode);
+    var toLabel = getNodeInspectorLabel(toNode);
+    var fromType = fromNode && fromNode.dataset ? (fromNode.dataset.type || 'node') : 'node';
+    var toType = toNode && toNode.dataset ? (toNode.dataset.type || 'node') : 'node';
+    var fromStatus = fromNode && fromNode.dataset ? (fromNode.dataset.status || '') : '';
+    var toStatus = toNode && toNode.dataset ? (toNode.dataset.status || '') : '';
+
+    var ws = '';
+    if (toNode && toNode.dataset && toNode.dataset.workspace) {
+      ws = toNode.dataset.workspace;
+    } else if (fromNode && fromNode.dataset && fromNode.dataset.workspace) {
+      ws = fromNode.dataset.workspace;
+    }
+
+    var fallbackId = (fromNode && fromNode.dataset && fromNode.dataset.id ? fromNode.dataset.id : (fromNode ? fromNode.id : 'from'))
+      + '->'
+      + (toNode && toNode.dataset && toNode.dataset.id ? toNode.dataset.id : (toNode ? toNode.id : 'to'));
+
+    var meta = ensureConnectionMeta(line, fromNode, toNode) || {
+      dataType: 'text',
+      status: 'active',
+      lastTransmission: '',
+      lastPayload: ''
+    };
+
+    window.setActiveContextSelection({
+      kind: 'connection',
+      type: 'connection',
+      nodeType: 'connection',
+      id: line._connectionId || fallbackId,
+      label: fromLabel + ' -> ' + toLabel,
+      from: fromLabel,
+      to: toLabel,
+      from_type: fromType,
+      to_type: toType,
+      from_status: fromStatus,
+      to_status: toStatus,
+      fromId: fromNode && fromNode.dataset ? (fromNode.dataset.id || fromNode.id || '') : '',
+      toId: toNode && toNode.dataset ? (toNode.dataset.id || toNode.id || '') : '',
+      connection_data_type: meta.dataType,
+      connection_status: meta.status,
+      last_payload: meta.lastPayload,
+      last_transmission: meta.lastTransmission,
+      status: meta.status,
+      workspace: ws || '',
+      connections: 1
+    });
+  }
+
+  function getLineSvgElement(line) {
+    if (!line) return null;
+    if (line.svg && line.svg.nodeType === 1) return line.svg;
+    if (line._svg && line._svg.nodeType === 1) return line._svg;
+    if (line.line && line.line.nodeType === 1) return line.line;
+    return null;
+  }
+
+  function bindLineInspector(line) {
+    if (!line || line._inspectorBound) return;
+    if (!line._connectionId) {
+      connectionCounter += 1;
+      line._connectionId = 'conn-' + connectionCounter;
+    } else {
+      var idMatch = String(line._connectionId).match(/^conn-(\d+)$/);
+      if (idMatch) {
+        var idNumber = parseInt(idMatch[1], 10);
+        if (isFinite(idNumber) && idNumber > connectionCounter) {
+          connectionCounter = idNumber;
+        }
+      }
+    }
+    line._inspectorBound = true;
+    ensureConnectionMeta(line, line._startNode, line._endNode);
+
+    var attempts = 0;
+    function attach() {
+      attempts += 1;
+
+      var svg = getLineSvgElement(line);
+      if (!svg) {
+        try { line.position(); } catch (errPos) {}
+        svg = getLineSvgElement(line);
+      }
+
+      if (svg) {
+        line._svgRef = svg;
+        try {
+          svg.style.pointerEvents = 'auto';
+          svg.style.cursor = 'pointer';
+        } catch (errStyle) {}
+
+        svg.addEventListener('click', function(ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          emitConnectionSelection(line);
+        });
+        return;
+      }
+
+      if (attempts < 8) {
+        setTimeout(attach, 70);
+      } else {
+        line._inspectorBound = false;
+      }
+    }
+
+    attach();
+  }
+
+  document.addEventListener('click', function(e) {
+    var target = e.target;
+    if (!target || !target.closest) return;
+
+    var svg = target.closest('.leader-line');
+    if (!svg) return;
+
+    var matched = lines.find(function(line) {
+      if (!line) return false;
+      return line._svgRef === svg || getLineSvgElement(line) === svg;
+    });
+
+    if (!matched) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    emitConnectionSelection(matched);
+  }, true);
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') cancelConnection();
+  });
+
+  // --- Lines update ---
+
+  function updateLines() {
+    lines.forEach(function(line) {
+      try { line.position(); } catch(e) { /* node removed */ }
+    });
+  }
+
+  // --- Delete ---
+
+  window.deleteNode = function(node) {
+    lines = lines.filter(function(line) {
+      if (line._startNode === node || line._endNode === node) {
+        try { line.remove(); } catch(e) {}
+        return false;
+      }
+      return true;
+    });
+    node.remove();
+    updateLines();
+    updateNodeCount();
+  };
+
+  window.deleteOrchestratorNodeById = function(nodeId) {
+    if (!nodeId) return false;
+    var node = document.getElementById(nodeId);
+    if (!node || !node.classList || !node.classList.contains('node')) return false;
+    window.deleteNode(node);
+    return true;
+  };
+
+  window.updateOrchestratorNodePresentation = function(nodeId, opts) {
+    if (!nodeId) return false;
+    var node = document.getElementById(nodeId);
+    if (!node || !node.classList || !node.classList.contains('node')) return false;
+
+    opts = opts || {};
+    if (opts.label !== undefined && opts.label !== null) {
+      var labelEl = node.querySelector('.node-label') || node.querySelector('.node-desc');
+      if (labelEl) labelEl.textContent = String(opts.label);
+    }
+
+    if (opts.status !== undefined) {
+      var statusText = String(opts.status || '').trim();
+      node.dataset.status = statusText;
+
+      var desc = node.querySelector('.node-desc');
+      if (desc) {
+        var badge = desc.querySelector('.node-status-badge');
+        if (statusText) {
+          if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'badge node-status-badge';
+            desc.appendChild(badge);
+          }
+          badge.className = 'badge ' + getStatusBadgeClass(statusText) + ' node-status-badge';
+          badge.textContent = statusText;
+        } else if (badge) {
+          badge.remove();
+        }
+      }
+    }
+
+    return true;
+  };
+
+  window.updateOrchestratorTriggerConfig = function(nodeId, cfg) {
+    if (!nodeId) return false;
+    var node = document.getElementById(nodeId);
+    if (!node || !node.classList || !node.classList.contains('node')) return false;
+    return applyTriggerNodeConfig(node, cfg || {});
+  };
+  window.updateOrchestratorConditionConfig = function(nodeId, cfg) {
+    if (!nodeId) return false;
+    var node = document.getElementById(nodeId);
+    if (!node || !node.classList || !node.classList.contains('node')) return false;
+    return applyConditionNodeConfig(node, cfg || {});
+  };
+  window.updateOrchestratorOutputConfig = function(nodeId, cfg) {
+    if (!nodeId) return false;
+    var node = document.getElementById(nodeId);
+    if (!node || !node.classList || !node.classList.contains('node')) return false;
+    return applyOutputNodeConfig(node, cfg || {});
+  };
+
+    window.updateOrchestratorConnectionConfig = function(connectionId, cfg) {
+    if (!connectionId) return false;
+    var line = findConnectionById(connectionId);
+    if (!line) return false;
+    var ok = applyConnectionConfig(line, cfg || {});
+    if (!ok) return false;
+    return serializeConnectionConfig(line);
+  };
+
+  window.deleteOrchestratorConnection = function(connectionId) {
+    if (!connectionId) return false;
+
+    var line = findConnectionById(connectionId);
+    if (!line) return false;
+
+    var idx = lines.indexOf(line);
+    if (idx < 0) return false;
+
+    try { line.remove(); } catch (e) {}
+    lines.splice(idx, 1);
+    updateNodeCount();
+
+    if (typeof window.setActiveContextSelection === 'function') {
+      window.setActiveContextSelection({ kind: 'canvas' });
+    }
+    return true;
+  };
+
+  // --- Flow operations ---
+
+  window.clearFlow = function() {
+    lines.forEach(function(l) { try { l.remove(); } catch(e) {} });
+    lines = [];
+    layer.innerHTML = '';
+    nodeCounter = 0;
+    activeFlowId = null;
+    lastExecutionSummary = null;
+    lastRunTrace = [];
+    lastRunRawResult = null;
+    updateNodeCount();
+  };
+
+  window.saveFlow = function() {
+    var flow = buildFlowData();
+    localStorage.setItem('camarad_orchestrator_flow', JSON.stringify(flow));
+
+    var name = prompt('Flow name:', 'Flow ' + new Date().toISOString().slice(0,10));
+    if (!name) { showToast('Save cancelled', 'warning'); return; }
+
+    // Capture canvas thumbnail using html2canvas-style approach via SVG foreignObject
+    var thumbnail = null;
+    try {
+      thumbnail = captureCanvasThumbnail();
+    } catch(e) {
+      console.warn('Thumbnail capture failed:', e);
+    }
+
+    fetch('/api/flows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, flow: flow, thumbnail: thumbnail })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.success) {
+        activeFlowId = Number.isFinite(Number(d.flow_id)) ? Number(d.flow_id) : activeFlowId;
+        showToast('Flow "' + name + '" saved! (ID: ' + d.flow_id + ')');
+      } else {
+        showToast('Save error: ' + (d.error || 'unknown'), 'warning');
+      }
+    })
+    .catch(function(e) { showToast('Server save failed: ' + e.message, 'warning'); });
+  };
+
+  window.openSaveTemplateModal = function() {
+    var nameInput = document.getElementById('templateNameInput');
+    var categoryInput = document.getElementById('templateCategoryInput');
+    var customCategoryInput = document.getElementById('templateCategoryCustomInput');
+    var descInput = document.getElementById('templateDescriptionInput');
+
+    if (nameInput) nameInput.value = 'Template ' + new Date().toISOString().slice(0, 10);
+    if (categoryInput) categoryInput.value = 'Marketing';
+    if (customCategoryInput) customCategoryInput.value = '';
+    if (descInput) descInput.value = '';
+    toggleTemplateCategoryCustom();
+
+    var modal = new bootstrap.Modal(document.getElementById('saveTemplateModal'));
+    modal.show();
+
+    setTimeout(function() {
+      if (nameInput) {
+        nameInput.focus();
+        nameInput.select();
+      }
+    }, 120);
+  };
+
+  window.toggleTemplateCategoryCustom = function() {
+    var select = document.getElementById('templateCategoryInput');
+    var wrap = document.getElementById('templateCategoryCustomWrap');
+    if (!select || !wrap) return;
+    wrap.style.display = select.value === 'Custom' ? 'block' : 'none';
+  };
+
+  window.saveAsTemplate = async function() {
+    var flow = buildFlowData();
+    if (!flow.nodes || flow.nodes.length === 0) {
+      showToast('Add at least one node before saving a template.', 'warning');
+      return;
+    }
+
+    var nameInput = document.getElementById('templateNameInput');
+    var categoryInput = document.getElementById('templateCategoryInput');
+    var customCategoryInput = document.getElementById('templateCategoryCustomInput');
+    var descInput = document.getElementById('templateDescriptionInput');
+
+    var name = nameInput ? nameInput.value.trim() : '';
+    if (!name) {
+      showToast('Template name is required.', 'warning');
+      if (nameInput) nameInput.focus();
+      return;
+    }
+
+    var category = categoryInput ? String(categoryInput.value || '').trim() : '';
+    if (category === 'Custom') {
+      category = customCategoryInput ? customCategoryInput.value.trim() : '';
+    }
+    if (!category) category = 'Uncategorized';
+
+    var description = descInput ? descInput.value.trim() : '';
+
+    var thumbnail = null;
+    try {
+      thumbnail = captureCanvasThumbnail();
+    } catch (e) {
+      console.warn('Template thumbnail capture failed:', e);
+    }
+
+    try {
+      var resp = await fetch('/api/flows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: name,
+          flow: flow,
+          thumbnail: thumbnail,
+          category: category,
+          description: description,
+          is_template: true
+        })
+      });
+
+      var payload = await resp.json().catch(function() { return {}; });
+      if (!resp.ok || !payload.success) {
+        throw new Error(payload.error || payload.message || ('HTTP ' + resp.status));
+      }
+
+      templatesCache = [];
+      var modalEl = document.getElementById('saveTemplateModal');
+      var modal = bootstrap.Modal.getInstance(modalEl);
+      if (modal) modal.hide();
+
+      var templatesModal = document.getElementById('templatesModal');
+      if (templatesModal && templatesModal.classList.contains('show')) {
+        loadTemplates();
+      }
+
+      showToast('Template "' + name + '" saved.', 'success');
+    } catch (e) {
+      showToast('Template save failed: ' + e.message, 'warning');
+    }
+  };
+
+  // Capture a lightweight thumbnail of the canvas layer
+  function captureCanvasThumbnail() {
+    var canvasEl = document.getElementById('canvas');
+    var layerEl = document.getElementById('canvas-layer');
+    var nodes = layerEl.querySelectorAll('.node');
+    if (nodes.length === 0) return null;
+
+    // Determine bounding box of all nodes
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodes.forEach(function(n) {
+      var x = parseFloat(n.style.left) || 0;
+      var y = parseFloat(n.style.top) || 0;
+      var w = n.offsetWidth || 140;
+      var h = n.offsetHeight || 70;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x + w > maxX) maxX = x + w;
+      if (y + h > maxY) maxY = y + h;
+    });
+
+    var padding = 30;
+    var bw = maxX - minX + padding * 2;
+    var bh = maxY - minY + padding * 2;
+
+    // Scale to thumbnail size (max 240x160)
+    var scale = Math.min(240 / bw, 160 / bh, 1);
+    var tw = Math.round(bw * scale);
+    var th = Math.round(bh * scale);
+
+    var c = document.createElement('canvas');
+    c.width = tw;
+    c.height = th;
+    var ctx = c.getContext('2d');
+
+    // Background
+    ctx.fillStyle = '#0d1117';
+    ctx.fillRect(0, 0, tw, th);
+
+    // Draw grid dots
+    ctx.fillStyle = '#21262d';
+    for (var gx = 0; gx < tw; gx += 15) {
+      for (var gy = 0; gy < th; gy += 15) {
+        ctx.fillRect(gx, gy, 1, 1);
+      }
+    }
+
+    // Color map for node types
+    var colorMap = { trigger: '#3fb950', agent: '#58a6ff', connector: '#d29922', condition: '#bc8cff', output: '#f85149' };
+
+    // Draw connections as lines
+    lines.forEach(function(l) {
+      if (l._startNode && l._endNode) {
+        var sx = ((parseFloat(l._startNode.style.left) || 0) + (l._startNode.offsetWidth || 140) / 2 - minX + padding) * scale;
+        var sy = ((parseFloat(l._startNode.style.top) || 0) + (l._startNode.offsetHeight || 70) / 2 - minY + padding) * scale;
+        var ex = ((parseFloat(l._endNode.style.left) || 0) + (l._endNode.offsetWidth || 140) / 2 - minX + padding) * scale;
+        var ey = ((parseFloat(l._endNode.style.top) || 0) + (l._endNode.offsetHeight || 70) / 2 - minY + padding) * scale;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(ex, ey);
+        ctx.strokeStyle = '#58a6ff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    });
+
+    // Draw nodes as rounded rects
+    nodes.forEach(function(n) {
+      var x = ((parseFloat(n.style.left) || 0) - minX + padding) * scale;
+      var y = ((parseFloat(n.style.top) || 0) - minY + padding) * scale;
+      var w = (n.offsetWidth || 140) * scale;
+      var h = (n.offsetHeight || 70) * scale;
+      var type = n.dataset.type || 'agent';
+      var color = colorMap[type] || '#58a6ff';
+
+      ctx.fillStyle = color + '33';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      roundRect(ctx, x, y, w, h, 4 * scale);
+      ctx.fill();
+      ctx.stroke();
+
+      // Small label
+      var labelEl = n.querySelector('.node-label') || n.querySelector('.node-desc');
+      var label = (labelEl || {}).textContent || type;
+      ctx.fillStyle = '#e6edf3';
+      ctx.font = Math.max(7, Math.round(9 * scale)) + 'px sans-serif';
+      ctx.fillText(label.substring(0, 12), x + 3 * scale, y + h / 2 + 3 * scale);
+    });
+
+    return c.toDataURL('image/png', 0.7);
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  window.exportFlow = function() {
+    var flow = buildFlowData();
+    var blob = new Blob([JSON.stringify(flow, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'camarad-flow-' + new Date().toISOString().slice(0,10) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  window.runFlow = function() {
+    var allNodes = layer.querySelectorAll('.node');
+    var triggers = layer.querySelectorAll('.node[data-type="trigger"]');
+    var outputs = layer.querySelectorAll('.node[data-type="output"]');
+
+    if (triggers.length === 0) { showToast('Add at least one Trigger node!', 'warning'); return; }
+    if (outputs.length === 0) { showToast('Add at least one Output node!', 'warning'); return; }
+
+    var flowData = buildFlowData();
+    var flowIdPayload = Number.isFinite(Number(activeFlowId)) ? Number(activeFlowId) : null;
+    var runCost = Math.max(20, Math.min(150, 20 + (allNodes.length * 10)));
+    var requestId = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : ('req-' + Date.now() + '-' + Math.floor(Math.random() * 1e6));
+
+    showToast('Preparing execution (' + allNodes.length + ' nodes)...', 'info');
+
+    clearExecPlaybackTimers();
+    clearExecutionNodeStates();
+
+    fetch('/api/user/spend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: runCost,
+        event_type: 'run_flow',
+        description: 'Executed flow with ' + allNodes.length + ' node(s)',
+        request_id: requestId
+      })
+    })
+    .then(async function(r) {
+      var payload = null;
+      try { payload = await r.json(); } catch (_) { payload = {}; }
+      if (!r.ok || !payload || payload.success !== true) {
+        var errMsg = (payload && (payload.error || payload.message))
+          ? (payload.error || payload.message)
+          : ('CT spend failed: HTTP ' + r.status);
+        var spendErr = new Error(errMsg);
+        spendErr.ctSpend = true;
+        spendErr.payload = payload || {};
+        throw spendErr;
+      }
+      return payload;
+    })
+    .then(function(spendInfo) {
+      if (window.loadUserSnapshot && typeof window.loadUserSnapshot === 'function') {
+        window.loadUserSnapshot(true);
+      }
+      var balText = Number(spendInfo.new_balance || 0).toLocaleString('en-US');
+      var spendMsg = 'Spent ' + runCost + ' CT. Balance: ' + balText + ' CT';
+      if (spendInfo.low_balance) spendMsg += ' (low balance)';
+      showToast(spendMsg, spendInfo.low_balance ? 'warning' : 'info');
+
+      showToast('Executing flow...', 'info');
+      return fetch('/api/orchestrator/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flow: flowData, flow_json: flowData, flow_id: flowIdPayload, name: 'Canvas Flow' })
+      });
+    })
+    .then(async function(r) {
+      var payload = null;
+      try { payload = await r.json(); } catch (_) { payload = {}; }
+      if (!r.ok) {
+        var errMsg = (payload && payload.error) ? payload.error : ('Execution failed: HTTP ' + r.status);
+        throw new Error(errMsg);
+      }
+      return payload;
+    })
+    .then(function(result) {
+      if (result.error) {
+        lastRunRawResult = result;
+        lastRunTrace = [];
+        lastExecutionSummary = { failed: 1, warnings: 0, steps: 0, elapsed_ms: 0, at: new Date().toISOString(), message: result.error };
+        refreshActiveContext();
+        showExecResults(result);
+        showToast(result.error, 'warning');
+        return;
+      }
+
+      var normalizedTrace = normalizeExecTrace(result);
+      lastRunRawResult = result;
+      lastRunTrace = normalizedTrace;
+
+      var failedSteps = normalizedTrace.filter(function(step) { return step.severity === 'error'; }).length;
+      var warningSteps = normalizedTrace.filter(function(step) { return step.severity === 'warning'; }).length;
+      var execMs = Number(result.total_duration_ms || result.elapsed_ms || 0);
+
+      lastExecutionSummary = {
+        failed: failedSteps,
+        warnings: warningSteps,
+        steps: result.steps_executed || normalizedTrace.length,
+        elapsed_ms: execMs,
+        at: new Date().toISOString()
+      };
+      refreshActiveContext();
+
+      showExecResults(result);
+      playExecutionTrace(normalizedTrace);
+
+      var statusMsg = 'Flow completed in ' + execMs.toFixed(1) + 'ms - ' + (result.steps_executed || normalizedTrace.length) + ' steps';
+      if (warningSteps > 0) statusMsg += ' (' + warningSteps + ' warning' + (warningSteps === 1 ? '' : 's') + ')';
+      showToast(statusMsg, failedSteps > 0 ? 'warning' : 'success');
+    })
+    .catch(function(e) {
+      var isSpendBlock = !!(e && e.ctSpend);
+
+      if (isSpendBlock) {
+        clearExecutionNodeStates();
+        lastRunRawResult = { error: e.message || 'CT spend failed' };
+        lastRunTrace = [];
+        lastExecutionSummary = { failed: 1, warnings: 0, steps: 0, elapsed_ms: 0, at: new Date().toISOString(), message: e.message };
+        refreshActiveContext();
+        showExecResults({ error: e.message, results: [], elapsed_ms: 0, total_duration_ms: 0, steps_executed: 0, nodes_total: allNodes.length });
+        showToast('Execution blocked: ' + e.message, 'warning');
+        return;
+      }
+
+      clearExecutionNodeStates();
+      allNodes.forEach(function(n) { n.classList.add('exec-error'); });
+      lastRunRawResult = null;
+      lastRunTrace = [];
+      lastExecutionSummary = { failed: 1, warnings: 0, steps: 0, elapsed_ms: 0, at: new Date().toISOString(), message: e.message };
+      refreshActiveContext();
+      showExecResults({ error: e.message, results: [], elapsed_ms: 0, total_duration_ms: 0, steps_executed: 0, nodes_total: allNodes.length });
+      showToast('Execution error: ' + e.message, 'warning');
+      var cleanupTimer = setTimeout(function() { clearExecutionNodeStates(); }, 4000);
+      execPlaybackTimers.push(cleanupTimer);
+    });
+  };
+
+  function clearExecPlaybackTimers() {
+    execPlaybackTimers.forEach(function(timerId) { clearTimeout(timerId); });
+    execPlaybackTimers = [];
+  }
+
+  function clearExecutionNodeStates() {
+    layer.querySelectorAll('.node').forEach(function(node) {
+      node.classList.remove('exec-running', 'exec-ok', 'exec-warn', 'exec-error');
+    });
+  }
+
+  function getExecStepSeverity(step) {
+    var raw = String((step && step.status) || 'ok').toLowerCase();
+    var data = (step && step.data && typeof step.data === 'object') ? step.data : {};
+
+    if (raw === 'error' || raw === 'failed' || raw === 'fail') return 'error';
+    if (data.error || data.fail_reason || data.failure_reason) return 'error';
+
+    if (raw === 'warning' || raw === 'warn') return 'warning';
+    if (data.warning || data.fallback_used) return 'warning';
+    if (step && step.type === 'condition' && data.branch && String(data.branch).toLowerCase() === 'no') return 'warning';
+
+    return 'ok';
+  }
+
+  function getStepStatusMeta(severity) {
+    if (severity === 'error') return { badge: 'bg-danger', text: 'ERROR', nodeClass: 'exec-error', cardClass: 'error' };
+    if (severity === 'warning') return { badge: 'bg-warning text-dark', text: 'WARNING', nodeClass: 'exec-warn', cardClass: 'warning' };
+    return { badge: 'bg-success', text: 'SUCCESS', nodeClass: 'exec-ok', cardClass: 'ok' };
+  }
+
+  function clipTraceText(value, maxLen) {
+    var txt = String(value === undefined || value === null ? '' : value).trim();
+    if (!txt) return '';
+    if (!maxLen || txt.length <= maxLen) return txt;
+    return txt.slice(0, maxLen - 1) + '…';
+  }
+
+  function summarizeObjectValues(obj, limit) {
+    if (!obj || typeof obj !== 'object') return '';
+    var parts = [];
+    Object.entries(obj).slice(0, limit || 3).forEach(function(entry) {
+      parts.push(String(entry[0]).toUpperCase() + ': ' + entry[1]);
+    });
+    return parts.join(' | ');
+  }
+
+  function toTraceInput(step, prevStep) {
+    if (!step) return '';
+    var data = (step.data && typeof step.data === 'object') ? step.data : {};
+
+    if (step.type === 'trigger') {
+      var trigType = data.trigger_type ? ('type=' + data.trigger_type) : 'trigger event';
+      return clipTraceText(trigType + (data.message ? (' - ' + data.message) : ''), 220);
+    }
+
+    if (step.type === 'condition') {
+      var metric = data.metric || 'metric';
+      var operator = data.operator || '>';
+      var threshold = data.threshold;
+      if (threshold === undefined || threshold === null || threshold === '') threshold = 'n/a';
+      return clipTraceText('Evaluate ' + metric + ' ' + operator + ' ' + threshold, 220);
+    }
+
+    var source = prevStep ? (prevStep.label || prevStep.type || 'previous node') : 'upstream node';
+    if (step.type === 'agent' && data.input_connectors !== undefined) {
+      return clipTraceText('Signals from ' + data.input_connectors + ' connector(s) via ' + source, 220);
+    }
+    return clipTraceText('From ' + source, 220);
+  }
+
+  function toTraceOutput(step) {
+    if (!step) return '';
+    var data = (step.data && typeof step.data === 'object') ? step.data : {};
+
+    if (step.type === 'connector') {
+      var metricSummary = summarizeObjectValues(data.metric_values || data.kpis, 4);
+      if (metricSummary) return clipTraceText(metricSummary, 240);
+      return clipTraceText(data.warning || data.message || 'Connector data fetched', 240);
+    }
+
+    if (step.type === 'agent') {
+      return clipTraceText(data.recommendation || data.analysis || 'Agent processed context', 260);
+    }
+
+    if (step.type === 'condition') {
+      var actual = data.actual_value;
+      if (actual === undefined || actual === null || actual === '') actual = 'n/a';
+      return clipTraceText((data.branch_label || data.branch || 'branch selected') + ' (actual=' + actual + ')', 220);
+    }
+
+    if (step.type === 'output') {
+      return clipTraceText(data.message || data.note || 'Output generated', 300);
+    }
+
+    return clipTraceText(data.message || data.note || 'Step completed', 240);
+  }
+
+  function toTraceFailReason(step) {
+    if (!step) return '';
+    var data = (step.data && typeof step.data === 'object') ? step.data : {};
+    return clipTraceText(data.fail_reason || data.failure_reason || data.error || data.warning || '', 260);
+  }
+
+  function estimateStepDurationMs(result, index, count) {
+    var totalMs = Number((result && (result.total_duration_ms || result.elapsed_ms)) || 0);
+    var steps = Number((result && result.steps_executed) || count || 1);
+    if (steps <= 0) steps = 1;
+    var base = totalMs > 0 ? (totalMs / steps) : 180;
+    var variance = 1 + (((index % 4) - 1.5) * 0.08);
+    var val = Math.max(60, Math.round(base * variance));
+    return val;
+  }
+
+  function normalizeExecTrace(result) {
+    var backendSteps = (result && Array.isArray(result.steps)) ? result.steps : [];
+    if (backendSteps.length) {
+      return backendSteps.map(function(step, idx) {
+        var rawStatus = String((step && step.status) || 'success').toLowerCase();
+        var normalizedStatus = rawStatus;
+        if (normalizedStatus === 'ok') normalizedStatus = 'success';
+        if (normalizedStatus !== 'success' && normalizedStatus !== 'warning' && normalizedStatus !== 'error') {
+          normalizedStatus = 'success';
+        }
+
+        var dur = Number(step && step.duration_ms);
+        if (!Number.isFinite(dur) || dur <= 0) dur = 1;
+
+        var inputTxt = step && step.input !== undefined ? String(step.input) : '';
+        var outputTxt = step && step.output !== undefined ? String(step.output) : '';
+        var failTxt = step && step.fail_reason !== undefined ? String(step.fail_reason) : '';
+
+        return {
+          step: Number((step && step.step) || (idx + 1)),
+          node_id: step ? step.node_id : null,
+          type: (step && step.type) || 'node',
+          label: (step && (step.node_label || step.label)) || ((step && step.type) || ('Step ' + (idx + 1))),
+          status: normalizedStatus,
+          severity: getExecStepSeverity({ status: normalizedStatus, type: step ? step.type : null, data: { warning: failTxt } }),
+          data: {
+            trace_input: inputTxt,
+            trace_output: outputTxt,
+            fail_reason: failTxt,
+          },
+          trace_input: inputTxt,
+          trace_output: outputTxt,
+          trace_fail: failTxt,
+          duration_ms: dur,
+        };
+      });
+    }
+
+    var steps = (result && Array.isArray(result.results)) ? result.results : [];
+    var normalized = [];
+
+    steps.forEach(function(step, idx) {
+      var prev = idx > 0 ? steps[idx - 1] : null;
+      var severity = getExecStepSeverity(step);
+      normalized.push({
+        step: Number(step.step || (idx + 1)),
+        node_id: step.node_id,
+        type: step.type || 'node',
+        label: step.label || step.type || ('Step ' + (idx + 1)),
+        status: step.status || 'ok',
+        severity: severity,
+        data: step.data || {},
+        trace_input: toTraceInput(step, prev),
+        trace_output: toTraceOutput(step),
+        trace_fail: toTraceFailReason(step),
+        duration_ms: estimateStepDurationMs(result, idx, steps.length)
+      });
+    });
+
+    return normalized;
+  }
+
+  function playExecutionTrace(trace) {
+    clearExecPlaybackTimers();
+    clearExecutionNodeStates();
+
+    if (!Array.isArray(trace) || trace.length === 0) return;
+
+    var cursor = 0;
+    trace.forEach(function(step) {
+      var nodeEl = step && step.node_id ? document.getElementById(step.node_id) : null;
+      if (!nodeEl) {
+        cursor += Math.max(140, Math.round((step.duration_ms || 120) * 0.7));
+        return;
+      }
+
+      var meta = getStepStatusMeta(step.severity);
+      var pre = Math.max(90, Math.round((step.duration_ms || 120) * 0.35));
+      var post = Math.max(130, Math.round((step.duration_ms || 120) * 0.65));
+
+      var t1 = setTimeout(function() {
+        nodeEl.classList.remove('exec-ok', 'exec-warn', 'exec-error');
+        nodeEl.classList.add('exec-running');
+      }, cursor);
+
+      var t2 = setTimeout(function() {
+        nodeEl.classList.remove('exec-running');
+        nodeEl.classList.add(meta.nodeClass);
+      }, cursor + pre);
+
+      execPlaybackTimers.push(t1, t2);
+      cursor += pre + post;
+    });
+
+    var cleanup = setTimeout(function() {
+      clearExecutionNodeStates();
+    }, cursor + 5200);
+    execPlaybackTimers.push(cleanup);
+  }
+
+  function toLineBreakHtml(text) {
+    return escHtml(String(text || '')).replace(/\n/g, '<br>');
+  }
+
+  // --- Execution Results Panel ---
+  function showExecResults(result) {
+    var panel = document.getElementById('execResultsPanel');
+    var body = document.getElementById('execResultsBody');
+
+    if (!panel || !body) return;
+
+    traceOutputCache = {};
+    traceOutputExpanded = {};
+
+    if (!result || result.error) {
+      var message = (result && result.error) ? result.error : 'Execution failed.';
+      body.innerHTML = '<div class="exec-empty"><i class="bi bi-exclamation-triangle me-2"></i>' + escHtml(message) + '</div>';
+      panel.style.display = 'block';
+      return;
+    }
+
+    var trace = lastRunTrace.length ? lastRunTrace : normalizeExecTrace(result);
+    lastRunTrace = trace;
+    lastRunRawResult = result;
+
+    var failed = trace.filter(function(step) { return step.severity === 'error'; }).length;
+    var warnings = trace.filter(function(step) { return step.severity === 'warning'; }).length;
+    var success = trace.filter(function(step) { return step.severity === 'ok'; }).length;
+
+    var totalDuration = trace.reduce(function(sum, step) {
+      var dur = Number(step && step.duration_ms);
+      return sum + (Number.isFinite(dur) && dur > 0 ? dur : 0);
+    }, 0);
+    var totalMs = Number(result.total_duration_ms || result.elapsed_ms || totalDuration || 0);
+
+    var html = '<div class="exec-summary">';
+    html += '<div class="small text-muted"><i class="bi bi-activity me-1"></i>Trace generated just now</div>';
+    html += '<div class="chips">';
+    html += '<span class="badge bg-secondary"><i class="bi bi-stopwatch me-1"></i>' + totalMs + 'ms</span>';
+    html += '<span class="badge bg-secondary"><i class="bi bi-diagram-3 me-1"></i>' + (result.nodes_total || trace.length) + ' nodes</span>';
+    html += '<span class="badge bg-secondary"><i class="bi bi-list-check me-1"></i>' + (result.steps_executed || trace.length) + ' steps</span>';
+    html += '<span class="badge bg-success"><i class="bi bi-check2 me-1"></i>' + success + ' success</span>';
+    html += '<span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle me-1"></i>' + warnings + ' warning' + (warnings === 1 ? '' : 's') + '</span>';
+    html += '<span class="badge bg-danger"><i class="bi bi-x-octagon me-1"></i>' + failed + ' error' + (failed === 1 ? '' : 's') + '</span>';
+    if (result.execution_id) html += '<span class="badge bg-info text-dark">ID: ' + escHtml(String(result.execution_id)) + '</span>';
+    html += '</div>';
+    html += '</div>';
+
+    if (!trace.length) {
+      html += '<div class="exec-empty">No steps produced by this run.</div>';
+      body.innerHTML = html;
+      panel.style.display = 'block';
+      return;
+    }
+
+    trace.forEach(function(step, idx) {
+      var icon = {trigger:'bi-lightning',agent:'bi-robot',connector:'bi-plug',condition:'bi-signpost-split',output:'bi-box-arrow-right'}[step.type] || 'bi-circle';
+      var meta = getStepStatusMeta(step.severity);
+      var sec = Math.max(0.001, Number(step.duration_ms || 0) / 1000);
+      var barPct = totalDuration > 0
+        ? Math.max(2, (Number(step.duration_ms || 0) / totalDuration) * 100)
+        : (100 / Math.max(trace.length, 1));
+
+      var inTxt = String(step.trace_input || '');
+      var outTxt = String(step.trace_output || '');
+      var failTxt = String(step.trace_fail || '');
+
+      var inputShort = inTxt.length > 180 ? (inTxt.slice(0, 179) + '…') : inTxt;
+      var outputShort = outTxt.length > 220 ? (outTxt.slice(0, 219) + '…') : outTxt;
+      var hasLongOutput = outTxt.length > 220;
+
+      var outId = 'trace-output-' + idx;
+      traceOutputCache[outId] = outTxt;
+      traceOutputExpanded[outId] = false;
+
+      html += '<div class="exec-step ' + meta.cardClass + '">';
+      html += '<div class="d-flex justify-content-between align-items-start gap-2">';
+      html += '<div><strong><i class="bi ' + icon + ' me-1"></i>' + escHtml(step.label || ('Step ' + (idx + 1))) + '</strong>';
+      html += '<div class="trace-meta">Step ' + step.step + ' • ' + escHtml(step.type || 'node') + ' • ' + sec.toFixed(3) + 's</div></div>';
+      html += '<span class="badge ' + meta.badge + '">' + meta.text + '</span>';
+      html += '</div>';
+
+      if (inputShort) {
+        html += '<div class="trace-io"><span class="key">Input:</span>' + toLineBreakHtml(inputShort) + '</div>';
+      }
+
+      if (outputShort) {
+        html += '<div class="trace-io"><span class="key">Output:</span><span id="' + outId + '">' + toLineBreakHtml(outputShort) + '</span>';
+        if (hasLongOutput) {
+          html += '<button class="trace-expand-btn" onclick="toggleTraceOutput(\'' + outId + '\', this)">Expand</button>';
+        }
+        html += '</div>';
+      }
+
+      if (failTxt && step.severity !== 'ok') {
+        html += '<div class="trace-fail"><i class="bi bi-exclamation-triangle me-1"></i>' + toLineBreakHtml(failTxt) + '</div>';
+      }
+
+      html += '<div class="trace-progress"><span class="bar ' + (step.severity === 'error' ? 'error' : (step.severity === 'warning' ? 'warning' : 'success')) + '" style="width:' + barPct.toFixed(2) + '%"></span></div>';
+      html += '</div>';
+    });
+
+    body.innerHTML = html;
+    panel.style.display = 'block';
+  }
+
+  window.toggleTraceOutput = function(outId, btn) {
+    var el = document.getElementById(outId);
+    if (!el) return;
+    var fullText = String(traceOutputCache[outId] || '');
+    if (!fullText) return;
+
+    var isExpanded = !!traceOutputExpanded[outId];
+    if (isExpanded) {
+      var shortText = fullText.length > 220 ? (fullText.slice(0, 219) + '…') : fullText;
+      el.innerHTML = toLineBreakHtml(shortText);
+      traceOutputExpanded[outId] = false;
+      if (btn) btn.textContent = 'Expand';
+      return;
+    }
+
+    el.innerHTML = toLineBreakHtml(fullText);
+    traceOutputExpanded[outId] = true;
+    if (btn) btn.textContent = 'Collapse';
+  };
+
+  window.copyExecTrace = function() {
+    if (!lastRunTrace || !lastRunTrace.length) {
+      showToast('No run trace available yet.', 'warning');
+      return;
+    }
+
+    var payloadObj = {
+      exported_at: new Date().toISOString(),
+      summary: lastExecutionSummary || null,
+      trace: lastRunTrace,
+    };
+    var payload = JSON.stringify(payloadObj, null, 2);
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(payload)
+        .then(function() { showToast('JSON trace copied to clipboard.', 'success'); })
+        .catch(function() { showToast('Copy failed. Browser blocked clipboard access.', 'warning'); });
+      return;
+    }
+
+    showToast('Clipboard unavailable in this browser.', 'warning');
+  };
+
+  function csvEscape(val) {
+    var txt = String(val === undefined || val === null ? '' : val);
+    if (txt.indexOf('"') >= 0) txt = txt.replace(/"/g, '""');
+    if (txt.indexOf(',') >= 0 || txt.indexOf('\n') >= 0 || txt.indexOf('\r') >= 0) {
+      txt = '"' + txt + '"';
+    }
+    return txt;
+  }
+
+  window.exportExecTrace = function() {
+    if (!lastRunTrace || !lastRunTrace.length) {
+      showToast('No run trace available yet.', 'warning');
+      return;
+    }
+
+    var headers = ['step', 'node_label', 'type', 'status', 'duration_ms', 'input', 'output', 'fail_reason'];
+    var rows = [headers.join(',')];
+
+    lastRunTrace.forEach(function(step) {
+      rows.push([
+        csvEscape(step.step),
+        csvEscape(step.label),
+        csvEscape(step.type),
+        csvEscape(step.severity === 'ok' ? 'success' : step.severity),
+        csvEscape(step.duration_ms),
+        csvEscape(step.trace_input || ''),
+        csvEscape(step.trace_output || ''),
+        csvEscape(step.trace_fail || '')
+      ].join(','));
+    });
+
+    var csvText = rows.join('\n');
+    var blob = new Blob([csvText], { type: 'text/csv;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'orchestrator-run-trace-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Trace CSV exported.', 'success');
+  };
+
+  window.closeExecPanel = function() {
+    document.getElementById('execResultsPanel').style.display = 'none';
+  };
+
+  // --- Templates Modal ---
+  window.openTemplatesModal = function() {
+    var modal = new bootstrap.Modal(document.getElementById('templatesModal'));
+    modal.show();
+    loadTemplates();
+  };
+
+  function normalizeTemplateFlow(tpl) {
+    var base = (tpl && tpl.flow && typeof tpl.flow === 'object') ? tpl.flow : {};
+    var nodes = Array.isArray(base.nodes) ? base.nodes : (Array.isArray(tpl.nodes) ? tpl.nodes : []);
+    var connections = Array.isArray(base.connections) ? base.connections : (Array.isArray(tpl.connections) ? tpl.connections : []);
+    return {
+      version: base.version || '1.0',
+      created: base.created || new Date().toISOString(),
+      nodes: nodes,
+      connections: connections
+    };
+  }
+
+  function templateThumbMarkup(tpl) {
+    if (tpl && tpl.thumbnail) {
+      return '<img class="tpl-thumb" src="' + escAttr(String(tpl.thumbnail)) + '" alt="' + escAttr(String(tpl.name || 'Template')) + '" />';
+    }
+    return '<div class="tpl-thumb d-flex align-items-center justify-content-center text-muted"><i class="bi bi-diagram-3" style="font-size:2rem;"></i></div>';
+  }
+
+  function getTemplateCategoryFilterValue() {
+    var select = document.getElementById('templateCategoryFilter');
+    if (!select) return 'all';
+    var val = String(select.value || 'all').trim();
+    return val || 'all';
+  }
+
+  async function fetchTemplatesFromApi(categoryFilter) {
+    var filter = String(categoryFilter || 'all').trim();
+    var query = (!filter || filter.toLowerCase() === 'all')
+      ? ''
+      : ('?category=' + encodeURIComponent(filter));
+
+    try {
+      var resp = await fetch('/api/flows/templates' + query);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      var data = await resp.json();
+      if (Array.isArray(data)) return data;
+    } catch (e) {
+      console.warn('Primary templates endpoint failed, falling back:', e);
+    }
+
+    var fallbackResp = await fetch('/api/orchestrator/templates' + query);
+    if (!fallbackResp.ok) throw new Error('HTTP ' + fallbackResp.status);
+    var fallbackData = await fallbackResp.json();
+    return Array.isArray(fallbackData) ? fallbackData : [];
+  }
+
+  async function loadTemplates() {
+    var body = document.getElementById('templatesModalBody');
+    var countLabel = document.getElementById('templatesCountLabel');
+    var categoryFilter = getTemplateCategoryFilterValue();
+
+    body.innerHTML = '<div class="text-center text-muted py-4"><i class="bi bi-hourglass-split"></i> Loading...</div>';
+    if (countLabel) countLabel.textContent = 'Loading templates...';
+
+    try {
+      templatesCache = await fetchTemplatesFromApi(categoryFilter);
+      if (!templatesCache.length) {
+        body.innerHTML = '<div class="text-center text-muted py-5">No templates available for this category.</div>';
+        if (countLabel) countLabel.textContent = '0 template(s)';
+        return;
+      }
+
+      if (countLabel) {
+        countLabel.textContent = templatesCache.length + ' template(s)' + (categoryFilter.toLowerCase() === 'all' ? '' : ' in ' + categoryFilter);
+      }
+
+      var grouped = {};
+      templatesCache.forEach(function(t) {
+        var cat = t.category || 'Uncategorized';
+        (grouped[cat] = grouped[cat] || []).push(t);
+      });
+
+      var html = '';
+      Object.keys(grouped).sort().forEach(function(cat) {
+        html += '<h6 class="text-muted mt-3 mb-2"><i class="bi bi-tag me-1"></i>' + escHtml(cat) + '</h6>';
+        html += '<div class="row g-3">';
+
+        grouped[cat].forEach(function(t) {
+          var tplFlow = normalizeTemplateFlow(t);
+          var nodeCount = tplFlow.nodes.length;
+          var connCount = tplFlow.connections.length;
+          var isDemo = !!(tplFlow.scenario || t.scenario || t.id);
+
+          html += '<div class="col-md-6 col-lg-4">';
+          html += '<div class="tpl-card">';
+          html += templateThumbMarkup(t);
+          html += '<div class="tpl-body">';
+          html += '<div class="d-flex justify-content-between align-items-start gap-2">';
+          html += '<strong class="text-light">' + escHtml(t.name || 'Untitled Template') + '</strong>';
+          html += '<div class="d-flex gap-1 flex-wrap justify-content-end">';
+          html += '<span class="badge bg-primary">Template</span>';
+          if (isDemo) html += '<span class="badge bg-success">Demo</span>';
+          html += '<span class="badge bg-secondary">' + escHtml(t.category || 'Uncategorized') + '</span>';
+          html += '</div>';
+          html += '</div>';
+          html += '<div class="tpl-desc">' + escHtml(t.description || 'Reusable flow template for orchestrator.') + '</div>';
+          html += '<div class="tpl-meta">';
+          html += '<span class="badge bg-primary-subtle text-primary-emphasis">' + nodeCount + ' nodes</span>';
+          html += '<span class="badge bg-info-subtle text-info-emphasis">' + connCount + ' connections</span>';
+          html += '</div>';
+          html += '<div class="mt-auto pt-1 d-flex gap-2">';
+          html += '<button class="btn btn-sm btn-outline-primary" onclick="loadTemplate(\'' + escAttr(String(t.id)) + '\')"><i class="bi bi-box-arrow-in-down me-1"></i>Load</button>';
+          html += '<button class="btn btn-sm btn-outline-success" onclick="loadAndRunTemplate(\'' + escAttr(String(t.id)) + '\')"><i class="bi bi-play-fill me-1"></i>Load & Run Demo</button>';
+          html += '</div>';
+          html += '</div>';
+          html += '</div>';
+          html += '</div>';
+        });
+
+        html += '</div>';
+      });
+
+      body.innerHTML = html;
+    } catch (e) {
+      body.innerHTML = '<div class="text-center text-danger py-4">Failed to load templates: ' + escHtml(e.message || String(e)) + '</div>';
+      if (countLabel) countLabel.textContent = 'Load failed';
+    }
+  }
+  window.loadTemplate = async function(tplId) {
+    if (!templatesCache.length) {
+      try {
+        templatesCache = await fetchTemplatesFromApi(getTemplateCategoryFilterValue());
+      } catch (e) {
+        showToast('Template load failed: ' + (e.message || e), 'warning');
+        return;
+      }
+    }
+
+    var tpl = templatesCache.find(function(t) { return String(t.id) === String(tplId); });
+    if (!tpl) {
+      showToast('Template not found', 'warning');
+      return;
+    }
+
+    var tplFlow = normalizeTemplateFlow(tpl);
+
+    clearFlow();
+    activeFlowId = Number.isFinite(Number(tpl.id)) ? Number(tpl.id) : null;
+    (tplFlow.nodes || []).forEach(function(n) {
+      addNode(n.type, n.slug || '', n.label || '', n.status || '', n.workspace || '');
+      var node = layer.lastElementChild;
+      if (!node) return;
+      node.style.left = (parseFloat(n.x) || 0) + 'px';
+      node.style.top = (parseFloat(n.y) || 0) + 'px';
+      if (n.label) {
+        var lbl = node.querySelector('.node-label') || node.querySelector('.node-desc');
+        if (lbl) lbl.textContent = n.label;
+      }
+      if (n.config) {
+        if (node.dataset.type === 'trigger') {
+          applyTriggerNodeConfig(node, n.config);
+        } else if (node.dataset.type === 'condition') {
+          applyConditionNodeConfig(node, n.config);
+        } else if (node.dataset.type === 'output') {
+          applyOutputNodeConfig(node, n.config);
+        }
+      }
+    });
+
+    setTimeout(function() {
+      (tplFlow.connections || []).forEach(function(c) {
+        var from = document.getElementById(c.from);
+        var to = document.getElementById(c.to);
+        if (from && to) {
+          try {
+            var line = new LeaderLine(from, to, {
+              color: '#58a6ff',
+              size: 2,
+              path: 'fluid',
+              startSocket: 'right',
+              endSocket: 'left',
+              startPlug: 'behind',
+              endPlug: 'arrow1'
+            });
+            line._startNode = from;
+                    line._endNode = to;
+                    if (c && c.id) {
+                      line._connectionId = String(c.id);
+                    }
+                    if (c && c.config) {
+                      applyConnectionConfig(line, c.config);
+                    } else {
+                      ensureConnectionMeta(line, from, to);
+                    }
+                    lines.push(line);
+                    bindLineInspector(line);
+          } catch (e) {
+            console.warn('Template connection restore error:', e);
+          }
+        }
+      });
+      updateNodeCount();
+    }, 200);
+
+    var modalEl = document.getElementById('templatesModal');
+    var modal = bootstrap.Modal.getInstance(modalEl);
+    if (modal) modal.hide();
+    showToast('Loaded template: ' + (tpl.name || 'Template'), 'info');
+  };
+
+  window.loadAndRunTemplate = async function(tplId) {
+    await loadTemplate(tplId);
+    setTimeout(function() {
+      try {
+        runFlow();
+        var tpl = templatesCache.find(function(t) { return String(t.id) === String(tplId); });
+        var tplName = tpl ? (tpl.name || 'Template') : 'Template';
+        showToast('Demo started: ' + tplName, 'success');
+      } catch (e) {
+        showToast('Demo run failed: ' + (e.message || e), 'warning');
+      }
+    }, 320);
+  };
+  // --- History Modal ---
+  window.openHistoryModal = function() {
+    var modal = new bootstrap.Modal(document.getElementById('historyModal'));
+    modal.show();
+    loadHistory();
+  };
+
+  function loadHistory() {
+    var body = document.getElementById('historyModalBody');
+    body.innerHTML = '<div class="text-center text-muted py-4"><i class="bi bi-hourglass-split"></i> Loading...</div>';
+    fetch('/api/orchestrator/history')
+      .then(function(r) { return r.json(); })
+      .then(function(runs) {
+        if (!runs.length) {
+          body.innerHTML = '<div class="text-center text-muted py-5"><i class="bi bi-inbox" style="font-size:2rem;"></i><p class="mt-2">No executions yet.<br>Build a flow and click Run!</p></div>';
+          return;
+        }
+        var html = '<div class="list-group">';
+        runs.forEach(function(r) {
+          var date = r.created_at ? new Date(r.created_at).toLocaleString() : 'N/A';
+          var statusRaw = String(r.status || 'completed').toLowerCase();
+          var statusClass = 'bg-secondary';
+          if (statusRaw === 'completed' || statusRaw === 'success' || statusRaw === 'ok') {
+            statusClass = 'bg-success';
+          } else if (statusRaw === 'warning') {
+            statusClass = 'bg-warning text-dark';
+          } else if (statusRaw === 'error' || statusRaw === 'failed') {
+            statusClass = 'bg-danger';
+          }
+          var statusBadge = '<span class="badge ' + statusClass + '">' + escHtml(statusRaw) + '</span>';
+          html += '<div class="list-group-item bg-dark border-secondary d-flex align-items-center justify-content-between py-3">';
+          html += '<div>';
+          html += '<div class="fw-semibold text-light">' + escHtml(r.flow_name) + ' ' + statusBadge + '</div>';
+          html += '<small class="text-muted"><i class="bi bi-clock me-1"></i>' + date + ' &middot; ' + r.nodes_count + ' nodes &middot; ' + r.steps_count + ' steps &middot; ' + r.elapsed_ms + 'ms</small>';
+          html += '</div>';
+          html += '<button class="btn btn-sm btn-outline-info" onclick="viewExecDetail(' + r.id + ')"><i class="bi bi-eye"></i></button>';
+          html += '</div>';
+        });
+        html += '</div>';
+        body.innerHTML = html;
+      })
+      .catch(function(e) {
+        body.innerHTML = '<div class="text-center text-danger py-4">Failed to load history</div>';
+      });
+  }
+
+  window.viewExecDetail = function(execId) {
+    fetch('/api/orchestrator/history/' + execId)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) { showToast(data.error, 'warning'); return; }
+        var modalEl = document.getElementById('historyModal');
+        var modal = bootstrap.Modal.getInstance(modalEl);
+        if (modal) modal.hide();
+        showExecResults({
+          elapsed_ms: data.elapsed_ms,
+          total_duration_ms: data.elapsed_ms,
+          nodes_total: data.nodes_count,
+          steps_executed: data.steps_count,
+          execution_id: data.id,
+          results: data.results
+        });
+      });
+  };
+
+  // --- Smart Router ---
+  window.toggleRouterPanel = function() {
+    var panel = document.getElementById('routerPanel');
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    if (panel.style.display === 'block') document.getElementById('routerInput').focus();
+  };
+
+  window.runSmartRoute = function() {
+    var input = document.getElementById('routerInput');
+    var task = input.value.trim();
+    if (!task) return;
+    var body = document.getElementById('routerResults');
+    body.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split"></i> Routing...</div>';
+
+    fetch('/api/orchestrator/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task: task, top_k: 5 })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.error) { body.innerHTML = '<span class="text-danger">' + data.error + '</span>'; return; }
+      if (!data.matches || !data.matches.length) {
+        body.innerHTML = '<span class="text-muted">No matching agents for this task.</span>';
+        return;
+      }
+      var html = '';
+      data.matches.forEach(function(m, i) {
+        var pct = Math.round(m.confidence * 100);
+        var barColor = pct >= 70 ? '#3fb950' : pct >= 40 ? '#d29922' : '#8b949e';
+        html += '<div class="mb-2 p-2 rounded" style="background:#21262d;cursor:pointer;" onclick="addAgentFromRoute(\'' + m.agent_slug + '\',\'' + m.agent_name.replace(/'/g, "\\'") + '\')">';
+        html += '<div class="d-flex justify-content-between align-items-center">';
+        html += '<span class="text-light fw-semibold">' + (i+1) + '. ' + m.agent_name + '</span>';
+        html += '<span class="badge" style="background:' + barColor + ';">' + pct + '%</span>';
+        html += '</div>';
+        html += '<div class="progress mt-1" style="height:3px;"><div class="progress-bar" style="width:' + pct + '%;background:' + barColor + ';"></div></div>';
+        var liveCons = m.connectors.filter(function(c) { return c.status === 'live'; });
+        if (liveCons.length) {
+          html += '<div class="mt-1">';
+          liveCons.forEach(function(c) {
+            html += '<span class="badge bg-warning text-dark me-1" style="font-size:0.65rem;">' + c.name + '</span>';
+          });
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+      html += '<div class="text-muted mt-1" style="font-size:0.7rem;">Click an agent to add to canvas with connectors</div>';
+      body.innerHTML = html;
+    })
+    .catch(function(e) { body.innerHTML = '<span class="text-danger">Error: ' + e.message + '</span>'; });
+  };
+
+  document.getElementById('routerInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') runSmartRoute();
+  });
+
+  window.addAgentFromRoute = function(slug, name) {
+    // Add agent node + its live connectors to canvas
+    addNode('agent', slug, name);
+    var agentNode = layer.lastElementChild;
+
+    fetch('/api/orchestrator/agent-brief/' + slug)
+      .then(function(r) { return r.json(); })
+      .then(function(brief) {
+        var liveConnectors = (brief.connector_summaries || []).filter(function(c) { return c.status === 'live'; });
+        var yBase = (parseFloat(agentNode.style.top) || 120) - (liveConnectors.length - 1) * 50;
+        var xConn = (parseFloat(agentNode.style.left) || 300) + 240;
+
+        liveConnectors.forEach(function(c, i) {
+          addNode('connector', c.slug, c.name);
+          var connNode = layer.lastElementChild;
+          connNode.style.left = xConn + 'px';
+          connNode.style.top = (yBase + i * 100) + 'px';
+
+          // Auto-connect agent → connector
+          setTimeout(function() {
+            try {
+              var line = new LeaderLine(agentNode, connNode, {
+                color: '#d29922', size: 2, path: 'fluid',
+                startSocket: 'right', endSocket: 'left',
+                startPlug: 'behind', endPlug: 'arrow1'
+              });
+              line._startNode = agentNode;
+              line._endNode = connNode;
+              ensureConnectionMeta(line, agentNode, connNode);
+              lines.push(line);
+              bindLineInspector(line);
+              updateNodeCount();
+            } catch(e) {}
+          }, 100);
+        });
+        showToast('Added ' + name + ' + ' + liveConnectors.length + ' connectors', 'info');
+      })
+      .catch(function() {
+        showToast('Added ' + name + ' (no auto-connectors)', 'info');
+      });
+    document.getElementById('routerPanel').style.display = 'none';
+  };
+
+  function buildFlowData() {
+    var nodes = Array.from(layer.querySelectorAll('.node')).map(function(n) {
+      var labelEl = n.querySelector('.node-label') || n.querySelector('.node-desc');
+      var nodeData = {
+        id: n.dataset.id,
+        type: n.dataset.type,
+        slug: n.dataset.slug || '',
+        status: n.dataset.status || '',
+        workspace: n.dataset.workspace || '',
+        x: parseFloat(n.style.left) || 0,
+        y: parseFloat(n.style.top) || 0,
+        label: labelEl ? labelEl.textContent : (n.dataset.type || 'node')
+      };
+
+      if (n.dataset.type === 'trigger') {
+        nodeData.config = {
+          trigger_type: n.dataset.triggerType || 'incoming_message',
+          trigger_description: n.dataset.triggerDescription || nodeData.label || 'Trigger',
+          trigger_priority: n.dataset.triggerPriority || 'p2',
+          trigger_enabled: n.dataset.triggerEnabled !== '0'
+        };
+      } else if (n.dataset.type === 'condition') {
+        nodeData.config = {
+          condition_metric: n.dataset.conditionMetric || 'ROAS',
+          condition_operator: n.dataset.conditionOperator || '>',
+          condition_value: n.dataset.conditionValue || '3.0',
+          condition_then_label: n.dataset.conditionThenLabel || 'Yes',
+          condition_else_label: n.dataset.conditionElseLabel || 'No'
+        };
+      } else if (n.dataset.type === 'output') {
+        nodeData.config = {
+          output_format: n.dataset.outputFormat || 'text',
+          output_template: n.dataset.outputTemplate || 'Here is your result: {{last_agent_response}}',
+          output_destination: n.dataset.outputDestination || 'chat'
+        };
+      }
+
+      return nodeData;
+    });
+        var connections = lines.map(function(l) {
+      var fromId = l._startNode ? l._startNode.dataset.id : null;
+      var toId = l._endNode ? l._endNode.dataset.id : null;
+      var conn = {
+        id: l._connectionId || ((fromId || 'from') + '->' + (toId || 'to')),
+        from: fromId,
+        to: toId
+      };
+
+      var cfg = serializeConnectionConfig(l);
+      if (cfg) {
+        conn.config = cfg;
+      }
+      return conn;
+    });
+    return { version: '1.0', created: new Date().toISOString(), nodes: nodes, connections: connections };
+  }
+
+  // --- Toast helper (delegates to global system) ---
+  function showToast(msg, type) {
+    if (window.showToast && window.showToast !== showToast) {
+      window.showToast('Orchestrator', msg, type || 'success');
+    } else {
+      var bg = '#3fb950';
+      if (type === 'warning') bg = '#d29922';
+      if (type === 'info') bg = '#58a6ff';
+      var t = document.createElement('div');
+      t.style.cssText = 'position:fixed;top:70px;right:20px;padding:10px 20px;border-radius:8px;z-index:9999;font-size:0.9rem;color:#fff;background:' + bg + ';transition:opacity 0.3s;';
+      t.textContent = msg;
+      document.body.appendChild(t);
+      setTimeout(function() { t.style.opacity = '0'; }, 2000);
+      setTimeout(function() { t.remove(); }, 2500);
+    }
+  }
+
+  // --- Load Flows Modal ---
+  window.openLoadModal = function() {
+    var modal = new bootstrap.Modal(document.getElementById('loadFlowsModal'));
+    modal.show();
+    loadFlowsList();
+  };
+
+  function loadFlowsList() {
+    var body = document.getElementById('flowsModalBody');
+    body.innerHTML = '<div class="text-center text-muted py-4"><i class="bi bi-hourglass-split"></i> Loading...</div>';
+
+    fetch('/api/flows')
+      .then(function(r) { return r.json(); })
+      .then(function(flows) {
+        if (!flows.length) {
+          body.innerHTML = '<div class="text-center text-muted py-5"><i class="bi bi-inbox" style="font-size:2rem"></i><p class="mt-2">No saved flows yet.<br>Create a flow and click Save!</p></div>';
+          return;
+        }
+
+        var html = '<div class="list-group">';
+        flows.forEach(function(f) {
+          var thumb = f.thumbnail
+            ? '<img src="' + f.thumbnail + '" alt="preview" style="width:100px;height:66px;object-fit:cover;border-radius:6px;border:1px solid #30363d;" />'
+            : '<div style="width:100px;height:66px;background:#161b22;border-radius:6px;border:1px solid #30363d;display:flex;align-items:center;justify-content:center;"><i class="bi bi-diagram-3 text-muted" style="font-size:1.4rem;"></i></div>';
+
+          var dateStr = f.updated ? new Date(f.updated).toLocaleString() : 'N/A';
+
+          html += '<div class="list-group-item bg-dark border-secondary d-flex align-items-center gap-3 py-3" id="flow-item-' + f.id + '">';
+          html += thumb;
+          html += '<div class="flex-grow-1">';
+          html += '<div class="fw-semibold text-light" style="font-size:1rem;">';
+          html += '<span class="flow-name-text" id="fname-' + f.id + '">' + escHtml(f.name) + '</span>';
+          html += ' <button class="btn btn-sm btn-link text-muted p-0 ms-1" onclick="editFlowName(' + f.id + ')" title="Rename"><i class="bi bi-pencil" style="font-size:0.75rem;"></i></button>';
+          html += '</div>';
+          html += '<small class="text-muted"><i class="bi bi-clock me-1"></i>' + dateStr + '</small>';
+          html += '</div>';
+          html += '<div class="d-flex gap-1 flex-shrink-0">';
+          html += '<button class="btn btn-sm btn-outline-primary" onclick="loadFlowFromDb(' + f.id + ')"><i class="bi bi-box-arrow-in-down me-1"></i>Load</button>';
+          html += '<button class="btn btn-sm btn-outline-success" onclick="duplicateFlowPrompt(' + f.id + ', \'' + escAttr(f.name) + '\')"><i class="bi bi-copy me-1"></i>Duplicate</button>';
+          html += '<button class="btn btn-sm btn-outline-danger" onclick="deleteFlowConfirm(' + f.id + ')"><i class="bi bi-trash"></i></button>';
+          html += '</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+        body.innerHTML = html;
+      })
+      .catch(function(e) {
+        body.innerHTML = '<div class="text-center text-danger py-4"><i class="bi bi-exclamation-triangle"></i> Failed to load flows: ' + e.message + '</div>';
+      });
+  }
+
+  function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  function escAttr(s) { return s.replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+
+  window.loadFlowFromDb = function(flowId) {
+    fetch('/api/flows/' + flowId)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) { showToast(data.error, 'warning'); return; }
+
+        // Clear current flow
+        clearFlow();
+        activeFlowId = Number.isFinite(Number(flowId)) ? Number(flowId) : null;
+
+        var flow = data.flow;
+        if (flow.nodes && flow.nodes.length) {
+          flow.nodes.forEach(function(n) {
+            addNode(n.type, n.slug || '', n.label || '', n.status || '', n.workspace || '');
+            var node = layer.lastElementChild;
+            node.style.left = n.x + 'px';
+            node.style.top = n.y + 'px';
+            if (n.label) { var lbl = node.querySelector('.node-label') || node.querySelector('.node-desc'); if (lbl) lbl.textContent = n.label; }
+            if (n.config) {
+        if (node.dataset.type === 'trigger') {
+          applyTriggerNodeConfig(node, n.config);
+        } else if (node.dataset.type === 'condition') {
+          applyConditionNodeConfig(node, n.config);
+        } else if (node.dataset.type === 'output') {
+          applyOutputNodeConfig(node, n.config);
+        }
+      }
+          });
+          // Restore connections after nodes are placed
+          setTimeout(function() {
+            if (flow.connections) {
+              flow.connections.forEach(function(c) {
+                var from = document.getElementById(c.from);
+                var to = document.getElementById(c.to);
+                if (from && to) {
+                  try {
+                    var line = new LeaderLine(from, to, {
+                      color: '#58a6ff', size: 2, path: 'fluid',
+                      startSocket: 'right', endSocket: 'left',
+                      startPlug: 'behind', endPlug: 'arrow1'
+                    });
+                    line._startNode = from;
+                    line._endNode = to;
+                    if (c && c.id) {
+                      line._connectionId = String(c.id);
+                    }
+                    if (c && c.config) {
+                      applyConnectionConfig(line, c.config);
+                    } else {
+                      ensureConnectionMeta(line, from, to);
+                    }
+                    lines.push(line);
+                    bindLineInspector(line);
+                    updateNodeCount();
+                  } catch(e) { console.warn('Connection restore error:', e); }
+                }
+              });
+            }
+          }, 200);
+        }
+
+        // Close modal
+        var modalEl = document.getElementById('loadFlowsModal');
+        var modal = bootstrap.Modal.getInstance(modalEl);
+        if (modal) modal.hide();
+
+        showToast('Loaded: ' + data.name, 'info');
+      })
+      .catch(function(e) { showToast('Load error: ' + e.message, 'warning'); });
+  };
+
+  window.duplicateFlowPrompt = function(flowId, originalName) {
+    var newName = prompt('Name for duplicated flow:', originalName + ' (Copy)');
+    if (!newName) return;
+
+    fetch('/api/flows/' + flowId + '/duplicate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.success) {
+        showToast('Duplicated as "' + d.new_name + '"');
+        loadFlowsList();  // refresh list
+      } else {
+        showToast(d.error || 'Duplicate failed', 'warning');
+      }
+    })
+    .catch(function(e) { showToast('Duplicate error: ' + e.message, 'warning'); });
+  };
+
+  window.deleteFlowConfirm = function(flowId) {
+    if (!confirm('Delete this flow permanently?')) return;
+
+    fetch('/api/flows/' + flowId, { method: 'DELETE' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.success) {
+          showToast('Flow deleted');
+          var item = document.getElementById('flow-item-' + flowId);
+          if (item) item.style.display = 'none';
+        } else {
+          showToast(d.error || 'Delete failed', 'warning');
+        }
+      })
+      .catch(function(e) { showToast('Delete error: ' + e.message, 'warning'); });
+  };
+
+  window.editFlowName = function(flowId) {
+    var span = document.getElementById('fname-' + flowId);
+    if (!span) return;
+    var currentName = span.textContent;
+    var newName = prompt('Rename flow:', currentName);
+    if (!newName || newName === currentName) return;
+
+    fetch('/api/flows/' + flowId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.success) {
+        span.textContent = newName;
+        showToast('Renamed to "' + newName + '"');
+      } else {
+        showToast(d.error || 'Rename failed', 'warning');
+      }
+    })
+    .catch(function(e) { showToast('Rename error: ' + e.message, 'warning'); });
+  };
+
+    // --- Real dropdowns + Active Context ---
+  function clearChildren(el) {
+    while (el && el.firstChild) el.removeChild(el.firstChild);
+  }
+
+  function appendDropdownDivider(el) {
+    var li = document.createElement('li');
+    li.innerHTML = '<hr class="dropdown-divider border-secondary">';
+    el.appendChild(li);
+  }
+
+  function renderAgentDropdown(agents) {
+    var dd = document.getElementById('agentDropdown');
+    if (!dd) return;
+    dd.style.maxHeight = '400px';
+    dd.style.overflowY = 'auto';
+    clearChildren(dd);
+
+    var genericLi = document.createElement('li');
+    var genericA = document.createElement('a');
+    genericA.className = 'dropdown-item text-light';
+    genericA.href = '#';
+    genericA.innerHTML = '<i class="bi bi-robot me-2 text-muted"></i>Generic Agent';
+    genericA.addEventListener('click', function(e) {
+      e.preventDefault();
+      addNode('agent');
+    });
+    genericLi.appendChild(genericA);
+    dd.appendChild(genericLi);
+
+    if (!agents.length) return;
+    appendDropdownDivider(dd);
+
+    var groups = {};
+    agents.forEach(function(a) {
+      var ws = a.workspace || 'Other';
+      (groups[ws] = groups[ws] || []).push(a);
+    });
+
+    var ordered = WORKSPACE_ORDER.filter(function(ws) { return groups[ws] && groups[ws].length; });
+    Object.keys(groups).filter(function(ws) { return ordered.indexOf(ws) === -1; }).sort().forEach(function(ws) { ordered.push(ws); });
+
+    ordered.forEach(function(ws) {
+      var header = document.createElement('li');
+      header.innerHTML = '<h6 class="dropdown-header text-primary small" style="font-size:0.72rem;letter-spacing:1px;">' + escHtml(ws.toUpperCase()) + '</h6>';
+      dd.appendChild(header);
+
+      groups[ws].slice().sort(function(a, b) {
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      }).forEach(function(a) {
+        var li = document.createElement('li');
+        var item = document.createElement('a');
+        item.className = 'dropdown-item text-light d-flex justify-content-between align-items-center';
+        item.href = '#';
+        item.addEventListener('click', function(e) {
+          e.preventDefault();
+          addNode('agent', a.slug, a.name, a.status, a.workspace_slug || workspaceToSlug(a.workspace));
+        });
+
+        var left = document.createElement('span');
+        left.className = 'me-2';
+        left.textContent = a.name || a.slug;
+
+        var badge = document.createElement('span');
+        badge.className = 'badge ' + getStatusBadgeClass(a.status || 'Ready') + ' ms-2';
+        badge.style.fontSize = '0.62rem';
+        badge.textContent = a.status || 'Ready';
+
+        item.appendChild(left);
+        item.appendChild(badge);
+        li.appendChild(item);
+        dd.appendChild(li);
+      });
+    });
+  }
+
+  function renderConnectorDropdown(connectors) {
+    var dd = document.getElementById('connectorDropdown');
+    if (!dd) return;
+    dd.style.maxHeight = '400px';
+    dd.style.overflowY = 'auto';
+    clearChildren(dd);
+
+    var genericLi = document.createElement('li');
+    var genericA = document.createElement('a');
+    genericA.className = 'dropdown-item text-light';
+    genericA.href = '#';
+    genericA.innerHTML = '<i class="bi bi-plug me-2 text-muted"></i>Generic Connector';
+    genericA.addEventListener('click', function(e) {
+      e.preventDefault();
+      addNode('connector');
+    });
+    genericLi.appendChild(genericA);
+    dd.appendChild(genericLi);
+
+    if (!connectors.length) return;
+
+    appendDropdownDivider(dd);
+    var liveHeader = document.createElement('li');
+    liveHeader.innerHTML = '<h6 class="dropdown-header text-warning small" style="font-size:0.72rem;letter-spacing:1px;">LIVE CONNECTORS</h6>';
+    dd.appendChild(liveHeader);
+
+    connectors.slice().sort(function(a, b) {
+      var ac = isConnectedStatus(a.status) ? 1 : 0;
+      var bc = isConnectedStatus(b.status) ? 1 : 0;
+      if (bc !== ac) return bc - ac;
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    }).forEach(function(c) {
+      var li = document.createElement('li');
+      var item = document.createElement('a');
+      item.className = 'dropdown-item text-light d-flex justify-content-between align-items-center';
+      item.href = '#';
+      item.addEventListener('click', function(e) {
+        e.preventDefault();
+        addNode('connector', c.slug, c.name, c.status);
+      });
+
+      var left = document.createElement('span');
+      left.className = 'me-2';
+      left.textContent = c.name || c.slug;
+
+      var badge = document.createElement('span');
+      badge.className = 'badge ' + getStatusBadgeClass(c.status || 'Disconnected') + ' ms-2';
+      badge.style.fontSize = '0.62rem';
+      badge.textContent = c.status || 'Disconnected';
+
+      item.appendChild(left);
+      item.appendChild(badge);
+      li.appendChild(item);
+      dd.appendChild(li);
+    });
+  }
+
+  async function loadDropdowns() {
+    try {
+      var agentsResp = await fetch('/api/agents/list');
+      var agents = await agentsResp.json();
+      agentsCatalog = Array.isArray(agents) ? agents : [];
+      Object.keys(agentBySlug).forEach(function(k) { delete agentBySlug[k]; });
+      agentsCatalog.forEach(function(a) {
+        if (a && a.slug) agentBySlug[a.slug] = a;
+      });
+      renderAgentDropdown(agentsCatalog);
+    } catch (err) {
+      console.error('Error loading agents dropdown', err);
+      renderAgentDropdown([]);
+    }
+
+    try {
+      var connResp = await fetch('/api/connectors/list');
+      var connectors = await connResp.json();
+      connectorsCatalog = Array.isArray(connectors) ? connectors : [];
+      renderConnectorDropdown(connectorsCatalog);
+    } catch (err) {
+      console.error('Error loading connectors dropdown', err);
+      renderConnectorDropdown([]);
+    }
+
+    refreshActiveContext();
+  }
+
+  function nodeHasConnections(node) {
+    return lines.some(function(line) {
+      return line._startNode === node || line._endNode === node;
+    });
+  }
+
+  function getActiveAgentFallback() {
+    return agentsCatalog.find(function(a) { return (a.status || '').toLowerCase() === 'active'; }) || agentsCatalog[0] || null;
+  }
+
+  function getPreferredAgent(alert) {
+    if (alert && alert.agentSlug && agentBySlug[alert.agentSlug]) {
+      return agentBySlug[alert.agentSlug];
+    }
+
+    var agentNode = layer.querySelector('.node[data-type="agent"]');
+    if (agentNode) {
+      var nodeSlug = agentNode.dataset.slug;
+      if (nodeSlug && agentBySlug[nodeSlug]) {
+        return agentBySlug[nodeSlug];
+      }
+      if (nodeSlug) {
+        return {
+          slug: nodeSlug,
+          name: (agentNode.querySelector('.node-label') || {}).textContent || nodeSlug,
+          workspace_slug: agentNode.dataset.workspace || 'agency'
+        };
+      }
+    }
+
+    return getActiveAgentFallback();
+  }
+
+  function liveTimeLabel(baseMinutes, idx) {
+    var wobble = (Math.floor(Date.now() / 60000) + idx) % 3;
+    return String(baseMinutes + wobble) + ' min ago';
+  }
+
+  function buildLiveMarketAlerts() {
+    return LIVE_CONTEXT_SEED.map(function(item, idx) {
+      return {
+        level: item.level,
+        title: item.title,
+        detail: item.message,
+        time: liveTimeLabel(item.minutes, idx),
+        add: item.add,
+        agentSlug: item.agentSlug
+      };
+    });
+  }
+
+  function buildActiveContextAlerts() {
+    var nodes = Array.from(layer.querySelectorAll('.node'));
+    var triggers = nodes.filter(function(n) { return n.dataset.type === 'trigger'; });
+    var agents = nodes.filter(function(n) { return n.dataset.type === 'agent'; });
+    var connectors = nodes.filter(function(n) { return n.dataset.type === 'connector'; });
+    var outputs = nodes.filter(function(n) { return n.dataset.type === 'output'; });
+    var alerts = buildLiveMarketAlerts();
+
+    if (lastExecutionSummary && lastExecutionSummary.failed > 0) {
+      alerts.push({
+        level: 'high',
+        title: 'Last execution reported errors',
+        detail: (lastExecutionSummary.message || 'Review failed steps in Execution Results.') + ' (' + lastExecutionSummary.failed + ' failed step(s)).',
+        add: null,
+        agentSlug: 'security-quality'
+      });
+    }
+
+    if (!nodes.length) {
+      alerts.push({
+        level: 'info',
+        title: 'Canvas is empty',
+        detail: 'Start with a Trigger and then add at least one Agent node.',
+        add: { type: 'trigger', name: 'Manual Trigger' },
+        agentSlug: 'coo-operations'
+      });
+      return alerts;
+    }
+
+    if (!triggers.length) {
+      alerts.push({
+        level: 'high',
+        title: 'Missing Trigger',
+        detail: 'Flows need at least one trigger node to start execution.',
+        add: { type: 'trigger', name: 'Manual Trigger' },
+        agentSlug: 'coo-operations'
+      });
+    }
+
+    if (!agents.length) {
+      var suggestedAgent = getActiveAgentFallback();
+      alerts.push({
+        level: 'warning',
+        title: 'Missing Agent',
+        detail: 'Add an agent node to analyze connector data and produce decisions.',
+        add: suggestedAgent ? {
+          type: 'agent',
+          slug: suggestedAgent.slug,
+          name: suggestedAgent.name,
+          status: suggestedAgent.status,
+          workspace_slug: suggestedAgent.workspace_slug || workspaceToSlug(suggestedAgent.workspace)
+        } : { type: 'agent', name: 'Agent' },
+        agentSlug: suggestedAgent ? suggestedAgent.slug : 'ceo-strategy'
+      });
+    }
+
+    if (!outputs.length) {
+      alerts.push({
+        level: 'warning',
+        title: 'Missing Output',
+        detail: 'Add an output node to surface the final result of the flow.',
+        add: { type: 'output', name: 'Output' },
+        agentSlug: 'coo-operations'
+      });
+    }
+
+    if (nodes.length > 1 && lines.length === 0) {
+      alerts.push({
+        level: 'warning',
+        title: 'No connections between nodes',
+        detail: 'Connect nodes to define flow order and dependencies.',
+        add: null,
+        agentSlug: 'backend-architect'
+      });
+    }
+
+    var isolated = nodes.filter(function(n) { return !nodeHasConnections(n); });
+    if (nodes.length > 2 && isolated.length > 0) {
+      alerts.push({
+        level: 'info',
+        title: 'Isolated nodes detected',
+        detail: isolated.length + ' node(s) are not connected to the graph.',
+        add: null,
+        agentSlug: 'backend-architect'
+      });
+    }
+
+    var disconnectedInFlow = connectors.filter(function(n) { return !isConnectedStatus(n.dataset.status || ''); });
+    if (disconnectedInFlow.length > 0) {
+      var connectedSuggestion = connectorsCatalog.find(function(c) { return isConnectedStatus(c.status); });
+      alerts.push({
+        level: 'warning',
+        title: 'Connector nodes are not connected',
+        detail: disconnectedInFlow.length + ' connector node(s) use disconnected integrations.',
+        add: connectedSuggestion ? {
+          type: 'connector',
+          slug: connectedSuggestion.slug,
+          name: connectedSuggestion.name,
+          status: connectedSuggestion.status
+        } : null,
+        agentSlug: 'coo-operations'
+      });
+    }
+
+    if (!alerts.length) {
+      alerts.push({
+        level: 'ok',
+        title: 'Flow context healthy',
+        detail: nodes.length + ' nodes and ' + lines.length + ' connections ready to run.',
+        add: null,
+        agentSlug: getActiveAgentFallback() ? getActiveAgentFallback().slug : null
+      });
+    }
+
+    return alerts.slice(0, 6);
+  }
+
+  function renderActiveContext() {
+    var listEl = document.getElementById('activeContextAlerts');
+    var selectedEl = document.getElementById('activeContextSelected');
+    var countEl = document.getElementById('ctxAlertCount');
+    var sendBtn = document.getElementById('ctxSendBtn');
+    var addBtn = document.getElementById('ctxAddBtn');
+    if (!listEl || !selectedEl || !countEl || !sendBtn || !addBtn) return;
+
+    var actionableCount = activeContextAlerts.filter(function(a) { return a.level !== 'ok'; }).length;
+    countEl.className = 'badge ' + (actionableCount > 0 ? 'bg-danger' : 'bg-success');
+    countEl.textContent = String(actionableCount);
+
+    if (!activeContextAlerts.length) {
+      listEl.innerHTML = '<div class="text-muted small">No context alerts.</div>';
+      selectedEl.textContent = 'No alert selected.';
+      sendBtn.disabled = true;
+      addBtn.disabled = true;
+      return;
+    }
+
+    if (activeContextSelected >= activeContextAlerts.length) {
+      activeContextSelected = 0;
+    }
+
+    clearChildren(listEl);
+    activeContextAlerts.forEach(function(alert, idx) {
+      var card = document.createElement('div');
+      card.className = 'ctx-alert-item' + (idx === activeContextSelected ? ' selected' : '');
+      card.addEventListener('click', function() {
+        activeContextSelected = idx;
+        renderActiveContext();
+      });
+
+      var title = document.createElement('div');
+      title.className = 'ctx-alert-title level-' + alert.level;
+      title.textContent = alert.title;
+
+      var detail = document.createElement('div');
+      detail.className = 'ctx-alert-detail';
+      detail.textContent = alert.detail;
+
+      card.appendChild(title);
+      card.appendChild(detail);
+
+      if (alert.time) {
+        var meta = document.createElement('div');
+        meta.className = 'ctx-alert-meta';
+        meta.textContent = alert.time;
+        card.appendChild(meta);
+      }
+      listEl.appendChild(card);
+    });
+
+    var selected = activeContextAlerts[activeContextSelected];
+    selectedEl.textContent = 'Selected: ' + selected.title;
+
+    addBtn.disabled = !(selected && selected.add);
+    sendBtn.disabled = !getPreferredAgent(selected);
+  }
+
+  function refreshActiveContext() {
+    activeContextAlerts = buildActiveContextAlerts();
+    renderActiveContext();
+  }
+
+  window.selectActiveContextAlert = function(idx) {
+    activeContextSelected = idx;
+    renderActiveContext();
+  };
+
+  window.activeContextAddToFlow = function() {
+    var selected = activeContextAlerts[activeContextSelected];
+    if (!selected || !selected.add) {
+      showToast('No suggested node to add for this alert.', 'warning');
+      return;
+    }
+
+    var add = selected.add;
+    addNode(add.type, add.slug || '', add.name || '', add.status || '', add.workspace_slug || add.workspace || '');
+    showToast('Added ' + (add.name || add.type) + ' to flow.', 'info');
+  };
+
+  function consumeQueuedActiveContextNode(opts) {
+    opts = opts || {};
+    var silent = !!opts.silent;
+    var raw = null;
+    try {
+      raw = localStorage.getItem(ACTIVE_CONTEXT_QUEUE_KEY);
+    } catch (err) {
+      raw = null;
+    }
+    if (!raw) return false;
+
+    var payload = null;
+    try {
+      payload = JSON.parse(raw);
+    } catch (errParse) {
+      try { localStorage.removeItem(ACTIVE_CONTEXT_QUEUE_KEY); } catch (errRemove) {}
+      return false;
+    }
+
+    if (!payload || !payload.node || !payload.node.type) {
+      try { localStorage.removeItem(ACTIVE_CONTEXT_QUEUE_KEY); } catch (errRemove2) {}
+      return false;
+    }
+
+    var node = payload.node;
+    addNode(
+      node.type,
+      node.slug || '',
+      node.name || '',
+      node.status || '',
+      node.workspace_slug || node.workspace || ''
+    );
+
+    try { localStorage.removeItem(ACTIVE_CONTEXT_QUEUE_KEY); } catch (errRemove3) {}
+
+    if (!silent) {
+      var wsText = String(payload.workspace_slug || node.workspace_slug || 'active-context').replace(/-/g, ' ');
+      if (wsText.length) {
+        wsText = wsText.charAt(0).toUpperCase() + wsText.slice(1);
+      }
+      showToast('Added queued context from ' + wsText + '.', 'info');
+    }
+
+    return true;
+  }
+  window.activeContextSendToAgent = function() {
+    var selected = activeContextAlerts[activeContextSelected];
+    var target = getPreferredAgent(selected);
+    if (!target || !target.slug) {
+      showToast('No agent available. Activate an agent first.', 'warning');
+      return;
+    }
+
+    var wsSlug = target.workspace_slug || workspaceToSlug(target.workspace || 'agency');
+    var contextText = selected ? (selected.title + ': ' + selected.detail) : 'Please review this orchestrator flow.';
+    var url = '/chat/' + encodeURIComponent(wsSlug) + '/' + encodeURIComponent(target.slug) + '?from=orchestrator&context=' + encodeURIComponent(contextText);
+    window.open(url, '_blank');
+    showToast('Opened ' + (target.name || target.slug) + ' for review.', 'info');
+  };
+
+  function syncActiveContextLauncher() {
+    var widget = document.getElementById('activeContextWidget');
+    var launcher = document.getElementById('activeContextLauncher');
+    if (!widget || !launcher) return;
+
+    var hidden = widget.classList.contains('is-hidden');
+    launcher.classList.toggle('active', !hidden);
+    launcher.title = hidden ? 'Show Active Context' : 'Hide Active Context';
+  }
+
+  window.toggleActiveContextVisibility = function() {
+    var widget = document.getElementById('activeContextWidget');
+    if (!widget) return;
+    widget.classList.toggle('is-hidden');
+    syncActiveContextLauncher();
+  };
+
+  window.toggleActiveContextWidget = function() {
+    var widget = document.getElementById('activeContextWidget');
+    var btn = document.getElementById('activeContextToggle');
+    if (!widget || !btn) return;
+    var collapsed = widget.classList.toggle('collapsed');
+    btn.innerHTML = collapsed ? '<i class="bi bi-chevron-up"></i>' : '<i class="bi bi-chevron-down"></i>';
+    btn.title = collapsed ? 'Expand' : 'Collapse';
+  };
+
+  loadDropdowns();
+  refreshActiveContext();
+  syncActiveContextLauncher();
+  setInterval(refreshActiveContext, 60000);
+  window.addEventListener('camarad:client-changed', function() {
+    templatesCache = [];
+    lastRunTrace = [];
+    lastRunRawResult = null;
+
+    loadDropdowns();
+    refreshActiveContext();
+
+    var templatesModalEl = document.getElementById('templatesModal');
+    if (templatesModalEl && templatesModalEl.classList.contains('show')) {
+      loadTemplates();
+    }
+
+    var historyModalEl = document.getElementById('historyModal');
+    if (historyModalEl && historyModalEl.classList.contains('show')) {
+      loadHistory();
+    }
+
+    var execPanel = document.getElementById('execResultsPanel');
+    if (execPanel && execPanel.style.display === 'block') {
+      execPanel.style.display = 'none';
+    }
+
+    showToast('Orchestrator re-scoped for active client.', 'info');
+  });
+
+  window.addEventListener('storage', function(evt) {
+    if (evt && evt.key === ACTIVE_CONTEXT_QUEUE_KEY && evt.newValue) {
+      consumeQueuedActiveContextNode({ silent: true });
+    }
+  });
+
+  // --- Load saved flow on start ---
+  try {
+    var saved = localStorage.getItem('camarad_orchestrator_flow');
+    if (saved) {
+      var flow = JSON.parse(saved);
+      if (flow.nodes && flow.nodes.length) {
+        flow.nodes.forEach(function(n) {
+          addNode(n.type, n.slug || '', n.label || '', n.status || '', n.workspace || '');
+          var node = layer.lastElementChild;
+          node.style.left = n.x + 'px';
+          node.style.top = n.y + 'px';
+          if (n.label) { var lbl = node.querySelector('.node-label') || node.querySelector('.node-desc'); if (lbl) lbl.textContent = n.label; }
+          if (n.config) {
+        if (node.dataset.type === 'trigger') {
+          applyTriggerNodeConfig(node, n.config);
+        } else if (node.dataset.type === 'condition') {
+          applyConditionNodeConfig(node, n.config);
+        } else if (node.dataset.type === 'output') {
+          applyOutputNodeConfig(node, n.config);
+        }
+      }
+        });
+        setTimeout(function() {
+          if (flow.connections) {
+            flow.connections.forEach(function(c) {
+              var from = document.getElementById(c.from);
+              var to = document.getElementById(c.to);
+              if (from && to) {
+                try {
+                  var line = new LeaderLine(from, to, {
+                    color: '#58a6ff', size: 2, path: 'fluid',
+                    startSocket: 'right', endSocket: 'left',
+                    startPlug: 'behind', endPlug: 'arrow1'
+                  });
+                  line._startNode = from;
+                    line._endNode = to;
+                    if (c && c.id) {
+                      line._connectionId = String(c.id);
+                    }
+                    if (c && c.config) {
+                      applyConnectionConfig(line, c.config);
+                    } else {
+                      ensureConnectionMeta(line, from, to);
+                    }
+                    lines.push(line);
+                    bindLineInspector(line);
+                  updateNodeCount();
+                } catch(e) { console.warn('Connection restore error:', e); }
+              }
+            });
+          }
+        }, 200);
+      }
+    }
+  } catch(e) { console.warn('Flow load error:', e); }
+
+  setTimeout(function() {
+    consumeQueuedActiveContextNode({ silent: false });
+  }, 220);
+
+  // --- Optional direct load from URL: /orchestrator?flow_id=123 ---
+  try {
+    var qp = new URLSearchParams(window.location.search || '');
+    var flowIdFromUrl = parseInt(qp.get('flow_id') || '', 10);
+    if (Number.isFinite(flowIdFromUrl) && flowIdFromUrl > 0) {
+      setTimeout(function() {
+        loadFlowFromDb(flowIdFromUrl);
+      }, 260);
+    }
+  } catch (e) {
+    console.warn('flow_id query parse error:', e);
+  }
+
+})();
+</script>
+{% endblock %}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
