@@ -59,30 +59,49 @@
 
     .logo-mini {
       display: inline-flex;
+      flex-direction: column;
       align-items: center;
-      gap: 0.55rem;
+      justify-content: center;
+      gap: 0.35rem;
       color: #dfe9ff;
-      letter-spacing: 0.2px;
-      font-size: 1.08rem;
       text-decoration: none;
-      margin-bottom: 1.4rem;
+      margin-bottom: 1.35rem;
     }
 
     .logo-badge {
-      width: 34px;
-      height: 34px;
+      width: 84px;
+      height: 84px;
       display: inline-grid;
       place-items: center;
-      border-radius: 9px;
-      border: 1px solid var(--border);
-      background: linear-gradient(145deg, #0f1a2d, #0c1422);
-      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+      border-radius: 16px;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
     }
 
     .logo-badge img {
-      width: 22px;
-      height: 22px;
+      width: 74px;
+      height: 74px;
       object-fit: contain;
+    }
+
+    .logo-wordmark {
+      display: inline-flex;
+      align-items: center;
+      font-size: clamp(1.65rem, 3.6vw, 2rem);
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      line-height: 1;
+      color: #e8f1ff;
+    }
+
+    .logo-wordmark .dot {
+      width: 0.32em;
+      height: 0.32em;
+      border-radius: 999px;
+      background: #1fbf6a;
+      margin: 0 0.17em;
+      transform: translateY(0.3em);
     }
 
     .hero h1 {
@@ -98,6 +117,12 @@
       max-width: 700px;
       color: var(--muted);
       font-size: clamp(0.98rem, 2vw, 1.06rem);
+    }
+
+    .video-copy {
+      width: min(980px, calc(100% - 2rem));
+      margin: 0 auto 1rem;
+      text-align: center;
     }
 
     .search-shell {
@@ -116,6 +141,17 @@
       border-color: #3f82be;
       box-shadow: 0 0 0 4px var(--accent-soft);
       transform: translateY(-1px);
+    }
+
+    .search-wrap {
+      width: min(740px, calc(100% - 2rem));
+      margin: 1.7rem auto 0;
+      position: relative;
+    }
+
+    .search-wrap .search-shell {
+      width: 100%;
+      margin: 0;
     }
 
     .search-shell i {
@@ -138,10 +174,62 @@
       border-radius: 999px;
       background: linear-gradient(180deg, #1b3656, #162c46);
       color: #dceaff;
-      font-size: 0.93rem;
-      padding: 0.65rem 1rem;
+      font-size: 1rem;
+      width: 44px;
+      height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
       margin-right: 0.2rem;
-      white-space: nowrap;
+      line-height: 1;
+    }
+
+    .search-suggest {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 0.45rem);
+      border: 1px solid #2a3a53;
+      border-radius: 12px;
+      background: #101827;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
+      overflow: hidden;
+      z-index: 30;
+      display: none;
+    }
+
+    .search-suggest button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: #dce6f5;
+      text-align: left;
+      padding: 0.62rem 0.8rem;
+      border-bottom: 1px solid rgba(40, 54, 77, 0.7);
+    }
+
+    .search-suggest button:last-child {
+      border-bottom: 0;
+    }
+
+    .search-suggest button:hover {
+      background: rgba(36, 58, 90, 0.4);
+    }
+
+    .suggest-type {
+      display: inline-block;
+      font-size: 0.72rem;
+      color: #8cb9e6;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-right: 0.45rem;
+    }
+
+    .suggest-sub {
+      color: #9bacbf;
+      font-size: 0.79rem;
+      margin-left: 0.25rem;
     }
     .auth-cta {
       margin-top: 0.95rem;
@@ -149,9 +237,13 @@
     .auth-cta .btn {
       border-radius: 999px;
       padding: 0.58rem 1rem;
+      margin: 0 0.2rem;
       border-color: #2f4668;
       background: linear-gradient(180deg, #1b3656, #162c46);
       color: #dceaff;
+    }
+    .auth-cta .btn-outline-light {
+      background: #111d31;
     }
 
     .store-soon {
@@ -227,6 +319,40 @@
       margin: 0 0.7rem;
     }
 
+    .blocks {
+      width: min(1040px, calc(100% - 2rem));
+      margin: 1.2rem auto 0.6rem;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.8rem;
+    }
+
+    .block {
+      border: 1px solid #263349;
+      border-radius: 14px;
+      background: rgba(16, 24, 36, 0.86);
+      padding: 0.8rem;
+      min-height: 122px;
+    }
+
+    .block h3 {
+      margin: 0 0 0.4rem;
+      font-size: 1rem;
+    }
+
+    .block p {
+      margin: 0;
+      color: #95a6bf;
+      font-size: 0.88rem;
+    }
+
+    .block ul {
+      margin: 0.45rem 0 0;
+      padding-left: 1.05rem;
+      color: #b6c4d8;
+      font-size: 0.86rem;
+    }
+
     footer {
       margin-top: auto;
       text-align: center;
@@ -252,6 +378,22 @@
     footer a:hover {
       color: #c5ddff;
     }
+
+    @media (max-width: 960px) {
+      .blocks {
+        grid-template-columns: 1fr;
+      }
+
+      .logo-badge {
+        width: 74px;
+        height: 74px;
+      }
+
+      .logo-badge img {
+        width: 64px;
+        height: 64px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -264,24 +406,29 @@
   <main class="hero">
     <a href="/" class="logo-mini" aria-label="Camarad.AI home">
       <span class="logo-badge"><img src="/static/brand/camarad-logo-64.png" alt="Camarad logo"></span>
-      <span>Camarad.AI</span>
+      <span class="logo-wordmark">Camarad<span class="dot" aria-hidden="true"></span>AI</span>
     </a>
-    <h1>One AI command center for life and business.</h1>
     <p>Ask once. Route to the right agent. Execute with orchestrated workflows and connected tools.</p>
 
-    <form class="search-shell" id="landing-search-form" action="/chat/personal/life-coach" method="get">
-      <i class="bi bi-search"></i>
-      <input
-        id="landing-query"
-        name="q"
-        type="text"
-        placeholder="Ask Personal Assistant anything..."
-        autocomplete="off"
-      >
-      <button type="submit">Open Personal Assistant</button>
-    </form>
+    <div class="search-wrap">
+      <form class="search-shell" id="landing-search-form" action="/chat/personal/life-coach" method="get">
+        <i class="bi bi-search"></i>
+        <input
+          id="landing-query"
+          name="q"
+          type="text"
+          placeholder="Ask Personal Assistant anything..."
+          autocomplete="off"
+        >
+        <button type="submit" aria-label="Open Personal Assistant">
+          <i class="bi bi-arrow-up"></i>
+        </button>
+      </form>
+      <div id="landing-suggest" class="search-suggest" role="listbox" aria-label="Search suggestions"></div>
+    </div>
     <div class="auth-cta">
-      <a class="btn" href="/signup"><i class="bi bi-google me-2"></i>Create Account with Google</a>
+      <a class="btn" data-track="signup" data-track-from="landing" href="/signup?next=/app"><i class="bi bi-google me-2"></i>Start with Google</a>
+      <a class="btn btn-outline-light" data-track="demo_open" data-track-from="landing" href="/platform-demo?src=landing_demo"><i class="bi bi-play-circle me-2"></i>Try demo (no login)</a>
     </div>
 
     <div class="store-soon">
@@ -289,6 +436,10 @@
       <span class="chip"><i class="bi bi-google-play"></i> <strong>Google Play</strong> Soon</span>
     </div>
   </main>
+
+  <section class="video-copy">
+    <h1>One AI command center for life and business.</h1>
+  </section>
 
   <section class="preview">
     <iframe
@@ -298,6 +449,25 @@
       allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
       allowfullscreen>
     </iframe>
+  </section>
+
+  <section class="blocks">
+    <article class="block">
+      <h3><i class="bi bi-lightning-charge me-1"></i>What You Get In 60 Seconds</h3>
+      <ul>
+        <li>Live connectors for Google Ads and GA4</li>
+        <li>Multi-agent chat (PPC, SEO, Personal Assistant)</li>
+        <li>Orchestrator runs with full trace and outputs</li>
+      </ul>
+    </article>
+    <article class="block">
+      <h3><i class="bi bi-diagram-3 me-1"></i>How It Works</h3>
+      <p>Sign up, select workspace/client, connect your data, then run chat and flows with clear audit traces.</p>
+    </article>
+    <article class="block">
+      <h3><i class="bi bi-shield-check me-1"></i>Proof Layer</h3>
+      <p>Client scoping hardened (M3), connector fallback safety, and shadow billing telemetry for cost visibility.</p>
+    </article>
   </section>
 
   <section class="tools">
@@ -343,11 +513,100 @@
 
   <script>
     (function () {
+      window.dataLayer = window.dataLayer || [];
+      window.dataLayer.push({
+        event: "landing_view",
+        page_path: window.location.pathname,
+        page_url: window.location.href
+      });
+
+      document.querySelectorAll('a[data-track="signup"]').forEach(function (el) {
+        el.addEventListener("click", function () {
+          window.dataLayer.push({
+            event: "signup_click",
+            source: el.getAttribute("data-track-from") || "landing",
+            href: el.getAttribute("href") || ""
+          });
+        });
+      });
+      document.querySelectorAll('a[data-track="demo_open"]').forEach(function (el) {
+        el.addEventListener("click", function () {
+          window.dataLayer.push({
+            event: "demo_open",
+            source: el.getAttribute("data-track-from") || "landing",
+            href: el.getAttribute("href") || ""
+          });
+        });
+      });
+
       var form = document.getElementById("landing-search-form");
-      if (!form) return;
+      var input = document.getElementById("landing-query");
+      var suggest = document.getElementById("landing-suggest");
+      var searchTimer = null;
+      if (!form || !input || !suggest) return;
+
+      function hideSuggest() {
+        suggest.style.display = "none";
+        suggest.innerHTML = "";
+      }
+
+      function openItem(url) {
+        if (!url) return;
+        window.location.href = url;
+      }
+
+      function renderSuggestions(rows) {
+        if (!Array.isArray(rows) || !rows.length) {
+          hideSuggest();
+          return;
+        }
+        suggest.innerHTML = rows.map(function (r) {
+          var type = String((r && r.type) || "").trim();
+          var name = String((r && r.name) || "").trim();
+          var subtitle = String((r && r.subtitle) || "").trim();
+          var url = String((r && r.url) || "").trim().replace(/"/g, "&quot;");
+          return '<button type="button" data-url="' + url + '">'
+            + '<span class="suggest-type">' + type + '</span>'
+            + '<strong>' + name + "</strong>"
+            + (subtitle ? '<span class="suggest-sub">' + subtitle + "</span>" : "")
+            + "</button>";
+        }).join("");
+        suggest.style.display = "block";
+        suggest.querySelectorAll("button[data-url]").forEach(function (btn) {
+          btn.addEventListener("click", function () { openItem(btn.getAttribute("data-url")); });
+        });
+      }
+
+      input.addEventListener("input", function () {
+        var q = String(input.value || "").trim();
+        if (searchTimer) clearTimeout(searchTimer);
+        if (q.length < 2) {
+          hideSuggest();
+          return;
+        }
+        searchTimer = setTimeout(function () {
+          fetch("/api/search?q=" + encodeURIComponent(q), { credentials: "same-origin" })
+            .then(function (r) { return r.ok ? r.json() : []; })
+            .then(renderSuggestions)
+            .catch(hideSuggest);
+        }, 140);
+      });
+
+      document.addEventListener("click", function (ev) {
+        if (!form.contains(ev.target) && !suggest.contains(ev.target)) hideSuggest();
+      });
 
       form.addEventListener("submit", function (ev) {
-        form.action = "/chat/personal/life-coach";
+        ev.preventDefault();
+        var q = String(input.value || "").trim();
+        var target = "/chat/personal/life-coach";
+        if (q) target += "?q=" + encodeURIComponent(q);
+        window.dataLayer.push({
+          event: "signup_click",
+          source: "landing_search",
+          query_length: q.length
+        });
+        openItem(target);
       });
     })();
   </script>

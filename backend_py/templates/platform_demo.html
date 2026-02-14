@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Camarad.AI - Platform Demo</title>
+  <link rel="icon" type="image/x-icon" href="/static/brand/favicon.ico">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <style>
+    :root {
+      --bg: #070d18;
+      --bg-soft: #0d1628;
+      --panel: #0f1a2d;
+      --panel-2: #13213a;
+      --line: #273a5a;
+      --text: #e2ebfb;
+      --muted: #90a5c2;
+      --accent: #2e84ee;
+      --ok: #22c56e;
+      --warn: #f1b957;
+      --danger: #ff5e7b;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: "Segoe UI", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+      background:
+        radial-gradient(1200px 620px at 50% -240px, rgba(42, 129, 236, 0.22), transparent 70%),
+        linear-gradient(180deg, #070d18 0%, #070d18 55%, #081124 100%);
+    }
+
+    .demo-layout {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 250px 1fr;
+    }
+
+    .demo-sidebar {
+      border-right: 1px solid var(--line);
+      background: rgba(7, 13, 25, 0.95);
+      padding: 0.95rem 0.8rem;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      font-size: 2rem;
+      font-weight: 700;
+      color: #edf4ff;
+      margin-bottom: 0.8rem;
+    }
+
+    .brand img { width: 35px; height: 35px; }
+
+    .demo-pill {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid #6d4d14;
+      background: #36280f;
+      color: #f2c770;
+      border-radius: 999px;
+      font-size: 0.74rem;
+      padding: 0.14rem 0.56rem;
+      margin-bottom: 0.95rem;
+    }
+
+    .menu { display: grid; gap: 0.42rem; }
+
+    .menu button {
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #0e1a2f;
+      color: #d6e6ff;
+      text-align: left;
+      padding: 0.58rem 0.7rem;
+      font-size: 1.02rem;
+      line-height: 1.1;
+      transition: background .15s ease, border-color .15s ease;
+    }
+
+    .menu button:hover { background: #13233d; }
+
+    .menu button.active {
+      border-color: #4f6d95;
+      background: #182843;
+      color: #fff;
+      box-shadow: inset 0 0 0 1px #7f95b1;
+    }
+
+    .sidebar-footer {
+      margin-top: 1rem;
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .sidebar-footer a {
+      text-decoration: none;
+      border: 1px solid #315f9a;
+      border-radius: 11px;
+      background: #17335b;
+      color: #ecf3ff;
+      padding: 0.56rem 0.7rem;
+      font-weight: 600;
+      font-size: 0.95rem;
+      line-height: 1.1;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+
+    .conversion-rail {
+      border: 1px solid #2f507d;
+      border-radius: 11px;
+      background: linear-gradient(180deg, #132645, #10213b);
+      padding: 0.62rem 0.7rem;
+      margin-bottom: 0.8rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+    }
+
+    .conversion-rail p {
+      margin: 0;
+      color: #d8e8ff;
+      font-size: 0.86rem;
+    }
+
+    .conversion-rail .cta {
+      border: 1px solid #4676b1;
+      border-radius: 9px;
+      background: #1c3b66;
+      color: #eff6ff;
+      text-decoration: none;
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 0.38rem 0.6rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      white-space: nowrap;
+    }
+
+    .demo-main {
+      padding: 0.95rem 1.05rem 1.25rem;
+      overflow: auto;
+    }
+
+    .topbar {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(11, 21, 38, 0.9);
+      padding: 0.7rem;
+      margin-bottom: 0.85rem;
+      display: grid;
+      gap: 0.65rem;
+    }
+
+    .topbar-row {
+      display: flex;
+      gap: 0.55rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .workspace-pill {
+      border: 1px solid #2f4b73;
+      background: #152844;
+      color: #d8e8ff;
+      border-radius: 10px;
+      padding: 0.42rem 0.62rem;
+      font-size: 0.84rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .search {
+      flex: 1;
+      min-width: 220px;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      border: 1px solid #2a456d;
+      background: #0f1f37;
+      border-radius: 999px;
+      padding: 0.38rem 0.66rem;
+    }
+
+    .search input {
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: #dce9ff;
+      width: 100%;
+      font-size: 0.93rem;
+    }
+
+    .search i { color: #86ace2; }
+
+    .stat-chip {
+      border: 1px solid #2f4f7f;
+      background: #12243f;
+      color: #d7e7ff;
+      border-radius: 999px;
+      padding: 0.23rem 0.6rem;
+      font-size: 0.78rem;
+      white-space: nowrap;
+    }
+
+    .stat-chip strong { color: #fff; }
+
+    .demo-header {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: linear-gradient(180deg, #0f1a2d, #0d182a);
+      padding: 0.9rem 1rem;
+      margin-bottom: 0.85rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.8rem;
+    }
+
+    .demo-header h2 {
+      margin: 0;
+      font-size: 1.65rem;
+      line-height: 1.05;
+      letter-spacing: -0.01em;
+    }
+
+    .demo-header p {
+      margin: 0.3rem 0 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .mode-badge {
+      border: 1px solid #3566a8;
+      border-radius: 999px;
+      background: #16335a;
+      color: #e8f2ff;
+      padding: 0.31rem 0.72rem;
+      font-size: 0.8rem;
+      white-space: nowrap;
+    }
+
+    .toolbar {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #0f1a2c;
+      padding: 0.62rem;
+      margin-bottom: 0.85rem;
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .toolbar .btn-mini {
+      border: 1px solid #35557f;
+      background: #142a49;
+      color: #deebff;
+      border-radius: 9px;
+      padding: 0.36rem 0.56rem;
+      font-size: 0.8rem;
+      line-height: 1;
+    }
+
+    .demo-grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 0.75rem;
+    }
+
+    .cardx {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      padding: 0.75rem;
+    }
+
+    .cardx h3 {
+      margin: 0 0 0.42rem;
+      font-size: 1.15rem;
+      display: flex;
+      align-items: center;
+      gap: 0.42rem;
+    }
+
+    .cardx p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.89rem;
+    }
+
+    .card-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.45rem;
+    }
+
+    .tag {
+      border-radius: 999px;
+      border: 1px solid #2a5a3f;
+      background: #113b28;
+      color: #8de3b4;
+      font-size: 0.73rem;
+      padding: 0.12rem 0.46rem;
+      white-space: nowrap;
+    }
+
+    .tag.warn { border-color: #73561b; background: #3c2b0f; color: #f2cc7d; }
+    .tag.danger { border-color: #703148; background: #3b1421; color: #ff93ab; }
+    .tag.blue { border-color: #345c95; background: #132c4e; color: #afd2ff; }
+
+    .list {
+      margin: 0.55rem 0 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 0.45rem;
+    }
+
+    .list li {
+      border: 1px solid #2a3f61;
+      border-radius: 10px;
+      background: var(--panel-2);
+      padding: 0.46rem 0.56rem;
+      font-size: 0.84rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+
+    .kpi {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0,1fr));
+      gap: 0.5rem;
+      margin-top: 0.55rem;
+    }
+
+    .kpi-item {
+      border: 1px solid #2a3f62;
+      border-radius: 10px;
+      background: #11203a;
+      padding: 0.5rem;
+      text-align: center;
+    }
+
+    .kpi-item strong { display: block; font-size: 1.02rem; color: #fff; }
+    .kpi-item span { color: var(--muted); font-size: 0.78rem; }
+
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-5 { grid-column: span 5; }
+    .span-6 { grid-column: span 6; }
+    .span-7 { grid-column: span 7; }
+    .span-8 { grid-column: span 8; }
+    .span-9 { grid-column: span 9; }
+    .span-12 { grid-column: span 12; }
+
+    .hidden { display: none !important; }
+
+    @media (max-width: 1080px) {
+      .demo-layout { grid-template-columns: 1fr; }
+      .demo-sidebar {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .span-3, .span-4, .span-5, .span-6, .span-7, .span-8, .span-9, .span-12 { grid-column: span 12; }
+      .kpi { grid-template-columns: 1fr; }
+      .demo-header { display: block; }
+      .mode-badge { margin-top: 0.65rem; display: inline-block; }
+    }
+  </style>
+</head>
+<body>
+  <div class="demo-layout">
+    <aside class="demo-sidebar">
+      <div class="brand">
+        <img src="/static/brand/camarad-logo-64.png" alt="Camarad logo">
+        <span>Camarad.AI</span>
+      </div>
+      <span class="demo-pill">Platform Demo · No saving · Mock data</span>
+
+      <nav class="menu" aria-label="Demo sections">
+        <button class="active" data-demo-tab="chat"><i class="bi bi-chat-dots me-2"></i>Chat</button>
+        <button data-demo-tab="agents"><i class="bi bi-robot me-2"></i>Agents</button>
+        <button data-demo-tab="connectors"><i class="bi bi-plug me-2"></i>Connectors</button>
+        <button data-demo-tab="orchestrator"><i class="bi bi-diagram-3 me-2"></i>Orchestrator</button>
+        <button data-demo-tab="boardroom"><i class="bi bi-people me-2"></i>Boardroom</button>
+        <button data-demo-tab="settings"><i class="bi bi-sliders me-2"></i>Settings</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <a data-track="signup" data-track-from="platform_demo_sidebar" href="/signup?next=/app"><i class="bi bi-google"></i>Start with Google</a>
+        <a href="/pricing"><i class="bi bi-credit-card-2-front"></i>View pricing</a>
+      </div>
+    </aside>
+
+    <main class="demo-main">
+      <section class="conversion-rail">
+        <p>Ready to run this on live data? Keep this state and continue after signup.</p>
+        <a id="startFromStateCta" class="cta" data-track="signup" data-track-from="platform_demo_state" href="/signup?next=/app">
+          <i class="bi bi-rocket-takeoff"></i>Start from this demo state
+        </a>
+      </section>
+
+      <section class="topbar">
+        <div class="topbar-row">
+          <span class="workspace-pill"><i class="bi bi-grid"></i>Workspace: Demo Agency</span>
+          <span class="workspace-pill"><i class="bi bi-building"></i>Client: Acme Retail</span>
+          <div class="search" role="search">
+            <i class="bi bi-search"></i>
+            <input type="text" value="Search agents, connectors, templates..." readonly aria-label="Demo search input">
+          </div>
+        </div>
+        <div class="topbar-row">
+          <span class="stat-chip"><strong>20</strong> agents</span>
+          <span class="stat-chip"><strong>6</strong> connected accounts</span>
+          <span class="stat-chip"><strong>589</strong> / 10,000 CT used</span>
+          <span class="stat-chip"><strong>2</strong> runs today</span>
+          <span class="stat-chip"><strong>PRO</strong> plan</span>
+        </div>
+      </section>
+
+      <section class="demo-header">
+        <div>
+          <h2 id="demoTitle">Chat Demo</h2>
+          <p id="demoSubtitle">Route one prompt across specialized agents and turn answers into actions.</p>
+        </div>
+        <span class="mode-badge">Read-only demo mode</span>
+      </section>
+
+      <section class="toolbar" id="demoToolbar">
+        <button class="btn-mini"><i class="bi bi-lightning-charge me-1"></i>Trigger</button>
+        <button class="btn-mini"><i class="bi bi-robot me-1"></i>Agent</button>
+        <button class="btn-mini"><i class="bi bi-plug me-1"></i>Connector</button>
+        <button class="btn-mini"><i class="bi bi-diagram-2 me-1"></i>Condition</button>
+        <button class="btn-mini"><i class="bi bi-file-earmark-text me-1"></i>Output</button>
+      </section>
+
+      <section class="demo-panel" data-panel="chat">
+        <div class="demo-grid">
+          <article class="cardx span-8">
+            <div class="card-title-row">
+              <h3><i class="bi bi-chat-left-text"></i>Personal Assistant</h3>
+              <span class="tag blue">live-feel mock</span>
+            </div>
+            <p>"What should we optimize first this week for growth?"</p>
+            <ul class="list">
+              <li><span>Trim low-intent spend in Search campaigns</span><span class="tag">suggested</span></li>
+              <li><span>Launch one retargeting flow in Orchestrator</span><span class="tag">suggested</span></li>
+              <li><span>Compare GA4 assisted conversions by channel</span><span class="tag">suggested</span></li>
+            </ul>
+          </article>
+          <article class="cardx span-4">
+            <div class="card-title-row">
+              <h3><i class="bi bi-bar-chart"></i>Usage Snapshot</h3>
+              <span class="tag warn">mock</span>
+            </div>
+            <div class="kpi">
+              <div class="kpi-item"><strong>411</strong><span>CT Balance</span></div>
+              <div class="kpi-item"><strong>6%</strong><span>Month used</span></div>
+              <div class="kpi-item"><strong>24%</strong><span>Chat share</span></div>
+            </div>
+          </article>
+          <article class="cardx span-12">
+            <div class="card-title-row">
+              <h3><i class="bi bi-stars"></i>Quick Actions</h3>
+              <span class="tag blue">demo actions</span>
+            </div>
+            <ul class="list">
+              <li><span>Open PPC Specialist conversation</span><span class="tag">open</span></li>
+              <li><span>Run "Weekly Growth War Room" flow</span><span class="tag">run</span></li>
+              <li><span>Generate executive brief for boardroom</span><span class="tag">generate</span></li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="demo-panel hidden" data-panel="agents">
+        <div class="demo-grid">
+          <article class="cardx span-4"><div class="card-title-row"><h3>CEO / Vision & Strategy</h3><span class="tag">online</span></div><p>Executive priorities and quarterly direction.</p></article>
+          <article class="cardx span-4"><div class="card-title-row"><h3>PPC Specialist</h3><span class="tag">online</span></div><p>Campaign structure, budget shifts, keyword actions.</p></article>
+          <article class="cardx span-4"><div class="card-title-row"><h3>SEO & Content Strategist</h3><span class="tag">online</span></div><p>Organic growth plan, topic clusters, pages to improve.</p></article>
+          <article class="cardx span-4"><div class="card-title-row"><h3>Creative Director</h3><span class="tag">online</span></div><p>Hooks, ad concepts and campaign creatives.</p></article>
+          <article class="cardx span-4"><div class="card-title-row"><h3>CFO / Finance</h3><span class="tag">online</span></div><p>Margin guardrails, CAC/LTV and runway health.</p></article>
+          <article class="cardx span-4"><div class="card-title-row"><h3>CTO / Tech & Innovation</h3><span class="tag">online</span></div><p>Ops reliability, incidents and architecture posture.</p></article>
+          <article class="cardx span-12">
+            <div class="card-title-row"><h3><i class="bi bi-shield-check"></i>Agent controls</h3><span class="tag warn">mock-only</span></div>
+            <ul class="list">
+              <li><span>Model policy per agent: Eco / Standard / Premium</span><span class="tag blue">policy</span></li>
+              <li><span>Workspace visibility and client assignment</span><span class="tag blue">scope</span></li>
+              <li><span>Prompt profile and role persona tuning</span><span class="tag blue">config</span></li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="demo-panel hidden" data-panel="connectors">
+        <div class="demo-grid">
+          <article class="cardx span-6">
+            <div class="card-title-row"><h3><i class="bi bi-google"></i>Google Ads</h3><span class="tag">connected</span></div>
+            <p>Campaigns, spend, clicks, conversions, ROAS.</p>
+            <ul class="list">
+              <li><span>Account: Acme Retail EU</span><span class="tag blue">active</span></li>
+              <li><span>Today spend: 742 EUR</span><span class="tag blue">mock</span></li>
+              <li><span>Conv value: 5,820 EUR</span><span class="tag blue">mock</span></li>
+            </ul>
+          </article>
+          <article class="cardx span-6">
+            <div class="card-title-row"><h3><i class="bi bi-bar-chart-line"></i>Google Analytics 4</h3><span class="tag">connected</span></div>
+            <p>Sessions, events, funnels, attribution.</p>
+            <ul class="list">
+              <li><span>Property: camarad.ai</span><span class="tag blue">active</span></li>
+              <li><span>Sessions (30d): 18,422</span><span class="tag blue">mock</span></li>
+              <li><span>Purchases: 286</span><span class="tag blue">mock</span></li>
+            </ul>
+          </article>
+          <article class="cardx span-12">
+            <div class="card-title-row"><h3><i class="bi bi-plug"></i>Connector catalog</h3><span class="tag warn">preview</span></div>
+            <p>Meta Ads, TikTok, LinkedIn, Stripe, HubSpot, Salesforce, Notion, GitHub, AWS, Vercel.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="demo-panel hidden" data-panel="orchestrator">
+        <div class="demo-grid">
+          <article class="cardx span-7">
+            <div class="card-title-row"><h3><i class="bi bi-diagram-3"></i>Weekly Growth Flow</h3><span class="tag">mock run</span></div>
+            <ul class="list">
+              <li><span>Trigger -> Google Ads -> GA4 -> PPC Agent -> Output</span><span class="tag blue">flow</span></li>
+              <li><span>Run trace: 5 steps, 11.8s total, 0 failures</span><span class="tag">trace</span></li>
+              <li><span>Output: Executive summary + action list</span><span class="tag blue">output</span></li>
+            </ul>
+          </article>
+          <article class="cardx span-5">
+            <div class="card-title-row"><h3><i class="bi bi-list-check"></i>Recent runs</h3><span class="tag warn">mock</span></div>
+            <ul class="list">
+              <li><span>Daily PPC Review</span><span class="tag">9.4s</span></li>
+              <li><span>SEO Opportunity Scan</span><span class="tag">12.1s</span></li>
+              <li><span>Boardroom Weekly Brief</span><span class="tag">14.7s</span></li>
+            </ul>
+          </article>
+          <article class="cardx span-12">
+            <div class="card-title-row"><h3><i class="bi bi-kanban"></i>Flow controls</h3><span class="tag danger">read-only</span></div>
+            <p>In full app mode, you can drag nodes, connect steps, test runs and export traces. Demo mode shows behavior with mock payloads only.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="demo-panel hidden" data-panel="boardroom">
+        <div class="demo-grid">
+          <article class="cardx span-6">
+            <div class="card-title-row"><h3><i class="bi bi-graph-up-arrow"></i>Executive Snapshot</h3><span class="tag">healthy</span></div>
+            <p>Revenue trend positive, paid CAC stable, conversion improved +8%.</p>
+            <div class="kpi">
+              <div class="kpi-item"><strong>+12%</strong><span>Revenue MTD</span></div>
+              <div class="kpi-item"><strong>2.3x</strong><span>ROAS</span></div>
+              <div class="kpi-item"><strong>14 mo</strong><span>Runway</span></div>
+            </div>
+          </article>
+          <article class="cardx span-6">
+            <div class="card-title-row"><h3><i class="bi bi-exclamation-triangle"></i>Attention Needed</h3><span class="tag danger">priority</span></div>
+            <ul class="list">
+              <li><span>Branded search share dipped in 2 campaigns</span><span class="tag warn">watch</span></li>
+              <li><span>Weekend CPC spikes in one ad group</span><span class="tag warn">watch</span></li>
+              <li><span>Missing UTM consistency for one source</span><span class="tag warn">fix</span></li>
+            </ul>
+          </article>
+          <article class="cardx span-12">
+            <div class="card-title-row"><h3><i class="bi bi-send"></i>Suggested next actions</h3><span class="tag blue">boardroom</span></div>
+            <ul class="list">
+              <li><span>Shift 15% budget to high-intent campaigns</span><span class="tag">approve</span></li>
+              <li><span>Launch fresh creative set for weekend traffic</span><span class="tag">approve</span></li>
+              <li><span>Run attribution check via GA4 connector</span><span class="tag">run</span></li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="demo-panel hidden" data-panel="settings">
+        <div class="demo-grid">
+          <article class="cardx span-4">
+            <div class="card-title-row"><h3><i class="bi bi-person"></i>User Profile</h3><span class="tag blue">mock</span></div>
+            <ul class="list">
+              <li><span>Name: Andrei</span><span class="tag">owner</span></li>
+              <li><span>Timezone: Europe/Bucharest</span><span class="tag">set</span></li>
+              <li><span>Language: English</span><span class="tag">set</span></li>
+            </ul>
+          </article>
+          <article class="cardx span-4">
+            <div class="card-title-row"><h3><i class="bi bi-credit-card"></i>Billing & Usage</h3><span class="tag">stripe-ready</span></div>
+            <ul class="list">
+              <li><span>Plan: Pro</span><span class="tag">mock</span></li>
+              <li><span>CT used (30d): 589 / 10,000</span><span class="tag">mock</span></li>
+              <li><span>Pricing source: EUR catalog</span><span class="tag">v2</span></li>
+            </ul>
+          </article>
+          <article class="cardx span-4">
+            <div class="card-title-row"><h3><i class="bi bi-shield-check"></i>Privacy & Data</h3><span class="tag">m3 scoped</span></div>
+            <ul class="list">
+              <li><span>Client scoping: enforced</span><span class="tag">ok</span></li>
+              <li><span>OAuth callback: no-store</span><span class="tag">ok</span></li>
+              <li><span>Search split: public/app</span><span class="tag">ok</span></li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    (function() {
+      window.dataLayer = window.dataLayer || [];
+      window.dataLayer.push({
+        event: "demo_open",
+        demo_type: "platform_demo",
+        page_path: window.location.pathname
+      });
+
+      const labels = {
+        chat: ["Chat Demo", "Route one prompt across specialized agents and turn answers into actions."],
+        agents: ["Agents Demo", "Role-based specialist catalog aligned with the live application taxonomy."],
+        connectors: ["Connectors Demo", "Integrated data sources preview with realistic connector cards and statuses."],
+        orchestrator: ["Orchestrator Demo", "Visual flow runs, trace summaries and output packaging in read-only mode."],
+        boardroom: ["Boardroom Demo", "Executive overview with signals, risks and suggested cross-team actions."],
+        settings: ["Settings Demo", "Profile, billing, privacy and operational controls mirrored from production UX."]
+      };
+
+      const toolbarByTab = {
+        chat: ["New Chat", "Run Prompt", "Assign Agent", "Open Trace"],
+        agents: ["Filter Workspace", "Sort by Role", "Open Agent", "Manage"],
+        connectors: ["Refresh", "Connect", "Fetch Data", "Open Config"],
+        orchestrator: ["Trigger", "Agent", "Connector", "Run", "Route", "Trace"],
+        boardroom: ["Generate Brief", "Weekly View", "Risk Alerts", "Send Summary"],
+        settings: ["User", "Billing", "Notifications", "Privacy"]
+      };
+
+      const buttons = Array.from(document.querySelectorAll("[data-demo-tab]"));
+      const panels = Array.from(document.querySelectorAll("[data-panel]"));
+      const titleEl = document.getElementById("demoTitle");
+      const subtitleEl = document.getElementById("demoSubtitle");
+      const toolbar = document.getElementById("demoToolbar");
+      const stateCta = document.getElementById("startFromStateCta");
+
+      document.querySelectorAll('a[data-track="signup"]').forEach((el) => {
+        el.addEventListener("click", () => {
+          window.dataLayer.push({
+            event: "signup_click",
+            source: el.getAttribute("data-track-from") || "platform_demo",
+            href: el.getAttribute("href") || ""
+          });
+        });
+      });
+
+      function renderToolbar(tab) {
+        const items = toolbarByTab[tab] || [];
+        toolbar.innerHTML = items
+          .map((label) => '<button class="btn-mini" type="button">' + label + '</button>')
+          .join('');
+      }
+
+      buttons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const tab = btn.getAttribute("data-demo-tab");
+          buttons.forEach((b) => b.classList.toggle("active", b === btn));
+          panels.forEach((panel) => panel.classList.toggle("hidden", panel.getAttribute("data-panel") !== tab));
+          if (labels[tab]) {
+            titleEl.textContent = labels[tab][0];
+            subtitleEl.textContent = labels[tab][1];
+          }
+          if (stateCta) {
+            const nextPath = "/chat/personal/life-coach?from=platform_demo&entry=" + encodeURIComponent(tab || "chat");
+            stateCta.setAttribute("href", "/signup?next=" + encodeURIComponent(nextPath));
+          }
+          renderToolbar(tab);
+        });
+      });
+
+      if (stateCta) {
+        const nextPath = "/chat/personal/life-coach?from=platform_demo&entry=chat";
+        stateCta.setAttribute("href", "/signup?next=" + encodeURIComponent(nextPath));
+      }
+      renderToolbar("chat");
+    })();
+  </script>
+</body>
+</html>
