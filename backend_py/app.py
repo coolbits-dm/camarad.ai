@@ -70,6 +70,17 @@ GOOGLE_SITE_VERIFICATION = str(os.getenv("GOOGLE_SITE_VERIFICATION", "")).strip(
 GOOGLE_SITE_VERIFICATION_FILE = str(os.getenv("GOOGLE_SITE_VERIFICATION_FILE", "")).strip()
 GTM_CONTAINER_ID = str(os.getenv("GTM_CONTAINER_ID", "GTM-KGGP4B9N")).strip().upper()
 BILLING_INTERNAL_TOKEN = str(os.getenv("BILLING_INTERNAL_TOKEN", "")).strip()
+def _billing_phase3_enabled():
+    return str(os.getenv("BILLING_PHASE3_ENABLED", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int(name, default, min_value=0, max_value=10_000_000):
+    try:
+        value = int(os.getenv(name, str(default)) or default)
+    except Exception:
+        value = int(default)
+    return max(int(min_value), min(int(max_value), int(value)))
+
 CALIBRATION_MIN_ROWS_WITH_TOKENS = int(os.getenv("CALIBRATION_MIN_ROWS_WITH_TOKENS", "200") or 200)
 CALIBRATION_MIN_ROWS_WITH_BILLABLE = int(os.getenv("CALIBRATION_MIN_ROWS_WITH_BILLABLE", "150") or 150)
 CALIBRATION_MIN_CT_ACTUAL_SUM = int(os.getenv("CALIBRATION_MIN_CT_ACTUAL_SUM", "10000") or 10000)
@@ -1467,6 +1478,10 @@ def _ensure_usage_ledger_table(conn):
         "ALTER TABLE usage_ledger ADD COLUMN ct_ledger_txn_id TEXT",
         "ALTER TABLE usage_ledger ADD COLUMN pricing_catalog_id TEXT",
         "ALTER TABLE usage_ledger ADD COLUMN ct_rate_id TEXT",
+        "ALTER TABLE usage_ledger ADD COLUMN ct_debit_applied INTEGER",
+        "ALTER TABLE usage_ledger ADD COLUMN phase3_applied INTEGER DEFAULT 0",
+        "ALTER TABLE usage_ledger ADD COLUMN phase3_applied_at TEXT",
+        "ALTER TABLE usage_ledger ADD COLUMN phase3_cap_reason TEXT",
         "ALTER TABLE usage_ledger ADD COLUMN meta_json TEXT",
     ):
         try:
@@ -1482,6 +1497,7 @@ def _ensure_usage_ledger_table(conn):
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ledger_status_created ON usage_ledger(status, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ledger_provider_model_created ON usage_ledger(provider, model, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ledger_phase3_created ON usage_ledger(phase3_applied, created_at)")
     except Exception:
         pass
     _ensure_pricing_engine_tables(conn)
@@ -2273,6 +2289,194 @@ def _get_user_ct_snapshot(conn, user_id, client_id=None):
         "low_balance": bool(remaining_pct <= CT_LOW_BALANCE_WARN_PCT),
         "remaining_pct": int(remaining_pct),
         "usage_breakdown": usage_breakdown,
+    }
+
+
+def _phase3_caps():
+    return {
+        "max_ct_per_request": _env_int("MAX_CT_PER_REQUEST", 200, 1, 1_000_000),
+        "max_daily_ct_per_workspace": _env_int("MAX_DAILY_CT_PER_WORKSPACE", 5000, 0, 10_000_000),
+    }
+
+
+def _phase3_workspace_daily_spent(conn, user_id, workspace_id):
+    ws = str(workspace_id or "").strip()
+    if not ws:
+        return 0
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0)
+        FROM usage_ledger
+        WHERE user_id = ?
+          AND workspace_id = ?
+          AND DATE(created_at) = DATE('now')
+        """,
+        (int(user_id), ws),
+    ).fetchone()
+    return int((row[0] if row else 0) or 0)
+
+
+def _phase3_resolve_ct_debit(conn, request_id, requested_amt):
+    minimum_ct = 1
+    computed = None
+    row = conn.execute(
+        """
+        SELECT
+          COALESCE(ct_shadow_debit, ct_debit_shadow) AS shadow_ct,
+          billable_usd,
+          ct_rate_id,
+          minimum_ct_debit
+        FROM usage_ledger
+        WHERE request_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (str(request_id or "")[:96],),
+    ).fetchone()
+    if row:
+        try:
+            minimum_ct = max(1, int(row["minimum_ct_debit"] or 1))
+        except Exception:
+            minimum_ct = 1
+        try:
+            if row["shadow_ct"] is not None:
+                computed = int(row["shadow_ct"] or 0)
+        except Exception:
+            computed = None
+        if computed is None or computed <= 0:
+            billable = float(row["billable_usd"] or 0.0)
+            ct_rate_value = None
+            if row["ct_rate_id"]:
+                ct_row = conn.execute(
+                    "SELECT ct_value_usd FROM ct_rates WHERE id = ? LIMIT 1",
+                    (str(row["ct_rate_id"]),),
+                ).fetchone()
+                if ct_row:
+                    ct_rate_value = float(ct_row["ct_value_usd"] or 0.0)
+            if ct_rate_value is None or ct_rate_value <= 0:
+                current = _current_ct_rate_row(conn)
+                if current:
+                    ct_rate_value = float(current["ct_value_usd"] or 0.0)
+            if billable > 0 and ct_rate_value and ct_rate_value > 0:
+                computed = int(math.ceil(billable / ct_rate_value))
+    if computed is None or computed <= 0:
+        computed = int(requested_amt or 0)
+    computed = max(1, int(computed))
+    return max(int(minimum_ct), int(computed))
+
+
+def _phase3_mark_request(conn, request_id, **kwargs):
+    if not request_id:
+        return
+    sets = []
+    params = []
+    for key in ("ct_actual_debit", "ct_debit_applied", "phase3_applied", "phase3_applied_at", "phase3_cap_reason", "ct_ledger_txn_id"):
+        if key in kwargs:
+            sets.append(f"{key} = ?")
+            params.append(kwargs.get(key))
+    if not sets:
+        return
+    params.append(str(request_id)[:96])
+    conn.execute(f"UPDATE usage_ledger SET {', '.join(sets)} WHERE request_id = ?", tuple(params))
+
+
+def _spend_ct_phase3(conn, user_id, amount, *, request_id, event_type="unknown", description="", client_id=None, workspace_id=None):
+    requested_amt = int(amount or 0)
+    if requested_amt <= 0:
+        return {"success": False, "error": "Invalid amount"}
+
+    rid = str(request_id or "")[:96]
+    if rid:
+        existing = conn.execute(
+            """
+            SELECT ct_debit_applied
+            FROM usage_ledger
+            WHERE request_id = ? AND COALESCE(phase3_applied, 0) = 1 AND ct_debit_applied IS NOT NULL
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (rid,),
+        ).fetchone()
+        if existing:
+            spent = int(existing["ct_debit_applied"] or 0)
+            snap_existing = _get_user_ct_snapshot(conn, user_id, client_id=client_id)
+            return {
+                "success": True,
+                "requested": int(requested_amt),
+                "spent": int(max(0, spent)),
+                "new_balance": int(snap_existing.get("ct_balance", 0) or 0),
+                "phase3_applied": True,
+                "idempotent": True,
+            }
+
+    snap = _get_user_ct_snapshot(conn, user_id, client_id=client_id)
+    ct_debit = _phase3_resolve_ct_debit(conn, rid, requested_amt)
+    caps = _phase3_caps()
+
+    if ct_debit > int(caps["max_ct_per_request"]):
+        _phase3_mark_request(conn, rid, phase3_applied=0, phase3_cap_reason="max_ct_per_request")
+        return {
+            "success": False,
+            "error": "Per-request CT cap exceeded",
+            "code": "max_ct_per_request",
+            "required": int(ct_debit),
+            "max_ct_per_request": int(caps["max_ct_per_request"]),
+        }
+
+    ws = str(workspace_id or "").strip()
+    daily_ws_cap = int(caps["max_daily_ct_per_workspace"] or 0)
+    daily_ws_used = _phase3_workspace_daily_spent(conn, user_id, ws) if ws else 0
+    if daily_ws_cap > 0 and ws and (daily_ws_used + ct_debit) > daily_ws_cap:
+        _phase3_mark_request(conn, rid, phase3_applied=0, phase3_cap_reason="max_daily_ct_per_workspace")
+        return {
+            "success": False,
+            "error": "Daily workspace CT cap exceeded",
+            "code": "max_daily_ct_per_workspace",
+            "required": int(ct_debit),
+            "used_today_workspace": int(daily_ws_used),
+            "max_daily_ct_per_workspace": int(daily_ws_cap),
+        }
+
+    balance = int(snap.get("ct_balance", 0) or 0)
+    if balance < ct_debit:
+        _phase3_mark_request(conn, rid, phase3_applied=0, phase3_cap_reason="insufficient_balance")
+        return {
+            "success": False,
+            "error": "Insufficient CT balance",
+            "code": "insufficient_balance",
+            "required": int(ct_debit),
+            "available": int(balance),
+        }
+
+    etype = str(event_type or "unknown").strip().lower() or "unknown"
+    desc = str(description or "").strip()[:300]
+    cur = conn.execute(
+        "INSERT INTO usage_ledger (user_id, client_id, workspace_id, event_type, amount, description) VALUES (?, ?, ?, ?, ?, ?)",
+        (int(user_id), int(client_id) if client_id is not None else None, ws or None, etype, -int(ct_debit), desc),
+    )
+    txn_id = cur.lastrowid
+    _phase3_mark_request(
+        conn,
+        rid,
+        ct_actual_debit=int(ct_debit),
+        ct_debit_applied=int(ct_debit),
+        phase3_applied=1,
+        phase3_applied_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        phase3_cap_reason=None,
+        ct_ledger_txn_id=f"phase3:{txn_id}",
+    )
+
+    new_balance = int(max(0, balance - int(ct_debit)))
+    return {
+        "success": True,
+        "requested": int(requested_amt),
+        "spent": int(ct_debit),
+        "new_balance": int(new_balance),
+        "phase3_applied": True,
+        "idempotent": False,
+        "workspace_id": ws,
+        "used_today_workspace": int(daily_ws_used + int(ct_debit)),
+        "max_daily_ct_per_workspace": int(daily_ws_cap),
     }
 
 
@@ -14176,6 +14380,30 @@ def api_billing_cost_telemetry():
         (f"-{window_hours} hour",),
     ).fetchone()
     proposal_48h = _billing_calibration_proposal(conn, window_hours=48)
+    phase3_row = conn.execute(
+        """
+        SELECT
+          COALESCE(SUM(CASE WHEN COALESCE(phase3_applied, 0) = 1 THEN 1 ELSE 0 END), 0) AS applied_count,
+          COALESCE(SUM(CASE WHEN COALESCE(phase3_applied, 0) = 1 THEN COALESCE(ct_debit_applied, 0) ELSE 0 END), 0) AS ct_debit_applied_sum,
+          COALESCE(SUM(CASE WHEN phase3_cap_reason IS NOT NULL AND phase3_cap_reason <> '' THEN 1 ELSE 0 END), 0) AS cap_reject_count
+        FROM usage_ledger
+        WHERE created_at >= datetime('now', ?)
+        """,
+        (f"-{window_hours} hour",),
+    ).fetchone()
+    phase3_reason_rows = conn.execute(
+        """
+        SELECT phase3_cap_reason AS reason, COUNT(*) AS cnt
+        FROM usage_ledger
+        WHERE created_at >= datetime('now', ?)
+          AND phase3_cap_reason IS NOT NULL
+          AND phase3_cap_reason <> ''
+        GROUP BY phase3_cap_reason
+        ORDER BY cnt DESC
+        LIMIT 10
+        """,
+        (f"-{window_hours} hour",),
+    ).fetchall()
     conn.close()
 
     implied_24h = None
@@ -14250,6 +14478,16 @@ def api_billing_cost_telemetry():
             },
             "implied_ct_value_usd_24h": implied_24h,
             "implied_ct_value_usd_7d": implied_7d,
+        },
+        "phase3": {
+            "enabled": bool(_billing_phase3_enabled()),
+            "applied_count": int((phase3_row["applied_count"] if phase3_row else 0) or 0),
+            "ct_debit_applied_sum": int((phase3_row["ct_debit_applied_sum"] if phase3_row else 0) or 0),
+            "cap_reject_count": int((phase3_row["cap_reject_count"] if phase3_row else 0) or 0),
+            "cap_reject_reasons": [
+                {"reason": str(r["reason"] or ""), "count": int(r["cnt"] or 0)}
+                for r in (phase3_reason_rows or [])
+            ],
         },
         "top_models": [
             {
@@ -14542,7 +14780,20 @@ def api_user_spend():
     except Exception as shadow_err:
         print(f"api_user_spend_shadow_preflight_error: {shadow_err}")
 
-    spend_result = _spend_ct(conn, uid, amount, event_type=event_type, description=description, client_id=cid)
+    phase3_enabled = _billing_phase3_enabled()
+    if phase3_enabled:
+        spend_result = _spend_ct_phase3(
+            conn,
+            uid,
+            amount,
+            request_id=request_id,
+            event_type=event_type,
+            description=description,
+            client_id=cid,
+            workspace_id=_current_workspace_slug(),
+        )
+    else:
+        spend_result = _spend_ct(conn, uid, amount, event_type=event_type, description=description, client_id=cid)
     if not spend_result.get("success"):
         try:
             _shadow_usage_finalize(
@@ -14558,8 +14809,11 @@ def api_user_spend():
         except Exception:
             pass
         conn.close()
+        err_code = str(spend_result.get("code") or "").strip().lower()
         err_txt = str(spend_result.get("error") or "").lower()
-        if err_txt.startswith("insufficient"):
+        if err_code.startswith("max_"):
+            status_code = 429
+        elif err_txt.startswith("insufficient"):
             status_code = 402
         elif "daily" in err_txt and "limit" in err_txt:
             status_code = 429
@@ -14568,13 +14822,14 @@ def api_user_spend():
         return jsonify(spend_result), status_code
 
     usage = _get_user_ct_snapshot(conn, uid, client_id=cid)
-    try:
-        conn.execute(
-            "UPDATE usage_ledger SET ct_actual_debit = ? WHERE request_id = ?",
-            (int(spend_result.get("spent", amount) or amount), str(request_id)),
-        )
-    except Exception:
-        pass
+    if not phase3_enabled:
+        try:
+            conn.execute(
+                "UPDATE usage_ledger SET ct_actual_debit = ? WHERE request_id = ?",
+                (int(spend_result.get("spent", amount) or amount), str(request_id)),
+            )
+        except Exception:
+            pass
     try:
         _shadow_usage_finalize(
             conn,
@@ -14600,6 +14855,8 @@ def api_user_spend():
         "requested": int(spend_result.get("requested", amount) or amount),
         "cost_multiplier": float(spend_result.get("cost_multiplier", 1.0) or 1.0),
         "request_id": request_id,
+        "phase3_applied": bool(spend_result.get("phase3_applied", False)),
+        "idempotent": bool(spend_result.get("idempotent", False)),
         "daily_limit": int(spend_result.get("daily_limit", usage.get("daily_limit", 0)) or 0),
         "used_today": int(spend_result.get("used_today", 0) or 0),
         "new_balance": int(usage.get("ct_balance", 0) or 0),

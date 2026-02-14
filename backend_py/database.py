@@ -296,6 +296,10 @@ def init_db():
         "ALTER TABLE usage_ledger ADD COLUMN error_code TEXT",
         "ALTER TABLE usage_ledger ADD COLUMN cost_estimate_usd REAL DEFAULT 0",
         "ALTER TABLE usage_ledger ADD COLUMN cost_final_usd REAL DEFAULT 0",
+        "ALTER TABLE usage_ledger ADD COLUMN ct_debit_applied INTEGER",
+        "ALTER TABLE usage_ledger ADD COLUMN phase3_applied INTEGER DEFAULT 0",
+        "ALTER TABLE usage_ledger ADD COLUMN phase3_applied_at TEXT",
+        "ALTER TABLE usage_ledger ADD COLUMN phase3_cap_reason TEXT",
         "ALTER TABLE usage_ledger ADD COLUMN meta_json TEXT",
     ):
         try:
@@ -435,6 +439,7 @@ def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_ledger_request_id_unique "
             "ON usage_ledger(request_id) WHERE request_id IS NOT NULL AND request_id <> ''"
         )
+        db.execute('CREATE INDEX IF NOT EXISTS idx_usage_ledger_phase3_created ON usage_ledger(phase3_applied, created_at)')
     except Exception:
         pass
 

@@ -126,3 +126,10 @@ Pentru fiecare task nou:
 - `Status` (`todo` / `in_progress` / `blocked` / `done`)
 - `ETA`
 - `Blockers`
+
+### P2 Billing Phase 3 (flagged)
+- Status: `in_progress`
+- Implemented behind env flag `BILLING_PHASE3_ENABLED` (default OFF)
+- Added server-side caps: `MAX_CT_PER_REQUEST`, `MAX_DAILY_CT_PER_WORKSPACE`
+- Added idempotent debit by `request_id` and telemetry `phase3` block
+- Next: controlled 24-48h enable window + rollback drill
