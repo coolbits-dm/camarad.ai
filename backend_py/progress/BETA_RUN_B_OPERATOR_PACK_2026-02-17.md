@@ -111,3 +111,9 @@ cd /opt/camarad
   --trace-dir logs/beta_traces \
   --feedback-grid progress/BETA_FEEDBACK_GRID_2026-02-14.md
 ```
+
+Session timing helper (for TTFUO/funnel timing fields):
+```bash
+cd /opt/camarad
+/opt/camarad/.venv/bin/python scripts/beta_trace_session_report.py --trace-dir logs/beta_traces
+```
