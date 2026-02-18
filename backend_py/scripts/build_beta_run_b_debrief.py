@@ -51,7 +51,20 @@ def _extract_trace_summary(text: str, token: str):
     events = _parse_log_events(text)
     landing_events = [e for e in events if f"src={token}" in e["path"] and e["method"] == "GET"]
     if not landing_events:
-        return {"landing": False, "demo": False, "signup": False, "first_chat_send": False, "completed": False}
+        return {
+            "landing": False,
+            "demo": False,
+            "signup": False,
+            "first_chat_send": False,
+            "completed": False,
+            "landing_ts": "",
+            "demo_ts": "",
+            "signup_ts": "",
+            "first_chat_send_ts": "",
+            "landing_to_demo_s": "",
+            "landing_to_signup_s": "",
+            "signup_to_first_send_s": "",
+        }
 
     # Build best session per landing event:
     # - same UA
@@ -70,13 +83,22 @@ def _extract_trace_summary(text: str, token: str):
             and e["ts_dt"].timestamp() <= end_ts
         ]
         landing = True
-        demo = any(e["method"] == "GET" and ("/platform-demo" in e["path"] or "/chat-demo" in e["path"]) for e in scoped)
-        signup = any(e["method"] == "GET" and "/signup" in e["path"] for e in scoped)
-        first_chat_send = any(
-            e["method"] == "POST"
-            and ("/chat/" in e["path"] or "/api/chat" in e["path"] or "/api/chats" in e["path"])
-            for e in scoped
+        demo_event = next(
+            (e for e in scoped if e["method"] == "GET" and ("/platform-demo" in e["path"] or "/chat-demo" in e["path"])), None
         )
+        signup_event = next((e for e in scoped if e["method"] == "GET" and "/signup" in e["path"]), None)
+        chat_event = next(
+            (
+                e
+                for e in scoped
+                if e["method"] == "POST"
+                and ("/chat/" in e["path"] or "/api/chat" in e["path"] or "/api/chats" in e["path"])
+            ),
+            None,
+        )
+        demo = demo_event is not None
+        signup = signup_event is not None
+        first_chat_send = chat_event is not None
         score = int(landing) + int(demo) + int(signup) + int(first_chat_send)
         candidate = {
             "landing": landing,
@@ -86,6 +108,10 @@ def _extract_trace_summary(text: str, token: str):
             "completed": landing and demo and signup and first_chat_send,
             "score": score,
             "start_ts": start.timestamp(),
+            "landing_event": landing_event,
+            "demo_event": demo_event,
+            "signup_event": signup_event,
+            "chat_event": chat_event,
         }
         if best is None or candidate["score"] > best["score"] or (
             candidate["score"] == best["score"] and candidate["start_ts"] > best["start_ts"]
@@ -97,12 +123,28 @@ def _extract_trace_summary(text: str, token: str):
     signup = best["signup"]
     first_chat_send = best["first_chat_send"]
     completed = best["completed"]
+
+    def _ts(ev):
+        return ev["ts_dt"].strftime("%Y-%m-%d %H:%M:%S %z") if ev else ""
+
+    def _delta(a, b):
+        if not a or not b:
+            return ""
+        return str(int(b["ts_dt"].timestamp() - a["ts_dt"].timestamp()))
+
     return {
         "landing": landing,
         "demo": demo,
         "signup": signup,
         "first_chat_send": first_chat_send,
         "completed": completed,
+        "landing_ts": _ts(best["landing_event"]),
+        "demo_ts": _ts(best["demo_event"]),
+        "signup_ts": _ts(best["signup_event"]),
+        "first_chat_send_ts": _ts(best["chat_event"]),
+        "landing_to_demo_s": _delta(best["landing_event"], best["demo_event"]),
+        "landing_to_signup_s": _delta(best["landing_event"], best["signup_event"]),
+        "signup_to_first_send_s": _delta(best["signup_event"], best["chat_event"]),
     }
 
 
@@ -156,6 +198,13 @@ def main():
                 "ttfuo": fb.get("ttfuo", ""),
                 "blockers": fb.get("top_blockers", ""),
                 "value": fb.get("top_value", ""),
+                "landing_ts": summary["landing_ts"],
+                "demo_ts": summary["demo_ts"],
+                "signup_ts": summary["signup_ts"],
+                "first_chat_send_ts": summary["first_chat_send_ts"],
+                "landing_to_demo_s": summary["landing_to_demo_s"],
+                "landing_to_signup_s": summary["landing_to_signup_s"],
+                "signup_to_first_send_s": summary["signup_to_first_send_s"],
             }
         )
 
@@ -169,6 +218,19 @@ def main():
     for r in rows:
         lines.append(
             f"| {r['tester']} | {r['token']} | {r['trace_completed']} | {r['landing']} | {r['demo']} | {r['signup']} | {r['first_chat_send']} | {r['ttfuo']} | {r['blockers']} | {r['value']} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Session Timing (auto from traces)",
+            "| Tester | Landing TS | Demo TS | Signup TS | First Chat Send TS | Landing->Demo (s) | Landing->Signup (s) | Signup->First Send (s) |",
+            "|---|---|---|---|---|---:|---:|---:|",
+        ]
+    )
+    for r in rows:
+        lines.append(
+            f"| {r['tester']} | {r['landing_ts'] or '-'} | {r['demo_ts'] or '-'} | {r['signup_ts'] or '-'} | {r['first_chat_send_ts'] or '-'} | {r['landing_to_demo_s'] or '-'} | {r['landing_to_signup_s'] or '-'} | {r['signup_to_first_send_s'] or '-'} |"
         )
 
     lines.extend(
