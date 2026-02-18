@@ -1,5 +1,6 @@
 """GA4 OAuth callback canonical flow tests (shadow, local test client)."""
 from urllib.parse import urlparse, parse_qs
+import uuid
 
 import app as m
 
@@ -13,6 +14,7 @@ def run():
     original_coolbits_request = m._coolbits_request
     original_requests_get = m.requests.get
     m.COOLBITS_GATEWAY_ENABLED = True
+    state_value = f"state-{uuid.uuid4().hex}"
 
     def fake_coolbits_request(method, path, params=None, body=None, timeout=25, extra_headers=None):
         if path == "/api/connectors/ga4/auth/url":
@@ -23,7 +25,7 @@ def run():
                     "&redirect_uri=https%3A%2F%2Fcloud.cblm.ai%2Fapi%2Fconnectors%2Fga4%2Foauth%2Fcallback"
                     "&response_type=code"
                     "&scope=openid"
-                    "&state=state-abc"
+                    f"&state={state_value}"
                 )
             }, ""
         if path == "/api/connectors/ga4/status":
@@ -54,14 +56,14 @@ def run():
     assert redirect_uri.endswith("/api/connectors/ga4/oauth/callback"), redirect_uri
 
     # 2) callback consumes state and returns popup close html with no-store.
-    r2 = c.get("/api/connectors/ga4/oauth/callback?code=ok&state=state-abc", headers=_hdr(1))
+    r2 = c.get(f"/api/connectors/ga4/oauth/callback?code=ok&state={state_value}", headers=_hdr(1))
     body2 = r2.get_data(as_text=True)
     assert r2.status_code == 200
     assert "postMessage" in body2
     assert "no-store" in str(r2.headers.get("Cache-Control") or "").lower()
 
     # 3) second call with same state is rejected (state replay protection).
-    r3 = c.get("/api/connectors/ga4/oauth/callback?code=ok&state=state-abc", headers=_hdr(1))
+    r3 = c.get(f"/api/connectors/ga4/oauth/callback?code=ok&state={state_value}", headers=_hdr(1))
     assert r3.status_code == 400
 
     # 4) overview without property_id uses active property from status.
