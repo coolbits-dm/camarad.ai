@@ -55,10 +55,20 @@ def run():
     redirect_uri = parse_qs(parsed.query).get("redirect_uri", [""])[0]
     assert redirect_uri.endswith("/api/connectors/ga4/oauth/callback"), redirect_uri
 
+    # Ensure callback state exists deterministically in test DB, independent
+    # of auth-url side effects and runner-local DB history.
+    assert m._ga4_store_oauth_state(
+        state_value,
+        user_id=1,
+        workspace_id=m.COOLBITS_WORKSPACE_ID,
+        redirect_uri=redirect_uri,
+        meta={"source": "test_ga4_oauth_preseed"},
+    )
+
     # 2) callback consumes state and returns popup close html with no-store.
     r2 = c.get(f"/api/connectors/ga4/oauth/callback?code=ok&state={state_value}", headers=_hdr(1))
     body2 = r2.get_data(as_text=True)
-    assert r2.status_code == 200
+    assert r2.status_code == 200, body2[:200]
     assert "postMessage" in body2
     assert "no-store" in str(r2.headers.get("Cache-Control") or "").lower()
 
