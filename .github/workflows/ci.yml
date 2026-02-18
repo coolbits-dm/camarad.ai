@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend_py
     env:
       AUTH_REQUIRED: "0"
       APP_ENV: "test"
