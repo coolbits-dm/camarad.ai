@@ -26,6 +26,13 @@ Use template:
 5. `first_useful_output` (manual tester confirmation)
 
 ## 4) Trace Collection Commands
+Live watch during tester session (recommended):
+```bash
+cd /opt/camarad
+bash scripts/beta_trace_watch.sh beta_u1
+```
+Stop with `Ctrl+C`, then run collectors below.
+
 After each tester session:
 ```bash
 cd /opt/camarad
