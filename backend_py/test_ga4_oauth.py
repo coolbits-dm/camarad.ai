@@ -6,7 +6,9 @@ import app as m
 
 
 def _hdr(uid=1):
-    return {"X-User-ID": str(uid)}
+    # Provide a request token so callback path does not attempt mock-login
+    # against a local Coolbits gateway during CI.
+    return {"X-User-ID": str(uid), "Authorization": "Bearer test-ci-token"}
 
 
 def run():
