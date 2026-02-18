@@ -1,0 +1,323 @@
+{
+  "summary": {
+    "run_id": "agent_science_quality_20260217T235001Z",
+    "allow_real": true,
+    "selected_tasks": 20,
+    "http_200_rate": 1.0,
+    "agents": {
+      "personal": {
+        "avg_quality_score": 9.2,
+        "runs": 5
+      },
+      "ppc": {
+        "avg_quality_score": 8.4,
+        "runs": 5
+      },
+      "ceo": {
+        "avg_quality_score": 9.2,
+        "runs": 5
+      },
+      "devops": {
+        "avg_quality_score": 10.0,
+        "runs": 5
+      }
+    },
+    "top_gaps": [
+      {
+        "gap": "ppc:too_long",
+        "count": 4
+      },
+      {
+        "gap": "personal:too_long",
+        "count": 2
+      },
+      {
+        "gap": "ceo:thin_domain_specificity",
+        "count": 2
+      },
+      {
+        "gap": "ceo:too_long",
+        "count": 1
+      }
+    ]
+  },
+  "rows": [
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "PERS-01",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 1285,
+      "response_tokens_est": 189,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Camarad Specialist:\n\n**Objective:** Plan your day for optimal productivity and deadline adherence.\n\n**Actionable Steps:**\n\n1.  **Morning Focus Block (08:00 - 09:30):** Dedicate this time to high-priority, uninterrupted work on your report. Leverage the quietest part of your day.\n2.  **Client Sync (09:30 - 10:00):** Engage fully. Note any action items or follow-ups relevant to your report.\n3.  **Report Deep Dive (10:00 - 12:30):** Resume focused work on the report. Prioritize sections requiring s"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "PERS-05",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 2233,
+      "response_tokens_est": 261,
+      "quality_score": 8.0,
+      "gaps": [
+        "too_long"
+      ],
+      "response_preview": "**Camarad Specialist: Agency Workspace**\n\n**Current Spend:** $450\n\n**Task:** Breakdown and optimization suggestions for agency workspace spend.\n\n**Breakdown:**\n\n*   **Software Subscriptions:** (e.g., Project management tools, CRM, design software, communication platforms)\n*   **Cloud Services:** (e.g., Storage, computing power, hosting)\n*   **Marketing & Advertising Tools:** (e.g., SEO platforms, social media management, analytics)\n*   **Productivity Tools:** (e.g., Time tracking, note-taking ap"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "PA_B_02",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 855,
+      "response_tokens_est": 118,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "As Camarad's Billing Telemetry Specialist, I will address the client's spend spike inquiry and prepare for the deploy window.\n\n**Action Plan:**\n\n1.  **Investigate Spend Spike:**\n    *   Access billing telemetry data.\n    *   Identify the specific services/resources contributing to the spike.\n    *   Analyze recent changes or events that correlate with the spike.\n    *   Formulate a concise explanation of the cause.\n\n2.  **Prepare for Deploy Window:**\n    *   Review the planned deployment.\n    * "
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "PA_B_07",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 756,
+      "response_tokens_est": 112,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "**Camarad Specialist Action Plan:**\n\n**Task 1: OAuth Cache Rules**\n*   **Action:** Schedule a dedicated working session with the Security and Infrastructure teams to finalize OAuth cache rules.\n*   **Deliverable:** Documented and approved OAuth cache rule set.\n\n**Task 2: Mobile Header Overlap**\n*   **Action:** Assign the UI/UX team to investigate and propose solutions for the mobile header overlap issue.\n*   **Deliverable:** Design mockups or a clear description of the proposed fix for the mobil"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "PA_B_10",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 2631,
+      "response_tokens_est": 373,
+      "quality_score": 8.0,
+      "gaps": [
+        "too_long"
+      ],
+      "response_preview": "Alright, let's get this done. As your Camarad specialist, here's your concrete, action-oriented post-ship checklist for today, focusing on smoke, confidence harness, and basic UX sanity.\n\n**Objective:** Verify core functionality and user experience post-deployment.\n\n---\n\n**I. Smoke Test (Critical Path Verification)**\n\n*   **Action:** Execute the primary user flow for the most critical feature.\n    *   **Example:** If it's an e-commerce site, this means: Add item to cart -> Proceed to checkout ->"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "PPC-01",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 169,
+      "response_tokens_est": 29,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "PPC Specialist ready.\n\nRecommended structure:\n- Diagnose spend, CTR, CVR, and ROAS.\n- Identify top 3 waste drivers.\n- Propose fast wins and test plan for next 7-14 days."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "PPC-06",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 1883,
+      "response_tokens_est": 267,
+      "quality_score": 8.0,
+      "gaps": [
+        "too_long"
+      ],
+      "response_preview": "**Camarad Specialist: User Journey Optimization**\n\n**Insights:**\n\n*   **Paid Search to Signup Drop-off:** Users entering via paid search are reaching the pricing page but not completing signup. This indicates a potential friction point in the conversion funnel after initial interest.\n*   **Display to Exit on Blog:** Users arriving from display ads are landing on the blog and then leaving the site. This suggests the blog content isn't effectively engaging or guiding these users further into the f"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "PPC_B_03",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 2184,
+      "response_tokens_est": 293,
+      "quality_score": 8.0,
+      "gaps": [
+        "too_long"
+      ],
+      "response_preview": "**Camarad Specialist Action Plan: Address Early Daily Spend Overages**\n\n**Objective:** Reduce daily spend to align with pacing targets, preventing overages in the early part of the day.\n\n**Immediate Actions (Today):**\n\n1.  **Pause High-Performing, High-Cost Campaigns/Ad Groups:** Identify campaigns or ad groups with the highest daily spend and significant overages. Temporarily pause these to immediately curb spend.\n2.  **Reduce Bid Caps on Remaining Active Campaigns:** For campaigns that remain "
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "PPC_B_08",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 3890,
+      "response_tokens_est": 559,
+      "quality_score": 8.0,
+      "gaps": [
+        "too_long"
+      ],
+      "response_preview": "As the Camarad GA4 Reconciliation Specialist, here are concrete steps to address the discrepancy of GA4 showing more conversions than Ads, without assuming attribution models:\n\n**Reconciliation Steps:**\n\n1.  **Verify Conversion Event Definitions:**\n    *   **Action:** In GA4, navigate to Admin > Events. For each conversion event, confirm the exact event name and any associated parameters used for counting.\n    *   **Action:** In Google Ads, navigate to Tools & Settings > Measurement > Conversion"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "PPC_B_10",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 3898,
+      "response_tokens_est": 522,
+      "quality_score": 8.0,
+      "gaps": [
+        "too_long"
+      ],
+      "response_preview": "As your Camarad Brand Specialist, here are concrete, action-oriented tactics and guardrails to prevent brand term leakage into non-brand campaigns, while preserving valuable learnings:\n\n**Separation Tactics:**\n\n1.  **Dedicated Non-Brand Campaign Structure:**\n    *   **Action:** Create entirely separate campaign groups for \"Brand\" and \"Non-Brand\" traffic. Do not mix them within the same campaign.\n    *   **Rationale:** This is the foundational step for clear segmentation.\n\n2.  **Negative Keyword "
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "CEO-01",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 905,
+      "response_tokens_est": 109,
+      "quality_score": 9.0,
+      "gaps": [
+        "thin_domain_specificity"
+      ],
+      "response_preview": "**Camarad Specialist Action Plan: Scale**\n\n**Analysis:** Current month's spend is 20% over plan.\n\n**Recommendation:** **Scale.**\n\n**Actionable Steps:**\n\n1.  **Immediate Budget Review:** Reallocate funds from underperforming initiatives to those demonstrating strong ROI and contributing to the current overspend.\n2.  **Performance Deep Dive:** Identify the specific campaigns/channels driving the 20% delta. Prioritize scaling these successful areas.\n3.  **Resource Allocation Adjustment:** Shift per"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "CEO-06",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 3787,
+      "response_tokens_est": 476,
+      "quality_score": 7.0,
+      "gaps": [
+        "too_long",
+        "thin_domain_specificity"
+      ],
+      "response_preview": "**Camarad Specialist Action Plan: API Outage (42 min, Missed Runs, Delayed Reports)**\n\n**Objective:** Restore API functionality, mitigate immediate impact, and prevent recurrence.\n\n**Immediate Actions (Within 15 minutes):**\n\n1.  **Confirm Outage Scope:**\n    *   **Action:** Access monitoring dashboards (e.g., Grafana, Datadog) to verify API endpoint status and error rates.\n    *   **Action:** Cross-reference with incident management system for any automated alerts or user-reported issues.\n    * "
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "CEO_B_04",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 258,
+      "response_tokens_est": 38,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Executive brief:\n1. Decision: hold until critical signal check completes.\n2. Risks: execution drift, unclear ownership, budget variance.\n3. Next actions:\n- Assign owner and deadline per risk.\n- Review KPI gate in 48h.\n- Reassess with approve/reject/escalate."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "CEO_B_06",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 258,
+      "response_tokens_est": 38,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Executive brief:\n1. Decision: hold until critical signal check completes.\n2. Risks: execution drift, unclear ownership, budget variance.\n3. Next actions:\n- Assign owner and deadline per risk.\n- Review KPI gate in 48h.\n- Reassess with approve/reject/escalate."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "CEO_B_09",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 258,
+      "response_tokens_est": 38,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Executive brief:\n1. Decision: hold until critical signal check completes.\n2. Risks: execution drift, unclear ownership, budget variance.\n3. Next actions:\n- Assign owner and deadline per risk.\n- Review KPI gate in 48h.\n- Reassess with approve/reject/escalate."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "DEV-01",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 236,
+      "response_tokens_est": 34,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "DevOps runbook:\n1. Triage\n- Check /healthz and /readyz.\n- Inspect recent app/nginx logs.\n2. Hypothesis\n- Validate config/deploy/load regression.\n3. Remediation\n- Apply guarded restart or rollback.\n- Confirm stability window (10-15 min)."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "DEV-04",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 236,
+      "response_tokens_est": 34,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "DevOps runbook:\n1. Triage\n- Check /healthz and /readyz.\n- Inspect recent app/nginx logs.\n2. Hypothesis\n- Validate config/deploy/load regression.\n3. Remediation\n- Apply guarded restart or rollback.\n- Confirm stability window (10-15 min)."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "DO_B_02",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 236,
+      "response_tokens_est": 34,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "DevOps runbook:\n1. Triage\n- Check /healthz and /readyz.\n- Inspect recent app/nginx logs.\n2. Hypothesis\n- Validate config/deploy/load regression.\n3. Remediation\n- Apply guarded restart or rollback.\n- Confirm stability window (10-15 min)."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "DO_B_03",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 236,
+      "response_tokens_est": 34,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "DevOps runbook:\n1. Triage\n- Check /healthz and /readyz.\n- Inspect recent app/nginx logs.\n2. Hypothesis\n- Validate config/deploy/load regression.\n3. Remediation\n- Apply guarded restart or rollback.\n- Confirm stability window (10-15 min)."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235001Z",
+      "task_id": "DO_B_06",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 236,
+      "response_tokens_est": 34,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "DevOps runbook:\n1. Triage\n- Check /healthz and /readyz.\n- Inspect recent app/nginx logs.\n2. Hypothesis\n- Validate config/deploy/load regression.\n3. Remediation\n- Apply guarded restart or rollback.\n- Confirm stability window (10-15 min)."
+    }
+  ]
+}

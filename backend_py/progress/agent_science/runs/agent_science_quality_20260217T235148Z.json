@@ -1,0 +1,289 @@
+{
+  "summary": {
+    "run_id": "agent_science_quality_20260217T235148Z",
+    "allow_real": true,
+    "selected_tasks": 20,
+    "http_200_rate": 1.0,
+    "agents": {
+      "personal": {
+        "avg_quality_score": 10.0,
+        "runs": 5
+      },
+      "ppc": {
+        "avg_quality_score": 10.0,
+        "runs": 5
+      },
+      "ceo": {
+        "avg_quality_score": 10.0,
+        "runs": 5
+      },
+      "devops": {
+        "avg_quality_score": 10.0,
+        "runs": 5
+      }
+    },
+    "top_gaps": []
+  },
+  "rows": [
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "PERS-01",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 178,
+      "response_tokens_est": 31,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Personal action plan:\n1. Prioritize top 3 tasks for today.\n2. Block focused execution windows with one buffer slot.\n3. Resolve one blocker early and track progress by end of day."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "PERS-05",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 178,
+      "response_tokens_est": 31,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Personal action plan:\n1. Prioritize top 3 tasks for today.\n2. Block focused execution windows with one buffer slot.\n3. Resolve one blocker early and track progress by end of day."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "PA_B_02",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 178,
+      "response_tokens_est": 31,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Personal action plan:\n1. Prioritize top 3 tasks for today.\n2. Block focused execution windows with one buffer slot.\n3. Resolve one blocker early and track progress by end of day."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "PA_B_07",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 178,
+      "response_tokens_est": 31,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Personal action plan:\n1. Prioritize top 3 tasks for today.\n2. Block focused execution windows with one buffer slot.\n3. Resolve one blocker early and track progress by end of day."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "PA_B_10",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 178,
+      "response_tokens_est": 31,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Personal action plan:\n1. Prioritize top 3 tasks for today.\n2. Block focused execution windows with one buffer slot.\n3. Resolve one blocker early and track progress by end of day."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "PPC-01",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 254,
+      "response_tokens_est": 42,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "PPC action plan:\n1. Diagnose CTR/CVR/ROAS gap by campaign cluster.\n2. Remove low-intent waste terms and tighten negatives.\n3. Reallocate budget to best ROAS segments.\n4. Launch 2 ad-copy tests for low CTR groups.\n5. Review impact in 48h and iterate bids."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "PPC-06",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 254,
+      "response_tokens_est": 42,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "PPC action plan:\n1. Diagnose CTR/CVR/ROAS gap by campaign cluster.\n2. Remove low-intent waste terms and tighten negatives.\n3. Reallocate budget to best ROAS segments.\n4. Launch 2 ad-copy tests for low CTR groups.\n5. Review impact in 48h and iterate bids."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "PPC_B_03",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 254,
+      "response_tokens_est": 42,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "PPC action plan:\n1. Diagnose CTR/CVR/ROAS gap by campaign cluster.\n2. Remove low-intent waste terms and tighten negatives.\n3. Reallocate budget to best ROAS segments.\n4. Launch 2 ad-copy tests for low CTR groups.\n5. Review impact in 48h and iterate bids."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "PPC_B_08",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 254,
+      "response_tokens_est": 42,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "PPC action plan:\n1. Diagnose CTR/CVR/ROAS gap by campaign cluster.\n2. Remove low-intent waste terms and tighten negatives.\n3. Reallocate budget to best ROAS segments.\n4. Launch 2 ad-copy tests for low CTR groups.\n5. Review impact in 48h and iterate bids."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "PPC_B_10",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 254,
+      "response_tokens_est": 42,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "PPC action plan:\n1. Diagnose CTR/CVR/ROAS gap by campaign cluster.\n2. Remove low-intent waste terms and tighten negatives.\n3. Reallocate budget to best ROAS segments.\n4. Launch 2 ad-copy tests for low CTR groups.\n5. Review impact in 48h and iterate bids."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "CEO-01",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 181,
+      "response_tokens_est": 26,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Executive brief:\n1. Decision: hold until KPI gate is validated.\n2. Risks: execution drift, budget variance.\n3. Next actions: assign owner, set 48h checkpoint, decide approve/reject."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "CEO-06",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 181,
+      "response_tokens_est": 26,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Executive brief:\n1. Decision: hold until KPI gate is validated.\n2. Risks: execution drift, budget variance.\n3. Next actions: assign owner, set 48h checkpoint, decide approve/reject."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "CEO_B_04",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 181,
+      "response_tokens_est": 26,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Executive brief:\n1. Decision: hold until KPI gate is validated.\n2. Risks: execution drift, budget variance.\n3. Next actions: assign owner, set 48h checkpoint, decide approve/reject."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "CEO_B_06",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 181,
+      "response_tokens_est": 26,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Executive brief:\n1. Decision: hold until KPI gate is validated.\n2. Risks: execution drift, budget variance.\n3. Next actions: assign owner, set 48h checkpoint, decide approve/reject."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "CEO_B_09",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 181,
+      "response_tokens_est": 26,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Executive brief:\n1. Decision: hold until KPI gate is validated.\n2. Risks: execution drift, budget variance.\n3. Next actions: assign owner, set 48h checkpoint, decide approve/reject."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "DEV-01",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 236,
+      "response_tokens_est": 34,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "DevOps runbook:\n1. Triage\n- Check /healthz and /readyz.\n- Inspect recent app/nginx logs.\n2. Hypothesis\n- Validate config/deploy/load regression.\n3. Remediation\n- Apply guarded restart or rollback.\n- Confirm stability window (10-15 min)."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "DEV-04",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 236,
+      "response_tokens_est": 34,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "DevOps runbook:\n1. Triage\n- Check /healthz and /readyz.\n- Inspect recent app/nginx logs.\n2. Hypothesis\n- Validate config/deploy/load regression.\n3. Remediation\n- Apply guarded restart or rollback.\n- Confirm stability window (10-15 min)."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "DO_B_02",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 236,
+      "response_tokens_est": 34,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "DevOps runbook:\n1. Triage\n- Check /healthz and /readyz.\n- Inspect recent app/nginx logs.\n2. Hypothesis\n- Validate config/deploy/load regression.\n3. Remediation\n- Apply guarded restart or rollback.\n- Confirm stability window (10-15 min)."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "DO_B_03",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 236,
+      "response_tokens_est": 34,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "DevOps runbook:\n1. Triage\n- Check /healthz and /readyz.\n- Inspect recent app/nginx logs.\n2. Hypothesis\n- Validate config/deploy/load regression.\n3. Remediation\n- Apply guarded restart or rollback.\n- Confirm stability window (10-15 min)."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T235148Z",
+      "task_id": "DO_B_06",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 236,
+      "response_tokens_est": 34,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "DevOps runbook:\n1. Triage\n- Check /healthz and /readyz.\n- Inspect recent app/nginx logs.\n2. Hypothesis\n- Validate config/deploy/load regression.\n3. Remediation\n- Apply guarded restart or rollback.\n- Confirm stability window (10-15 min)."
+    }
+  ]
+}

@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ppc_actions.schema.json",
+  "title": "PPC Actions",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agent",
+    "policy_used",
+    "why_deep",
+    "summary_bullets",
+    "actions"
+  ],
+  "properties": {
+    "agent": {
+      "type": "string",
+      "const": "ppc"
+    },
+    "policy_used": {
+      "type": "string",
+      "enum": ["auto", "eco", "deep"]
+    },
+    "why_deep": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "summary_bullets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "string",
+        "maxLength": 220
+      }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "details",
+          "expected_impact",
+          "risk_level"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "add_keyword",
+              "add_negative_keyword",
+              "adjust_bid",
+              "pause_campaign",
+              "ad_copy_test",
+              "budget_reallocation",
+              "audience_refine",
+              "landing_alignment",
+              "structure_change",
+              "reporting_action"
+            ]
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "expected_impact": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "risk_level": {
+            "type": "string",
+            "enum": ["low", "medium", "high"]
+          }
+        }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "tool_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimated_ct_cost": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "policy_used": {
+            "const": "deep"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "why_deep": {
+            "type": "string",
+            "minLength": 3
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "why_deep": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    }
+  ]
+}

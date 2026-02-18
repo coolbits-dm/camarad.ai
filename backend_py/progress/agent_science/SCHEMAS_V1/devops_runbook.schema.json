@@ -1,0 +1,151 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "devops_runbook.schema.json",
+  "title": "DevOps Runbook",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agent",
+    "policy_used",
+    "why_deep",
+    "tool_context_present",
+    "tool_context_used",
+    "status_summary",
+    "root_cause_hypothesis",
+    "confidence",
+    "remediation_steps",
+    "alerts_to_escalate"
+  ],
+  "properties": {
+    "agent": {
+      "type": "string",
+      "const": "devops"
+    },
+    "policy_used": {
+      "type": "string",
+      "enum": ["auto", "eco", "deep"]
+    },
+    "why_deep": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "tool_context_present": {
+      "type": "boolean"
+    },
+    "tool_context_used": {
+      "type": "boolean"
+    },
+    "status_summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 260
+    },
+    "root_cause_hypothesis": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "remediation_steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "command_or_check",
+          "expected_outcome",
+          "risk_level"
+        ],
+        "properties": {
+          "step": {
+            "type": "string",
+            "maxLength": 220
+          },
+          "command_or_check": {
+            "type": "string",
+            "maxLength": 240
+          },
+          "expected_outcome": {
+            "type": "string",
+            "maxLength": 220
+          },
+          "risk_level": {
+            "type": "string",
+            "enum": ["low", "medium", "high"]
+          }
+        }
+      }
+    },
+    "alerts_to_escalate": {
+      "type": "boolean"
+    },
+    "escalation_targets": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "string",
+        "maxLength": 80
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "tool_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimated_ct_cost": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "policy_used": {
+            "const": "deep"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "why_deep": {
+            "type": "string",
+            "minLength": 3
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool_context_present": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "tool_context_used": {
+            "const": true
+          }
+        }
+      }
+    }
+  ]
+}

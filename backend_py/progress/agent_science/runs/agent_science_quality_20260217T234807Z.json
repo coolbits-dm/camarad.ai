@@ -1,0 +1,367 @@
+{
+  "summary": {
+    "run_id": "agent_science_quality_20260217T234807Z",
+    "allow_real": true,
+    "selected_tasks": 20,
+    "http_200_rate": 1.0,
+    "agents": {
+      "personal": {
+        "avg_quality_score": 9.6,
+        "runs": 5
+      },
+      "ppc": {
+        "avg_quality_score": 8.8,
+        "runs": 5
+      },
+      "ceo": {
+        "avg_quality_score": 7.3,
+        "runs": 5
+      },
+      "devops": {
+        "avg_quality_score": 6.1,
+        "runs": 5
+      }
+    },
+    "top_gaps": [
+      {
+        "gap": "devops:weak_action_structure",
+        "count": 5
+      },
+      {
+        "gap": "ppc:too_long",
+        "count": 3
+      },
+      {
+        "gap": "ceo:weak_action_structure",
+        "count": 3
+      },
+      {
+        "gap": "ceo:low_domain_specificity",
+        "count": 3
+      },
+      {
+        "gap": "devops:low_domain_specificity",
+        "count": 3
+      },
+      {
+        "gap": "devops:too_long",
+        "count": 2
+      },
+      {
+        "gap": "devops:thin_domain_specificity",
+        "count": 2
+      },
+      {
+        "gap": "personal:too_long",
+        "count": 1
+      },
+      {
+        "gap": "ceo:too_long",
+        "count": 1
+      },
+      {
+        "gap": "ceo:thin_domain_specificity",
+        "count": 1
+      }
+    ]
+  },
+  "rows": [
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "PERS-01",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 716,
+      "response_tokens_est": 107,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "As your Camarad specialist, here's your actionable plan:\n\n1.  **09:00 - 09:30:** Prepare for client sync. Review notes, confirm agenda.\n2.  **09:30 - 10:30:** Conduct client sync.\n3.  **10:30 - 12:30:** Focus block: Work on report drafting. Prioritize sections requiring client input.\n4.  **12:30 - 13:00:** Lunch break.\n5.  **13:00 - 13:30:** Participate in team standup.\n6.  **13:30 - 16:30:** Focus block: Continue report drafting and analysis. Address any action items from client sync.\n7.  **16:"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "PERS-05",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 1847,
+      "response_tokens_est": 232,
+      "quality_score": 8.0,
+      "gaps": [
+        "too_long"
+      ],
+      "response_preview": "**Camarad Specialist: Agency Workspace**\n\n**Task:** Breakdown and optimization suggestions for today's spend of $450.\n\n**Breakdown:**\n\n*   **Campaign Performance:** Identify top-performing and underperforming campaigns based on key metrics (conversions, CPA, ROAS).\n*   **Ad Group/Ad Set Performance:** Drill down to ad group or ad set level to pinpoint specific areas of success or failure.\n*   **Creative Performance:** Analyze individual ad creatives for engagement rates, click-through rates, and"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "PA_B_02",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 1147,
+      "response_tokens_est": 163,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "As Camarad's Billing Telemetry Specialist, I will address the client's spend spike by noon and prepare for the 14:00-15:00 deploy window.\n\n**Action Plan:**\n\n1.  **Immediate Spend Spike Analysis (by 11:00):**\n    *   Access billing telemetry.\n    *   Identify the exact period and services contributing to the spike.\n    *   Pinpoint the root cause (e.g., unexpected usage, configuration change, new service launch).\n    *   Prepare a concise explanation of the spike's origin.\n\n2.  **Client Communica"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "PA_B_07",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 706,
+      "response_tokens_est": 88,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "**Camarad Specialist Action Plan:**\n\n*   **OAuth Cache Rules:**\n    *   **Action:** Schedule dedicated working session with Security and Engineering leads to finalize OAuth cache rule definitions.\n    *   **Deliverable:** Approved OAuth cache rule specification document.\n*   **Mobile Header Overlap:**\n    *   **Action:** Assign UI/UX designer to create mockups addressing mobile header overlap on key screens.\n    *   **Deliverable:** Approved mobile header UI/UX mockups.\n*   **Plan Limits Proposa"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "PA_B_10",
+      "agent": "personal",
+      "workspace": "personal",
+      "agent_slug": "life-coach",
+      "http_status": 200,
+      "response_chars": 1095,
+      "response_tokens_est": 142,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "Camarad Specialist:\n\n**Objective:** Execute post-ship checklist for today, focusing on smoke, confidence harness, and basic UX sanity.\n\n**Actionable Steps:**\n\n1.  **Smoke Test:**\n    *   Verify core application functionality is operational.\n    *   Confirm critical user flows (e.g., login, primary action, logout) complete without errors.\n    *   Check essential background processes are running as expected.\n\n2.  **Confidence Harness:**\n    *   Execute pre-defined automated tests covering key feat"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "PPC-01",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 3210,
+      "response_tokens_est": 414,
+      "quality_score": 8.0,
+      "gaps": [
+        "too_long"
+      ],
+      "response_preview": "As your Camarad specialist, I've reviewed the campaign data. The **weak performance** is evident.\n\nHere are your immediate action steps:\n\n1.  **Audience Refinement:**\n    *   **Action:** Analyze audience segments with the lowest CTR and CVR.\n    *   **Next:** Exclude underperforming segments or reallocate budget to those showing better engagement.\n\n2.  **Creative Optimization:**\n    *   **Action:** Review ad copy and visuals for the lowest CTR ads.\n    *   **Next:** A/B test new headlines, calls"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "PPC-06",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 3498,
+      "response_tokens_est": 472,
+      "quality_score": 8.0,
+      "gaps": [
+        "too_long"
+      ],
+      "response_preview": "As your Camarad specialist, here's your actionable breakdown for the provided GA4 paths:\n\n**Path 1: Paid Search > Pricing > Signup**\n\n*   **Insight:** Users are entering via paid search, navigating to pricing, and completing signup. This indicates a strong conversion funnel from paid acquisition.\n*   **Actionable Fixes:**\n    *   **Increase Budget:** Allocate more budget to the paid search campaigns driving this path.\n    *   **Optimize Landing Pages:** Ensure the paid search landing pages are h"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "PPC_B_03",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 799,
+      "response_tokens_est": 111,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "As Camarad's Spend Pacing Specialist, the daily spend is too high early in the campaign.\n\n**Action Plan:**\n\n1.  **Immediate Budget Reallocation:** Reduce daily budget by 20% for the next 48 hours.\n2.  **Bid Adjustment Review:** Analyze top-performing keywords/audiences from the last 7 days. Decrease bids by 15% for those exceeding average CPA targets.\n3.  **Placement Optimization:** Identify and exclude low-performing placements (websites, apps) that are consuming significant budget with minimal"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "PPC_B_08",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 1890,
+      "response_tokens_est": 241,
+      "quality_score": 8.0,
+      "gaps": [
+        "too_long"
+      ],
+      "response_preview": "PPC Specialist ready.\n\nRecommended structure:\n- Diagnose spend, CTR, CVR, and ROAS.\n- Identify top 3 waste drivers.\n- Propose fast wins and test plan for next 7-14 days.\n\n---\n\n📚 **Relevant API Documentation:**\n\n📖 **[Upgrade your API version  |  Google Ads API  |  Google for Developers](https://developers.google.com/google-ads/api/docs/upgrade)** (Google Ads – endpoint)\nGoogleAds API English Deutsch Español Français Indonesia Português – Brasil Русский 中文 – 简体 日本語 한국어 GoogleAds API Guides Referen"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "PPC_B_10",
+      "agent": "ppc",
+      "workspace": "agency",
+      "agent_slug": "ppc-specialist",
+      "http_status": 200,
+      "response_chars": 169,
+      "response_tokens_est": 29,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "PPC Specialist ready.\n\nRecommended structure:\n- Diagnose spend, CTR, CVR, and ROAS.\n- Identify top 3 waste drivers.\n- Propose fast wins and test plan for next 7-14 days."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "CEO-01",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 1004,
+      "response_tokens_est": 130,
+      "quality_score": 10.0,
+      "gaps": [],
+      "response_preview": "**Camarad Specialist Action Plan: Scale**\n\n**Analysis:** Current month's spend is 20% over plan.\n\n**Recommendation:** Scale.\n\n**Actionable Steps:**\n\n1.  **Identify Overspend Drivers:** Immediately pinpoint the specific campaigns, ad groups, or keywords contributing to the 20% delta.\n2.  **Analyze Performance Metrics:** For identified drivers, review conversion rates, CPA, ROAS, and impression share to understand *why* spend is increasing.\n3.  **Implement Bid Adjustments:** If performance metrics"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "CEO-06",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 2623,
+      "response_tokens_est": 355,
+      "quality_score": 7.0,
+      "gaps": [
+        "too_long",
+        "thin_domain_specificity"
+      ],
+      "response_preview": "As the Camarad specialist, here's the action plan for the API outage:\n\n**Immediate Actions:**\n\n1.  **Verify Service Restoration:** Confirm the API is fully operational and responding to requests without errors.\n2.  **Trigger Missed Runs:** Manually initiate any scheduled jobs or processes that failed due to the outage. Prioritize critical business functions.\n3.  **Expedite Delayed Reports:** Identify all reports affected by the outage and manually generate or re-run them.\n\n**Next Steps:**\n\n1.  *"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "CEO_B_04",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 86,
+      "response_tokens_est": 16,
+      "quality_score": 6.5,
+      "gaps": [
+        "weak_action_structure",
+        "low_domain_specificity"
+      ],
+      "response_preview": "I can help with a practical next-step plan. Tell me your main objective for this week."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "CEO_B_06",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 86,
+      "response_tokens_est": 16,
+      "quality_score": 6.5,
+      "gaps": [
+        "weak_action_structure",
+        "low_domain_specificity"
+      ],
+      "response_preview": "I can help with a practical next-step plan. Tell me your main objective for this week."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "CEO_B_09",
+      "agent": "ceo",
+      "workspace": "business",
+      "agent_slug": "ceo-strategy",
+      "http_status": 200,
+      "response_chars": 86,
+      "response_tokens_est": 16,
+      "quality_score": 6.5,
+      "gaps": [
+        "weak_action_structure",
+        "low_domain_specificity"
+      ],
+      "response_preview": "I can help with a practical next-step plan. Tell me your main objective for this week."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "DEV-01",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 1693,
+      "response_tokens_est": 220,
+      "quality_score": 5.5,
+      "gaps": [
+        "too_long",
+        "weak_action_structure",
+        "thin_domain_specificity"
+      ],
+      "response_preview": "I can help with a practical next-step plan. Tell me your main objective for this week.\n\n---\n\n📚 **Relevant API Documentation:**\n\n📖 **[Render | Changelog](https://render.com/changelog)** (Render – changelog)\nDebug your Render services in Claude Code and Cursor. Autoscaling Private Networking Persistent Disks Infrastructure as Code Preview Environments Zero Downtime Deploys Render API Static Sites Web Services Private Services Background Workers Cron Jobs Render Postgres Render Key Value Pricing Cu"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "DEV-04",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 86,
+      "response_tokens_est": 16,
+      "quality_score": 6.5,
+      "gaps": [
+        "weak_action_structure",
+        "low_domain_specificity"
+      ],
+      "response_preview": "I can help with a practical next-step plan. Tell me your main objective for this week."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "DO_B_02",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 1693,
+      "response_tokens_est": 220,
+      "quality_score": 5.5,
+      "gaps": [
+        "too_long",
+        "weak_action_structure",
+        "thin_domain_specificity"
+      ],
+      "response_preview": "I can help with a practical next-step plan. Tell me your main objective for this week.\n\n---\n\n📚 **Relevant API Documentation:**\n\n📖 **[Render | Changelog](https://render.com/changelog)** (Render – changelog)\nDebug your Render services in Claude Code and Cursor. Autoscaling Private Networking Persistent Disks Infrastructure as Code Preview Environments Zero Downtime Deploys Render API Static Sites Web Services Private Services Background Workers Cron Jobs Render Postgres Render Key Value Pricing Cu"
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "DO_B_03",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 86,
+      "response_tokens_est": 16,
+      "quality_score": 6.5,
+      "gaps": [
+        "weak_action_structure",
+        "low_domain_specificity"
+      ],
+      "response_preview": "I can help with a practical next-step plan. Tell me your main objective for this week."
+    },
+    {
+      "run_id": "agent_science_quality_20260217T234807Z",
+      "task_id": "DO_B_06",
+      "agent": "devops",
+      "workspace": "development",
+      "agent_slug": "devops-infra",
+      "http_status": 200,
+      "response_chars": 86,
+      "response_tokens_est": 16,
+      "quality_score": 6.5,
+      "gaps": [
+        "weak_action_structure",
+        "low_domain_specificity"
+      ],
+      "response_preview": "I can help with a practical next-step plan. Tell me your main objective for this week."
+    }
+  ]
+}
