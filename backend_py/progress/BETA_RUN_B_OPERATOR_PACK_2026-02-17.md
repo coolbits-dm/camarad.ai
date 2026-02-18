@@ -52,6 +52,35 @@ Required per tester:
 - Top blockers (1-3)
 - Top value moments (1-3)
 
+Strict feedback block format (copy/paste per user):
+```text
+## beta_uX — feedback
+
+### Top 5 blockers (cu severitate)
+1) [P0/P1/P2] ce s-a blocat + unde + de ce
+2)
+3)
+4)
+5)
+
+### Top 5 value moments
+1) moment + ce a fost util + impact
+2)
+3)
+4)
+5)
+
+### 3 UI-only fixes (impact mare, risc mic)
+1) Fix: ... | Unde: ... | Expected: ...
+2)
+3)
+
+### TTFUO
+- useful output definition:
+- observed:
+- what slowed first value:
+```
+
 ## 6) Acceptance Gate for Run B
 - >= 3 complete first-session traces
 - >= 1 tester reaches useful output in < 3 minutes
