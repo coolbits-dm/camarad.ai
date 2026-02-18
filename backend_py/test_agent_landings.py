@@ -9,6 +9,8 @@ def run():
 
     r = c.get("/agents/ppc?utm_source=google&utm_campaign=ppc_ai_agent")
     assert r.status_code == 200, r.get_data(as_text=True)[:200]
+    cache_ctl = str(r.headers.get("Cache-Control") or "").lower()
+    assert "no-store" in cache_ctl
     body = r.get_data(as_text=True)
     assert "PPC AI Agent" in body
     assert "Start with Google" in body

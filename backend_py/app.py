@@ -3226,6 +3226,8 @@ def agent_landing_page(agent_id):
             inbound_attr=inbound_attr,
         )
     )
+    # UTM-aware landing pages should never be shared from intermediary caches.
+    response.headers["Cache-Control"] = "no-store, private"
     attr_cookie = dict(inbound_attr)
     attr_cookie["entrypoint"] = "agent_landing"
     attr_cookie["agent"] = str(cfg.get("id") or key)
