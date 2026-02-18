@@ -30,10 +30,15 @@ def _parse_log_events(text: str):
         m = LOG_LINE_RE.match(raw.strip())
         if not m:
             continue
+        try:
+            ts_dt = datetime.strptime(m.group("ts"), "%d/%b/%Y:%H:%M:%S %z")
+        except ValueError:
+            continue
         events.append(
             {
                 "ip": m.group("ip"),
                 "ts": m.group("ts"),
+                "ts_dt": ts_dt,
                 "method": m.group("method"),
                 "path": m.group("path"),
                 "ua": m.group("ua"),
@@ -48,20 +53,50 @@ def _extract_trace_summary(text: str, token: str):
     if not landing_events:
         return {"landing": False, "demo": False, "signup": False, "first_chat_send": False, "completed": False}
 
-    # Scope funnel detection to the same user-agent as landing event.
-    # Using IP is not reliable here because logs are proxied through localhost (127.0.0.1).
-    session_ua = landing_events[-1]["ua"]
-    scoped = [e for e in events if e["ua"] == session_ua]
+    # Build best session per landing event:
+    # - same UA
+    # - events in fixed post-landing window
+    # - select candidate with max funnel coverage; tie-break by latest landing
+    window_seconds = 45 * 60
+    best = None
+    for landing_event in landing_events:
+        start = landing_event["ts_dt"]
+        end_ts = start.timestamp() + window_seconds
+        scoped = [
+            e
+            for e in events
+            if e["ua"] == landing_event["ua"]
+            and e["ts_dt"].timestamp() >= start.timestamp()
+            and e["ts_dt"].timestamp() <= end_ts
+        ]
+        landing = True
+        demo = any(e["method"] == "GET" and ("/platform-demo" in e["path"] or "/chat-demo" in e["path"]) for e in scoped)
+        signup = any(e["method"] == "GET" and "/signup" in e["path"] for e in scoped)
+        first_chat_send = any(
+            e["method"] == "POST"
+            and ("/chat/" in e["path"] or "/api/chat" in e["path"] or "/api/chats" in e["path"])
+            for e in scoped
+        )
+        score = int(landing) + int(demo) + int(signup) + int(first_chat_send)
+        candidate = {
+            "landing": landing,
+            "demo": demo,
+            "signup": signup,
+            "first_chat_send": first_chat_send,
+            "completed": landing and demo and signup and first_chat_send,
+            "score": score,
+            "start_ts": start.timestamp(),
+        }
+        if best is None or candidate["score"] > best["score"] or (
+            candidate["score"] == best["score"] and candidate["start_ts"] > best["start_ts"]
+        ):
+            best = candidate
 
-    landing = any(f"src={token}" in e["path"] and e["method"] == "GET" for e in scoped)
-    demo = any(e["method"] == "GET" and ("/platform-demo" in e["path"] or "/chat-demo" in e["path"]) for e in scoped)
-    signup = any(e["method"] == "GET" and "/signup" in e["path"] for e in scoped)
-    first_chat_send = any(
-        e["method"] == "POST"
-        and ("/chat/" in e["path"] or "/api/chat" in e["path"] or "/api/chats" in e["path"])
-        for e in scoped
-    )
-    completed = landing and demo and signup and first_chat_send
+    landing = best["landing"]
+    demo = best["demo"]
+    signup = best["signup"]
+    first_chat_send = best["first_chat_send"]
+    completed = best["completed"]
     return {
         "landing": landing,
         "demo": demo,
