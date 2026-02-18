@@ -123,3 +123,9 @@ Goal check helper (per tester, explicit missing step + recommendation):
 cd /opt/camarad
 /opt/camarad/.venv/bin/python scripts/beta_trace_goal_check.py beta_u1 --trace-dir logs/beta_traces
 ```
+
+All-testers funnel audit (single report):
+```bash
+cd /opt/camarad
+/opt/camarad/.venv/bin/python scripts/beta_trace_funnel_audit.py --trace-dir logs/beta_traces
+```
