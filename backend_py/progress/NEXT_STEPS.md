@@ -316,6 +316,11 @@ Pentru fiecare task nou:
   - CTA wiring to OAuth start with agent-specific `returnTo` and attribution params
   - UTM/gclid capture on landing + lightweight cookie persistence (`camarad_attr`)
   - Hermetic tests: `test_agent_landings.py` + CI hook in `.github/workflows/ci.yml`
+  - Added dedicated agent-landing funnel audit script:
+    - `scripts/beta_trace_agent_landing_audit.py`
+  - Added operator runbook section for controlled rerun on agent pages:
+    - `progress/BETA_RUN_B_OPERATOR_PACK_2026-02-17.md`
 - Next:
   - UI polish/design pass per agent page (graphics and copy A/B)
   - Controlled funnel run for agent landing entries and attribution sanity checks
+  - Baseline from existing traces before rerun: `pass_count 0/3` (expected, sessions were not executed on `/agents/<id>` links yet)

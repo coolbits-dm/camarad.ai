@@ -136,6 +136,32 @@ cd /opt/camarad
 /opt/camarad/.venv/bin/python scripts/beta_trace_first_send_debug.py --trace-dir logs/beta_traces
 ```
 
+## 8) Agent Landing Controlled Rerun (u1/u2/u3)
+Suggested test links (one per tester, same browser session end-to-end):
+- U1 (PPC): `https://camarad.ai/agents/ppc?src=beta_u1&utm_source=google&utm_medium=cpc&utm_campaign=ppc_ai_agent`
+- U2 (CEO): `https://camarad.ai/agents/ceo?src=beta_u2&utm_source=linkedin&utm_medium=paid&utm_campaign=ceo_ai_agent`
+- U3 (DevOps): `https://camarad.ai/agents/devops?src=beta_u3&utm_source=x&utm_medium=paid&utm_campaign=devops_ai_agent`
+
+Expected funnel markers:
+1. `agent_landing_view` (`GET /agents/<id>?src=beta_uX...`)
+2. `agent_landing_cta_click` (`GET /api/auth/google/start?...from=agent-landing&agent=<id>...`)
+3. `post_oauth_redirect_to_chat` (`GET /chat/...?...from=agent-landing&agent=<id>`)
+4. `first_chat_send` (`POST /chat/*|/api/chat|/api/chats`)
+
+Collect traces after each tester:
+```bash
+cd /opt/camarad
+bash scripts/beta_trace_collect_save.sh beta_u1
+bash scripts/beta_trace_collect_save.sh beta_u2
+bash scripts/beta_trace_collect_save.sh beta_u3
+```
+
+Run dedicated agent-landing funnel audit:
+```bash
+cd /opt/camarad
+/opt/camarad/.venv/bin/python scripts/beta_trace_agent_landing_audit.py --trace-dir logs/beta_traces --verbose
+```
+
 Observability note:
 - Audit/debrief reads collector traces from `logs/beta_traces` (not direct `/var/log/nginx/*`).
 - Automatic gate can validate only server-observable requests (`/`, `/platform-demo|/chat-demo`, `/signup`, chat POST endpoints).
