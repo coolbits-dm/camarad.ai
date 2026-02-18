@@ -1025,7 +1025,7 @@
           .then(function(st) {
             if (!st || !st.authenticated || !st.user_id) {
               var next = window.location.pathname + (window.location.search || '');
-              window.location.href = '/signup?next=' + encodeURIComponent(next || '/app');
+              window.location.href = '/signup?next=' + encodeURIComponent(next || '/chat/personal/life-coach?from=session_expired');
               throw new Error('unauthenticated');
             }
             uid = parseInt(st.user_id, 10) || 0;

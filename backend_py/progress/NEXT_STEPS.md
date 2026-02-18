@@ -277,3 +277,22 @@ Pentru fiecare task nou:
 - Added idempotent debit by `request_id` and telemetry `phase3` block
 - Runtime current mode: `OFF` (kept off during beta/readiness runs)
 - Next: controlled 24-48h enable window + rollback drill (only after explicit go/no-go)
+
+### Run B funnel unblock (signup -> first chat)
+- Status: `in_progress`
+- Owner: `codex`
+- Date: `2026-02-18`
+- Done in this pass:
+  - CI stabilized (`test_ga4_oauth.py`) by removing implicit local gateway dependency in callback test context.
+  - Post-signup default route moved to Personal Assistant chat:
+    - backend default/fallback next path now points to `/chat/personal/life-coach?from=signup`
+    - `/signup` and `/api/auth/google/start` defaults aligned to same target
+    - onboarding-complete fallback aligned to same target
+  - Public CTAs aligned to chat-first onboarding:
+    - `templates/landing.html` Start with Google -> personal chat
+    - `templates/platform_demo.html` signup CTAs -> personal chat
+    - session-expired signup redirect fallback in `templates/base.html` -> personal chat
+- Validation:
+  - `py_compile` + scoped tests green (`test_m3_scoping.py`, `test_ga4_oauth.py`, `test_plan_recommendations.py`, `test_billing_phase3.py`)
+- Next:
+  - Re-run Run B trace collection + funnel audit on fresh sessions (`beta_u1..beta_u3`) to measure first_chat_send uplift.

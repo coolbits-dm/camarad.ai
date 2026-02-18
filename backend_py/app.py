@@ -841,6 +841,7 @@ def _scope_effective_user_id():
 
 VALID_WORKSPACES = {"personal", "business", "agency", "development"}
 VALID_LANDING = {"orchestrator", "agents", "connectors", "boardroom", "settings", "workspace", "home", "chat"}
+DEFAULT_POST_SIGNUP_NEXT = "/chat/personal/life-coach?from=signup"
 VALID_GRID_STYLE = {"dots", "lines", "off"}
 VALID_THEME = {"dark", "light"}
 VALID_LLM = {"Grok", "OpenAI", "Anthropic", "Gemini", "Custom"}
@@ -2951,9 +2952,9 @@ def _build_chat_home_payload(user_id, client_id, settings_obj):
 def _safe_next_path(raw_next):
     nxt = str(raw_next or "").strip()
     if not nxt.startswith("/") or nxt.startswith("//"):
-        return "/app"
+        return DEFAULT_POST_SIGNUP_NEXT
     if nxt.startswith("/api/"):
-        return "/app"
+        return DEFAULT_POST_SIGNUP_NEXT
     return nxt
 
 
@@ -3311,14 +3312,14 @@ def api_app_search():
 @app.route("/register")
 @app.route("/register/")
 def legacy_auth_redirects():
-    nxt = _safe_next_path(request.args.get("next") or "/app")
+    nxt = _safe_next_path(request.args.get("next") or DEFAULT_POST_SIGNUP_NEXT)
     return redirect(url_for("signup_page", next=nxt), code=301)
 
 
 @app.route("/api/auth/google/start", methods=["GET"])
 def api_auth_google_start_proxy():
     """Proxy Google OAuth start through Camarad domain."""
-    return_to = _safe_next_path(request.args.get("returnTo") or request.args.get("next") or "/app")
+    return_to = _safe_next_path(request.args.get("returnTo") or request.args.get("next") or DEFAULT_POST_SIGNUP_NEXT)
     try:
         upstream = requests.get(
             f"{COOLBITS_URL}/api/auth/google/start",
@@ -3382,11 +3383,11 @@ def signup_page():
         uid = get_current_user_id()
         if uid > 0 and _must_complete_onboarding(uid):
             return redirect(url_for("onboarding_page"))
-        return redirect(_safe_next_path(request.args.get("next") or "/app"))
+        return redirect(_safe_next_path(request.args.get("next") or DEFAULT_POST_SIGNUP_NEXT))
     return render_template(
         "signup.html",
         oauth_start_url="/api/auth/google/start",
-        next_path=_safe_next_path(request.args.get("next") or "/app"),
+        next_path=_safe_next_path(request.args.get("next") or DEFAULT_POST_SIGNUP_NEXT),
     )
 
 
@@ -3399,7 +3400,7 @@ def onboarding_page():
         return _auth_redirect(next_path="/onboarding")
     settings = _get_user_settings(uid)
     if _is_onboarding_complete(settings):
-        return redirect(_safe_next_path(request.args.get("next") or "/app"))
+        return redirect(_safe_next_path(request.args.get("next") or DEFAULT_POST_SIGNUP_NEXT))
     profile = settings.get("profile") if isinstance(settings, dict) else {}
     return render_template("onboarding.html", profile=profile or {})
 
