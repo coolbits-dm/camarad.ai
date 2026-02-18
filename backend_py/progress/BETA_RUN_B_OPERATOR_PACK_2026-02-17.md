@@ -130,6 +130,12 @@ cd /opt/camarad
 /opt/camarad/.venv/bin/python scripts/beta_trace_funnel_audit.py --trace-dir logs/beta_traces
 ```
 
+First-chat-send deep debug (per selected sessions, with evidence lines):
+```bash
+cd /opt/camarad
+/opt/camarad/.venv/bin/python scripts/beta_trace_first_send_debug.py --trace-dir logs/beta_traces
+```
+
 Observability note:
 - Audit/debrief reads collector traces from `logs/beta_traces` (not direct `/var/log/nginx/*`).
 - Automatic gate can validate only server-observable requests (`/`, `/platform-demo|/chat-demo`, `/signup`, chat POST endpoints).

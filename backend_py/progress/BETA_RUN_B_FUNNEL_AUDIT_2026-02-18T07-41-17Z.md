@@ -1,4 +1,4 @@
-# Beta Run B Funnel Audit (2026-02-18 07:42:09Z)
+# Beta Run B Funnel Audit (2026-02-18 07:41:17Z)
 
 ## Method
 - source of truth: latest per-token trace file from `logs/beta_traces` (same source as debrief generator)
