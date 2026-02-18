@@ -117,3 +117,9 @@ Session timing helper (for TTFUO/funnel timing fields):
 cd /opt/camarad
 /opt/camarad/.venv/bin/python scripts/beta_trace_session_report.py --trace-dir logs/beta_traces
 ```
+
+Goal check helper (per tester, explicit missing step + recommendation):
+```bash
+cd /opt/camarad
+/opt/camarad/.venv/bin/python scripts/beta_trace_goal_check.py beta_u1 --trace-dir logs/beta_traces
+```
