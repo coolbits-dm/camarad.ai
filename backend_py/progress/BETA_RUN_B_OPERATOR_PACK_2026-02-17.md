@@ -129,3 +129,8 @@ All-testers funnel audit (single report):
 cd /opt/camarad
 /opt/camarad/.venv/bin/python scripts/beta_trace_funnel_audit.py --trace-dir logs/beta_traces
 ```
+
+Observability note:
+- Audit/debrief reads collector traces from `logs/beta_traces` (not direct `/var/log/nginx/*`).
+- Automatic gate can validate only server-observable requests (`/`, `/platform-demo|/chat-demo`, `/signup`, chat POST endpoints).
+- "Useful output" and qualitative UX moments remain manual inputs from tester feedback.
