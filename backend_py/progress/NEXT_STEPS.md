@@ -296,3 +296,15 @@ Pentru fiecare task nou:
   - `py_compile` + scoped tests green (`test_m3_scoping.py`, `test_ga4_oauth.py`, `test_plan_recommendations.py`, `test_billing_phase3.py`)
 - Next:
   - Re-run Run B trace collection + funnel audit on fresh sessions (`beta_u1..beta_u3`) to measure first_chat_send uplift.
+
+### Agent landing pages per bot (Personal/PPC/CEO/DevOps)
+- Status: `planned`
+- Owner: `codex`
+- Date: `2026-02-18`
+- Scope:
+  - Dedicated marketing entry pages per agent
+  - Single CTA (`Start with Google`) with OAuth returnTo mapped to agent-specific chat
+  - UTM + gclid preservation and `from=agent-landing` attribution
+  - Funnel-observable markers for view -> CTA -> post-oauth chat redirect
+- Plan document:
+  - `progress/AGENT_LANDINGS_PLAN_V1.md`
