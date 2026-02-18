@@ -19,15 +19,48 @@ def _load_latest_trace(trace_dir: Path, token: str):
     return files[0].read_text(encoding="utf-8", errors="ignore")
 
 
-def _event_bool(text: str, pattern: str) -> bool:
-    return bool(re.search(pattern, text, flags=re.IGNORECASE))
+LOG_LINE_RE = re.compile(
+    r'^\S+:\d+:(?P<ip>\S+)\s+-\s+-\s+\[(?P<ts>[^\]]+)\]\s+"(?P<method>[A-Z]+)\s+(?P<path>\S+)\s+HTTP/[0-9.]+"\s+\d+\s+\d+\s+"[^"]*"\s+"(?P<ua>[^"]+)"'
+)
+
+
+def _parse_log_events(text: str):
+    events = []
+    for raw in text.splitlines():
+        m = LOG_LINE_RE.match(raw.strip())
+        if not m:
+            continue
+        events.append(
+            {
+                "ip": m.group("ip"),
+                "ts": m.group("ts"),
+                "method": m.group("method"),
+                "path": m.group("path"),
+                "ua": m.group("ua"),
+            }
+        )
+    return events
 
 
 def _extract_trace_summary(text: str, token: str):
-    landing = _event_bool(text, rf"src={re.escape(token)}")
-    demo = _event_bool(text, r"/platform-demo|/chat-demo")
-    signup = _event_bool(text, r"/signup")
-    first_chat_send = _event_bool(text, r"POST.+/chat/|POST.+/api/chat|POST.+/api/chats")
+    events = _parse_log_events(text)
+    landing_events = [e for e in events if f"src={token}" in e["path"] and e["method"] == "GET"]
+    if not landing_events:
+        return {"landing": False, "demo": False, "signup": False, "first_chat_send": False, "completed": False}
+
+    # Scope funnel detection to the same user-agent as landing event.
+    # Using IP is not reliable here because logs are proxied through localhost (127.0.0.1).
+    session_ua = landing_events[-1]["ua"]
+    scoped = [e for e in events if e["ua"] == session_ua]
+
+    landing = any(f"src={token}" in e["path"] and e["method"] == "GET" for e in scoped)
+    demo = any(e["method"] == "GET" and ("/platform-demo" in e["path"] or "/chat-demo" in e["path"]) for e in scoped)
+    signup = any(e["method"] == "GET" and "/signup" in e["path"] for e in scoped)
+    first_chat_send = any(
+        e["method"] == "POST"
+        and ("/chat/" in e["path"] or "/api/chat" in e["path"] or "/api/chats" in e["path"])
+        for e in scoped
+    )
     completed = landing and demo and signup and first_chat_send
     return {
         "landing": landing,
@@ -141,4 +174,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
