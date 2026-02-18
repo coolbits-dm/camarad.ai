@@ -842,6 +842,7 @@ def _scope_effective_user_id():
 VALID_WORKSPACES = {"personal", "business", "agency", "development"}
 VALID_LANDING = {"orchestrator", "agents", "connectors", "boardroom", "settings", "workspace", "home", "chat"}
 DEFAULT_POST_SIGNUP_NEXT = "/chat/personal/life-coach?from=signup"
+AGENT_LANDINGS_ENABLED = str(os.getenv("AGENT_LANDINGS_ENABLED", "1")).strip().lower() in ("1", "true", "yes", "on")
 VALID_GRID_STYLE = {"dots", "lines", "off"}
 VALID_THEME = {"dark", "light"}
 VALID_LLM = {"Grok", "OpenAI", "Anthropic", "Gemini", "Custom"}
@@ -863,6 +864,144 @@ REQUIRES_CLIENT_SCOPE_RULES = (
     ("GET", "/api/boardroom/meetings", False),
     ("POST", "/api/boardroom/meetings", True),
 )
+
+AGENT_LANDING_REGISTRY = {
+    "personal": {
+        "id": "personal",
+        "title": "Personal AI Assistant",
+        "tagline": "Plan your day, prioritize decisions, and stay in execution mode.",
+        "description": "Get a practical daily copilot that turns your context into clear next actions.",
+        "target_chat_url": "/chat/personal/life-coach",
+        "bullets": [
+            "Build a focused 7-day plan from your current priorities.",
+            "Extract action items from notes, emails, and scattered ideas.",
+            "Get concise next steps with priority and effort level.",
+        ],
+        "examples": [
+            "Plan my day in 6 steps based on these meetings.",
+            "Turn this email thread into concrete actions.",
+            "What should I do first in the next 90 minutes?",
+        ],
+        "primary_keywords": ["personal ai assistant", "ai life coach", "daily planning ai"],
+        "seo_title": "Personal AI Assistant | Camarad.AI",
+        "seo_description": "Use Camarad Personal Assistant to plan your day and execute faster with clear, practical next actions.",
+    },
+    "ppc": {
+        "id": "ppc",
+        "title": "PPC AI Agent",
+        "tagline": "Optimize campaigns faster with actionable Ads + GA4 recommendations.",
+        "description": "From diagnostics to concrete actions: bids, negatives, creatives, and pacing checks.",
+        "target_chat_url": "/chat/agency/ppc-specialist",
+        "bullets": [
+            "Diagnose weak campaign performance with a clear action sequence.",
+            "Generate weekly PPC review briefs ready for execution.",
+            "Get ROAS-focused recommendations without noisy generic advice.",
+        ],
+        "examples": [
+            "My ROAS dropped 30% this week. Give me a recovery plan.",
+            "Suggest negatives and bid moves for this account snapshot.",
+            "Build a daily PPC review checklist I can run in 10 minutes.",
+        ],
+        "primary_keywords": ["ppc ai agent", "google ads ai assistant", "roas optimization ai"],
+        "seo_title": "PPC AI Agent | Camarad.AI",
+        "seo_description": "Run PPC faster with Camarad's AI agent for Google Ads diagnostics, optimization actions, and ROAS-focused execution.",
+    },
+    "ceo": {
+        "id": "ceo",
+        "title": "CEO AI Agent",
+        "tagline": "Executive synthesis with decision-ready recommendations.",
+        "description": "Get concise strategic briefs with clear go/no-go options, risks, and next actions.",
+        "target_chat_url": "/chat/business/ceo-strategy",
+        "bullets": [
+            "Summarize signals across growth, cost, and execution.",
+            "Turn ambiguity into decision options and trade-offs.",
+            "Stay strategic without reading long operational reports.",
+        ],
+        "examples": [
+            "Should we scale spend this week? Give go/no-go with risks.",
+            "Summarize top business risks from today's updates.",
+            "Create a one-page executive brief for tomorrow.",
+        ],
+        "primary_keywords": ["ceo ai agent", "executive ai assistant", "strategy ai copilot"],
+        "seo_title": "CEO AI Agent | Camarad.AI",
+        "seo_description": "Use Camarad CEO AI Agent for concise executive briefs, strategic decisions, and risk-aware next actions.",
+    },
+    "devops": {
+        "id": "devops",
+        "title": "DevOps AI Agent",
+        "tagline": "Faster incident diagnosis and cleaner remediation playbooks.",
+        "description": "Reduce time-to-fix with structured hypotheses, checks, and remediation steps.",
+        "target_chat_url": "/chat/development/devops-infra",
+        "bullets": [
+            "Diagnose latency spikes, 5xx errors, and deploy regressions.",
+            "Produce runbook-style actions with command-level guidance.",
+            "Keep fixes practical and low-risk under pressure.",
+        ],
+        "examples": [
+            "We have intermittent 502 after deploy. Start triage.",
+            "Give me a rollback + verification checklist now.",
+            "Help diagnose CT burn anomaly from telemetry.",
+        ],
+        "primary_keywords": ["devops ai agent", "incident response ai", "sre ai assistant"],
+        "seo_title": "DevOps AI Agent | Camarad.AI",
+        "seo_description": "Use Camarad DevOps AI Agent to diagnose incidents faster and generate clear remediation runbooks.",
+    },
+}
+
+AGENT_LANDING_ALIASES = {
+    "personal-ai": "personal",
+    "ppc-ai": "ppc",
+    "ceo-ai": "ceo",
+    "devops-ai": "devops",
+}
+
+_ATTR_ALLOWED_KEYS = {
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "gclid",
+    "from",
+}
+
+
+def _agent_landing_attr_from_request():
+    out = {}
+    for key in _ATTR_ALLOWED_KEYS:
+        val = str(request.args.get(key) or "").strip()
+        if val:
+            out[key] = val[:200]
+    return out
+
+
+def _append_query_params(path, extra_params):
+    base = str(path or "").strip() or "/"
+    params = dict(extra_params or {})
+    if not params:
+        return base
+    try:
+        parts = list(urlparse(base))
+        query = dict(parse_qsl(parts[4], keep_blank_values=True))
+        query.update({str(k): str(v) for k, v in params.items() if str(v).strip()})
+        parts[4] = urlencode(query, doseq=True)
+        return urlunparse(parts)
+    except Exception:
+        return base
+
+
+def _build_agent_landing_oauth_url(agent_cfg, inbound_attr):
+    cfg = agent_cfg if isinstance(agent_cfg, dict) else {}
+    aid = str(cfg.get("id") or "").strip()
+    target = str(cfg.get("target_chat_url") or DEFAULT_POST_SIGNUP_NEXT).strip()
+    tracking = {"from": "agent-landing", "agent": aid}
+    if isinstance(inbound_attr, dict):
+        for key in _ATTR_ALLOWED_KEYS:
+            val = str(inbound_attr.get(key) or "").strip()
+            if val and key not in tracking:
+                tracking[key] = val[:200]
+    next_path = _append_query_params(target, tracking)
+    return "/api/auth/google/start?" + urlencode({"returnTo": next_path})
 
 
 def _path_matches_scope_rule(method, path):
@@ -3066,6 +3205,68 @@ def home():
 @app.route('/landing')
 def landing_page():
     return render_template("landing.html")
+
+
+@app.route("/agents/<agent_id>")
+def agent_landing_page(agent_id):
+    if not AGENT_LANDINGS_ENABLED:
+        return "Not Found", 404
+    key = str(agent_id or "").strip().lower()
+    cfg = AGENT_LANDING_REGISTRY.get(key)
+    if not isinstance(cfg, dict):
+        return "Not Found", 404
+
+    inbound_attr = _agent_landing_attr_from_request()
+    oauth_start_url = _build_agent_landing_oauth_url(cfg, inbound_attr)
+    response = make_response(
+        render_template(
+            "agent_landing.html",
+            agent=cfg,
+            oauth_start_url=oauth_start_url,
+            inbound_attr=inbound_attr,
+        )
+    )
+    attr_cookie = dict(inbound_attr)
+    attr_cookie["entrypoint"] = "agent_landing"
+    attr_cookie["agent"] = str(cfg.get("id") or key)
+    response.set_cookie(
+        "camarad_attr",
+        json.dumps(attr_cookie, ensure_ascii=True, separators=(",", ":"))[:2000],
+        max_age=7 * 24 * 3600,
+        secure=AUTH_COOKIE_SECURE,
+        httponly=False,
+        samesite="Lax",
+        path="/",
+    )
+    return response
+
+
+@app.route("/personal-ai")
+def agent_landing_personal_alias():
+    if not AGENT_LANDINGS_ENABLED:
+        return "Not Found", 404
+    return redirect(url_for("agent_landing_page", agent_id="personal", **request.args), code=301)
+
+
+@app.route("/ppc-ai")
+def agent_landing_ppc_alias():
+    if not AGENT_LANDINGS_ENABLED:
+        return "Not Found", 404
+    return redirect(url_for("agent_landing_page", agent_id="ppc", **request.args), code=301)
+
+
+@app.route("/ceo-ai")
+def agent_landing_ceo_alias():
+    if not AGENT_LANDINGS_ENABLED:
+        return "Not Found", 404
+    return redirect(url_for("agent_landing_page", agent_id="ceo", **request.args), code=301)
+
+
+@app.route("/devops-ai")
+def agent_landing_devops_alias():
+    if not AGENT_LANDINGS_ENABLED:
+        return "Not Found", 404
+    return redirect(url_for("agent_landing_page", agent_id="devops", **request.args), code=301)
 
 
 _SEARCH_STRIP_RE = re.compile(r"[^a-zA-Z0-9 _-]+")

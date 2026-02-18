@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  {% if google_site_verification %}
+  <meta name="google-site-verification" content="{{ google_site_verification }}">
+  {% endif %}
+  {% if gtm_container_id %}
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','{{ gtm_container_id }}');</script>
+  {% endif %}
+  <title>{{ agent.seo_title or (agent.title ~ " | Camarad.AI") }}</title>
+  <meta name="description" content="{{ agent.seo_description or agent.description }}">
+  <link rel="canonical" href="https://camarad.ai/agents/{{ agent.id }}">
+  <link rel="icon" type="image/x-icon" href="/static/brand/favicon.ico">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <style>
+    :root {
+      --bg: #060b14;
+      --panel: #111b2d;
+      --text: #e7eefc;
+      --muted: #9dafc8;
+      --line: #2b3f62;
+      --accent: #2b7fff;
+      --accent-2: #1f63c9;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      font-family: "Segoe UI", "SF Pro Text", "Helvetica Neue", sans-serif;
+      background:
+        radial-gradient(900px 420px at 8% -140px, rgba(43, 127, 255, 0.2), transparent 68%),
+        radial-gradient(900px 420px at 92% -120px, rgba(67, 56, 202, 0.15), transparent 68%),
+        linear-gradient(180deg, #060b14 0%, #08101d 100%);
+    }
+    .wrap {
+      width: min(1060px, 92vw);
+      margin: 0 auto;
+      padding: 2.2rem 0 2.8rem;
+    }
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.6rem;
+      text-decoration: none;
+      color: #dbe8ff;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .brand img { width: 30px; height: 30px; }
+    .back-link {
+      color: var(--muted);
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.45rem 0.8rem;
+      font-size: 0.92rem;
+    }
+    .hero {
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: linear-gradient(135deg, rgba(17, 27, 45, 0.95), rgba(11, 21, 37, 0.95));
+      padding: clamp(1.2rem, 2.8vw, 2rem);
+    }
+    h1 {
+      margin: 0;
+      line-height: 1.08;
+      letter-spacing: -0.02em;
+      font-size: clamp(1.6rem, 4vw, 2.7rem);
+    }
+    .tagline {
+      margin-top: 0.65rem;
+      font-size: clamp(1rem, 2vw, 1.25rem);
+      color: #d2e2ff;
+    }
+    .desc {
+      margin-top: 0.7rem;
+      color: var(--muted);
+      max-width: 72ch;
+    }
+    .cta {
+      margin-top: 1rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      text-decoration: none;
+      border: 1px solid #315aa0;
+      background: linear-gradient(180deg, var(--accent), var(--accent-2));
+      color: #fff;
+      padding: 0.78rem 1.08rem;
+      border-radius: 999px;
+      font-weight: 700;
+    }
+    .grid {
+      margin-top: 1rem;
+      display: grid;
+      gap: 0.9rem;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(16, 25, 43, 0.8);
+      padding: 0.9rem 1rem;
+    }
+    .card h2 {
+      margin: 0 0 0.6rem;
+      font-size: 1rem;
+      letter-spacing: -0.01em;
+    }
+    .card ul {
+      margin: 0;
+      padding-left: 1.15rem;
+      color: #d5e4ff;
+    }
+    .card li { margin-bottom: 0.45rem; }
+    .example {
+      border: 1px dashed #35507d;
+      background: rgba(10, 18, 32, 0.95);
+      border-radius: 10px;
+      padding: 0.55rem 0.65rem;
+      color: #c7d8f8;
+      font-size: 0.92rem;
+    }
+    .meta {
+      margin-top: 0.95rem;
+      color: #8ea3c3;
+      font-size: 0.84rem;
+    }
+  </style>
+</head>
+<body>
+  {% if gtm_container_id %}
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ gtm_container_id }}" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+  {% endif %}
+  <main class="wrap">
+    <nav class="nav">
+      <a class="brand" href="/landing">
+        <img src="/static/brand/camarad-logo-64.png" alt="Camarad logo">
+        <span>Camarad.AI</span>
+      </a>
+      <a class="back-link" href="/landing">Back to landing</a>
+    </nav>
+
+    <section class="hero">
+      <h1>{{ agent.title }}</h1>
+      <p class="tagline">{{ agent.tagline }}</p>
+      <p class="desc">{{ agent.description }}</p>
+      <a class="cta" href="{{ oauth_start_url }}" data-track="signup" data-track-from="agent_landing" data-agent-id="{{ agent.id }}">
+        <i class="bi bi-google"></i>
+        Start with Google
+      </a>
+
+      <div class="grid">
+        <article class="card">
+          <h2>What You Get Fast</h2>
+          <ul>
+            {% for bullet in agent.bullets %}
+            <li>{{ bullet }}</li>
+            {% endfor %}
+          </ul>
+        </article>
+        <article class="card">
+          <h2>Try These Prompts</h2>
+          {% for ex in agent.examples %}
+          <div class="example">{{ ex }}</div>
+          {% endfor %}
+        </article>
+      </div>
+
+      <p class="meta">
+        Entry marker: <code>from=agent-landing</code> · Agent: <code>{{ agent.id }}</code>
+      </p>
+    </section>
+  </main>
+</body>
+</html>

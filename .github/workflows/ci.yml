@@ -40,3 +40,4 @@ jobs:
           python3 test_ga4_oauth.py
           python3 test_plan_recommendations.py
           python3 test_billing_phase3.py
+          python3 test_agent_landings.py

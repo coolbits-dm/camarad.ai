@@ -298,7 +298,7 @@ Pentru fiecare task nou:
   - Re-run Run B trace collection + funnel audit on fresh sessions (`beta_u1..beta_u3`) to measure first_chat_send uplift.
 
 ### Agent landing pages per bot (Personal/PPC/CEO/DevOps)
-- Status: `planned`
+- Status: `in_progress`
 - Owner: `codex`
 - Date: `2026-02-18`
 - Scope:
@@ -308,3 +308,14 @@ Pentru fiecare task nou:
   - Funnel-observable markers for view -> CTA -> post-oauth chat redirect
 - Plan document:
   - `progress/AGENT_LANDINGS_PLAN_V1.md`
+- Done in this pass (Phase 1 minimal):
+  - New dynamic public route: `/agents/<agent_id>`
+  - New marketing aliases: `/personal-ai`, `/ppc-ai`, `/ceo-ai`, `/devops-ai`
+  - New dynamic template: `templates/agent_landing.html`
+  - Agent registry/config in backend with copy, examples, SEO title/description, keywords, target chat path
+  - CTA wiring to OAuth start with agent-specific `returnTo` and attribution params
+  - UTM/gclid capture on landing + lightweight cookie persistence (`camarad_attr`)
+  - Hermetic tests: `test_agent_landings.py` + CI hook in `.github/workflows/ci.yml`
+- Next:
+  - UI polish/design pass per agent page (graphics and copy A/B)
+  - Controlled funnel run for agent landing entries and attribution sanity checks
