@@ -1,0 +1,89 @@
+{# Short FAQ on the homepage — 4 questions, native <details> accordion, zero JS.
+   Uses the existing .section / .section-heading / .section-label classes. #}
+<section class="section" id="faq">
+  <div class="container">
+    <span class="section-label">Intrebari</span>
+    <h2 class="section-heading">Ce vor sa stie majoritatea oamenilor inainte sa dea click.</h2>
+    <div class="vac-faq">
+      <details class="vac-faq__item">
+        <summary>Este acest site platforma MWR?</summary>
+        <div class="vac-faq__body">
+          <p>Nu. Este o pagina de prezentare in limba romana. Linkul „Descopera platforma"
+             deschide in tab nou platforma oficiala MWR Life, unde poti vedea direct conditiile.</p>
+        </div>
+      </details>
+      <details class="vac-faq__item">
+        <summary>Primesti comision daca ma inscriu pe MWR?</summary>
+        <div class="vac-faq__body">
+          <p>Da. Folosim un link de recomandare MWR. Pretul pentru tine ramane exact acelasi
+             ca atunci cand accesezi MWR direct. Preferam sa scriem asta clar, nu ascuns in pagina de termeni.</p>
+        </div>
+      </details>
+      <details class="vac-faq__item">
+        <summary>Ce se intampla dupa ce dau click pe „Descopera platforma"?</summary>
+        <div class="vac-faq__body">
+          <p>Se deschide platforma MWR intr-un tab nou. Poti parcurge toate informatiile fara
+             sa creezi cont si fara sa completezi nimic. Nicio decizie nu este luata pentru tine.</p>
+        </div>
+      </details>
+      <details class="vac-faq__item">
+        <summary>Ma pot razgandi dupa ce am vazut platforma?</summary>
+        <div class="vac-faq__body">
+          <p>Da. Atat timp cat nu creezi cont si nu accepti conditiile MWR, nu se intampla nimic.
+             Daca ai intrebari punctuale, scrie-ne pe email sau WhatsApp — raspundem in 24h lucratoare.</p>
+        </div>
+      </details>
+    </div>
+    <div class="vac-faq__more">
+      <a href="/intrebari-frecvente" data-cta="home_faq_page">Vezi toate intrebarile frecvente</a>
+    </div>
+  </div>
+</section>
+<style>
+  .vac-faq{
+    max-width:56rem;margin:1.5rem 0 0;
+    display:grid;gap:.75rem;
+  }
+  .vac-faq__item{
+    background:rgba(255,250,244,.92);
+    border:1px solid rgba(78,58,36,.14);
+    border-radius:18px;
+    box-shadow:0 10px 30px rgba(23,32,40,.05);
+    padding:0 1.25rem;
+    transition:box-shadow .18s ease, border-color .18s ease;
+  }
+  .vac-faq__item[open]{
+    border-color:rgba(166,125,66,.4);
+    box-shadow:0 14px 34px rgba(23,32,40,.08);
+  }
+  .vac-faq__item > summary{
+    list-style:none;cursor:pointer;
+    padding:1.1rem 2.2rem 1.1rem 0;position:relative;
+    font-family:"Manrope","Segoe UI",sans-serif;
+    font-weight:700;font-size:1.02rem;line-height:1.35;letter-spacing:-.005em;
+    color:#1f2b37;
+  }
+  .vac-faq__item > summary::-webkit-details-marker{display:none;}
+  .vac-faq__item > summary::after{
+    content:"+";position:absolute;right:.25rem;top:50%;transform:translateY(-50%);
+    width:28px;height:28px;border-radius:50%;
+    background:#f5efe5;color:#23384d;
+    display:flex;align-items:center;justify-content:center;
+    font-weight:600;font-size:1.1rem;line-height:1;
+    transition:transform .2s ease, background .2s ease;
+  }
+  .vac-faq__item[open] > summary::after{
+    content:"–";background:#23384d;color:#fffaf4;
+  }
+  .vac-faq__body{padding:0 0 1.15rem;}
+  .vac-faq__body p{margin:0;color:#6e6257;line-height:1.75;font-size:.98rem;}
+  .vac-faq__more{margin-top:1rem;}
+  .vac-faq__more a{
+    display:inline-flex;align-items:center;gap:.5rem;
+    padding:.85rem 1rem;border-radius:999px;
+    background:rgba(255,250,244,.92);
+    border:1px solid rgba(78,58,36,.14);
+    color:#23384d;font-weight:700;
+    box-shadow:0 10px 26px rgba(23,32,40,.05);
+  }
+</style>

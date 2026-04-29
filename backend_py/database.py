@@ -1,9 +1,15 @@
+import re
 import sqlite3
 from config import Config
 
 
 def get_db():
-    db = sqlite3.connect(Config.DATABASE)
+    db = sqlite3.connect(Config.DATABASE, timeout=30)
+    try:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA busy_timeout=5000")
+    except Exception:
+        pass
     db.row_factory = sqlite3.Row
     return db
 
@@ -185,6 +191,11 @@ def init_db():
             agent_slug TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             title TEXT,
+            brief_objective TEXT,
+            brief_current_status TEXT,
+            brief_next_step TEXT,
+            brief_blocked_by TEXT,
+            brief_updated_at TEXT,
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
@@ -339,6 +350,11 @@ def init_db():
         "ALTER TABLE flows ADD COLUMN is_template INTEGER DEFAULT 0",
         "ALTER TABLE flows ADD COLUMN client_id INTEGER",
         "ALTER TABLE conversations ADD COLUMN client_id INTEGER",
+        "ALTER TABLE conversations ADD COLUMN brief_objective TEXT",
+        "ALTER TABLE conversations ADD COLUMN brief_current_status TEXT",
+        "ALTER TABLE conversations ADD COLUMN brief_next_step TEXT",
+        "ALTER TABLE conversations ADD COLUMN brief_blocked_by TEXT",
+        "ALTER TABLE conversations ADD COLUMN brief_updated_at TEXT",
         "ALTER TABLE agents_config ADD COLUMN client_id INTEGER",
         "ALTER TABLE connectors_config ADD COLUMN client_id INTEGER",
     ):
@@ -373,7 +389,6 @@ def init_db():
             avatar_colors TEXT,
             llm_provider TEXT,
             llm_model TEXT,
-            api_key TEXT,
             temperature REAL DEFAULT 0.7,
             max_tokens INTEGER DEFAULT 2048,
             rag_enabled INTEGER DEFAULT 1,
@@ -562,6 +577,86 @@ def update_conversation_title(conv_id, title):
     db.execute('UPDATE conversations SET title = ? WHERE id = ?', (title, conv_id))
     db.commit()
     db.close()
+
+
+_BRIEF_LIMITS = {
+    "objective": 280,
+    "current_status": 400,
+    "next_step": 280,
+    "blocked_by": 280,
+}
+
+
+def _normalize_brief_value(value, limit):
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if len(text) > int(limit):
+        text = text[: int(limit)].rstrip()
+    return text
+
+
+def get_conversation_brief(conv_id):
+    db = get_db()
+    try:
+        row = db.execute(
+            """
+            SELECT brief_objective, brief_current_status, brief_next_step,
+                   brief_blocked_by, brief_updated_at
+            FROM conversations
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (int(conv_id),),
+        ).fetchone()
+    except Exception:
+        row = None
+    db.close()
+    if not row:
+        return {
+            "objective": "",
+            "current_status": "",
+            "next_step": "",
+            "blocked_by": "",
+            "updated_at": None,
+        }
+    return {
+        "objective": str(row[0] or "").strip(),
+        "current_status": str(row[1] or "").strip(),
+        "next_step": str(row[2] or "").strip(),
+        "blocked_by": str(row[3] or "").strip(),
+        "updated_at": row[4],
+    }
+
+
+def update_conversation_brief(conv_id, objective="", current_status="", next_step="", blocked_by=""):
+    payload = {
+        "objective": _normalize_brief_value(objective, _BRIEF_LIMITS["objective"]),
+        "current_status": _normalize_brief_value(current_status, _BRIEF_LIMITS["current_status"]),
+        "next_step": _normalize_brief_value(next_step, _BRIEF_LIMITS["next_step"]),
+        "blocked_by": _normalize_brief_value(blocked_by, _BRIEF_LIMITS["blocked_by"]),
+    }
+    db = get_db()
+    cursor = db.execute(
+        """
+        UPDATE conversations
+        SET brief_objective = ?,
+            brief_current_status = ?,
+            brief_next_step = ?,
+            brief_blocked_by = ?,
+            brief_updated_at = datetime('now')
+        WHERE id = ?
+        """,
+        (
+            payload["objective"],
+            payload["current_status"],
+            payload["next_step"],
+            payload["blocked_by"],
+            int(conv_id),
+        ),
+    )
+    db.commit()
+    updated = cursor.rowcount > 0
+    db.close()
+    return updated
 
 
 def search_conversations(user_id, workspace_slug, query, limit=10, client_id=None):

@@ -1,0 +1,27 @@
+<script>
+(function () {
+  window.dataLayer = window.dataLayer || [];
+  window.gtag = window.gtag || function(){ window.dataLayer.push(arguments); };
+  var stored = "";
+  try {
+    stored = String(window.localStorage.getItem("vac_cookie_consent") || "");
+  } catch (error) {
+    stored = "";
+  }
+  var granted = stored === "accepted";
+  var consent = {
+    analytics_storage: granted ? "granted" : "denied",
+    ad_storage: granted ? "granted" : "denied",
+    ad_user_data: granted ? "granted" : "denied",
+    ad_personalization: granted ? "granted" : "denied"
+  };
+  if (!stored) {
+    consent.wait_for_update = 500;
+  }
+  window.gtag("consent", "default", consent);
+  window.dataLayer.push({
+    event: "vacante_cookie_consent_default",
+    consent_state: stored || "unset"
+  });
+})();
+</script>

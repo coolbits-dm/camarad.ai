@@ -1,0 +1,140 @@
+<div id="vac-cookie-banner" class="vac-cookie" hidden aria-live="polite">
+  <div class="vac-cookie__copy">
+    <strong>Cookie-uri si masurare.</strong>
+    Folosim cookie-uri necesare pentru functionarea paginii si, doar daca esti de acord, semnale de analytics pentru a intelege ce sectiuni sunt utile.
+    <a href="/privacy">Privacy Policy</a>
+  </div>
+  <div class="vac-cookie__actions">
+    <button type="button" class="vac-cookie__btn vac-cookie__btn--ghost" data-cookie-action="reject">Doar necesare</button>
+    <button type="button" class="vac-cookie__btn vac-cookie__btn--primary" data-cookie-action="accept">Accept</button>
+  </div>
+</div>
+<style>
+  .vac-cookie{
+    position:fixed;
+    left:16px;
+    right:16px;
+    bottom:16px;
+    z-index:80;
+    max-width:960px;
+    margin:0 auto;
+    display:grid;
+    gap:1rem;
+    padding:1rem;
+    border-radius:24px;
+    background:rgba(22, 38, 54, 0.96);
+    color:#f8f2ea;
+    box-shadow:0 24px 54px rgba(12, 20, 28, 0.28);
+    border:1px solid rgba(255, 250, 244, 0.12);
+    backdrop-filter:blur(14px);
+  }
+  .vac-cookie[hidden]{
+    display:none !important;
+  }
+  .vac-cookie__copy{
+    line-height:1.7;
+    font-size:0.95rem;
+  }
+  .vac-cookie__copy strong{
+    color:#fffaf4;
+  }
+  .vac-cookie__copy a{
+    color:#f6d9a7;
+    text-decoration:underline;
+  }
+  .vac-cookie__actions{
+    display:flex;
+    flex-wrap:wrap;
+    gap:0.75rem;
+  }
+  .vac-cookie__btn{
+    appearance:none;
+    border:0;
+    min-height:46px;
+    padding:0.82rem 1rem;
+    border-radius:999px;
+    font:inherit;
+    font-weight:800;
+    letter-spacing:-0.01em;
+    cursor:pointer;
+    transition:transform .18s ease, background .18s ease, box-shadow .18s ease;
+  }
+  .vac-cookie__btn:hover{
+    transform:translateY(-1px);
+  }
+  .vac-cookie__btn--ghost{
+    background:rgba(255, 250, 244, 0.08);
+    color:#fffaf4;
+    border:1px solid rgba(255, 250, 244, 0.16);
+  }
+  .vac-cookie__btn--primary{
+    background:linear-gradient(180deg, #fffaf4 0%, #f2e7d8 100%);
+    color:#162636;
+    box-shadow:0 12px 28px rgba(7, 12, 18, 0.22);
+  }
+  body.has-vac-sticky .vac-cookie{
+    bottom:92px;
+  }
+  @media (max-width:768px){
+    .vac-cookie{
+      left:12px;
+      right:12px;
+      bottom:12px;
+      border-radius:20px;
+      padding:0.95rem;
+    }
+    body.has-vac-sticky .vac-cookie{
+      bottom:104px;
+    }
+    .vac-cookie__actions{
+      display:grid;
+      grid-template-columns:repeat(2, minmax(0, 1fr));
+    }
+    .vac-cookie__btn{
+      width:100%;
+    }
+  }
+</style>
+<script>
+(function () {
+  var banner = document.getElementById("vac-cookie-banner");
+  if (!banner) return;
+
+  function setConsent(state) {
+    var granted = state === "accepted";
+    try {
+      window.localStorage.setItem("vac_cookie_consent", state);
+    } catch (error) {}
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = window.gtag || function(){ window.dataLayer.push(arguments); };
+    window.gtag("consent", "update", {
+      analytics_storage: granted ? "granted" : "denied",
+      ad_storage: granted ? "granted" : "denied",
+      ad_user_data: granted ? "granted" : "denied",
+      ad_personalization: granted ? "granted" : "denied"
+    });
+    window.dataLayer.push({
+      event: "vacante_cookie_consent_update",
+      consent_state: state
+    });
+  }
+
+  var stored = "";
+  try {
+    stored = String(window.localStorage.getItem("vac_cookie_consent") || "");
+  } catch (error) {
+    stored = "";
+  }
+  if (!stored) {
+    banner.hidden = false;
+  }
+
+  banner.querySelectorAll("[data-cookie-action]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var state = button.getAttribute("data-cookie-action") === "accept" ? "accepted" : "rejected";
+      setConsent(state);
+      banner.hidden = true;
+    });
+  });
+})();
+</script>

@@ -138,6 +138,35 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
+  .agent-brief-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 5px;
+    font-size: 0.7rem;
+    line-height: 1.25;
+    min-width: 0;
+  }
+  .agent-brief-badge {
+    border-radius: 999px;
+    border: 1px solid #2b3d59;
+    padding: 1px 6px;
+    font-size: 0.62rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: #b6c7df;
+    flex: 0 0 auto;
+  }
+  .agent-brief-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .agent-brief-row[data-tone="blocked"] .agent-brief-text { color: #f2cc60; }
+  .agent-brief-row[data-tone="next"] .agent-brief-text { color: #7ee787; }
+  .agent-brief-row[data-tone="objective"] .agent-brief-text { color: #79c0ff; }
+  .agent-brief-row[data-tone="status"] .agent-brief-text { color: #c9d1d9; }
   #chat-home-empty {
     border: 1px dashed #2b3e59;
     border-radius: 12px;
@@ -240,6 +269,14 @@
             <span class="agent-workspace-badge">{{ agent.workspace_name }}</span>
           </span>
           <span class="agent-preview">{{ agent.last_message }}</span>
+          {% if agent.has_brief and agent.brief_signal %}
+            <span class="agent-brief-row" data-tone="{{ agent.brief_signal.tone }}">
+              <span class="agent-brief-badge">Brief</span>
+              <span class="agent-brief-text">
+                <i class="bi {{ agent.brief_signal.icon }} me-1"></i>{{ agent.brief_signal.label }}: {{ agent.brief_signal.text }}
+              </span>
+            </span>
+          {% endif %}
         </span>
       </a>
     {% endfor %}

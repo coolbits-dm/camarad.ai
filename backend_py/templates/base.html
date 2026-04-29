@@ -2437,6 +2437,20 @@
 
             var preview = c.last_message || 'No messages yet';
             if (preview.length > 56) preview = preview.substring(0, 56) + '…';
+            var briefBadge = '';
+            var briefSignalHtml = '';
+            if (c.has_brief && c.brief_signal && c.brief_signal.text) {
+              var signalTone = '#7ee787';
+              if (c.brief_signal.tone === 'blocked') signalTone = '#f2cc60';
+              else if (c.brief_signal.tone === 'objective') signalTone = '#79c0ff';
+              var signalIcon = c.brief_signal.icon || 'bi-journal-text';
+              briefBadge = '<span class="ms-1 px-1 rounded" style="font-size:0.6rem;line-height:1.2;background:#161b22;color:#7ee787;border:1px solid #30363d;">Brief</span>';
+              briefSignalHtml = '<div class="text-truncate mt-1" style="font-size:0.72rem;color:' + signalTone + ';">'
+                + '<i class="bi ' + escHtmlSafe(signalIcon) + ' me-1" aria-hidden="true"></i>'
+                + '<span style="opacity:0.9">' + escHtmlSafe(c.brief_signal.label || 'Brief') + ':</span> '
+                + escHtmlSafe(c.brief_signal.text)
+                + '</div>';
+            }
 
             var wsName = c.workspace_name || workspaceLabel(c.workspace_slug);
             var timeAgo = formatTimeAgo(c.last_activity || c.last_message_at || c.created_at);
@@ -2452,11 +2466,12 @@
               + miniAvatar
               + '<div class="flex-fill overflow-hidden">'
               + '<div class="d-flex justify-content-between align-items-start gap-1">'
-              + '<span class="text-truncate" style="font-weight:500">' + escHtmlSafe(title) + unreadBadge + '</span>'
+              + '<span class="text-truncate" style="font-weight:500">' + escHtmlSafe(title) + unreadBadge + briefBadge + '</span>'
               + '<small class="text-muted ms-1" style="white-space:nowrap;font-size:0.7rem" title="' + escHtmlSafe(exactTs) + '">' + escHtmlSafe(timeAgo) + '</small>'
               + '</div>'
               + '<div class="text-muted text-truncate" style="font-size:0.72rem">' + escHtmlSafe(wsName) + ' · ' + escHtmlSafe(c.agent_name || c.agent_slug) + '</div>'
               + '<div class="text-muted text-truncate" style="font-size:0.78rem">' + escHtmlSafe(preview) + '</div>'
+              + briefSignalHtml
               + '</div></div>';
             chatList.appendChild(a);
           });

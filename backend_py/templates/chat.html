@@ -24,7 +24,68 @@
   </div>
 </div>
 
-<div id="chat-history" class="border rounded-3 p-3 mb-3" style="height:calc(100vh - 220px); overflow-y:auto; background:#0d1117; border-color:#30363d !important;">
+<div id="conversation-brief-card" class="card bg-dark border-secondary text-light mb-3">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+      <div>
+        <h5 class="card-title mb-1">Conversation Brief</h5>
+        <p class="text-muted mb-0" style="font-size:0.9rem;">Resume this thread in under 30 seconds.</p>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <small id="conversation-brief-updated" class="text-muted"></small>
+        <button type="button" id="conversation-brief-edit-btn" class="btn btn-sm btn-outline-info">Edit Brief</button>
+      </div>
+    </div>
+
+    <div id="conversation-brief-view">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <small class="text-uppercase text-muted d-block mb-1">Objective</small>
+          <div id="conversation-brief-objective" class="fw-semibold"></div>
+        </div>
+        <div class="col-md-6">
+          <small class="text-uppercase text-muted d-block mb-1">Next Step</small>
+          <div id="conversation-brief-next-step" class="fw-semibold"></div>
+        </div>
+        <div class="col-md-6">
+          <small class="text-uppercase text-muted d-block mb-1">Current Status</small>
+          <div id="conversation-brief-current-status"></div>
+        </div>
+        <div class="col-md-6">
+          <small class="text-uppercase text-muted d-block mb-1">Blocked By</small>
+          <div id="conversation-brief-blocked-by"></div>
+        </div>
+      </div>
+    </div>
+
+    <form id="conversation-brief-form" class="d-none">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label for="brief-objective-input" class="form-label text-muted small text-uppercase">Objective</label>
+          <input type="text" id="brief-objective-input" class="form-control bg-black text-light border-secondary" maxlength="280" placeholder="What is this conversation trying to achieve?">
+        </div>
+        <div class="col-md-6">
+          <label for="brief-next-step-input" class="form-label text-muted small text-uppercase">Next Step</label>
+          <input type="text" id="brief-next-step-input" class="form-control bg-black text-light border-secondary" maxlength="280" placeholder="What should happen next?">
+        </div>
+        <div class="col-md-6">
+          <label for="brief-current-status-input" class="form-label text-muted small text-uppercase">Current Status</label>
+          <textarea id="brief-current-status-input" class="form-control bg-black text-light border-secondary" rows="3" maxlength="400" placeholder="Where does this stand right now?"></textarea>
+        </div>
+        <div class="col-md-6">
+          <label for="brief-blocked-by-input" class="form-label text-muted small text-uppercase">Blocked By</label>
+          <textarea id="brief-blocked-by-input" class="form-control bg-black text-light border-secondary" rows="3" maxlength="280" placeholder="What is blocking progress?"></textarea>
+        </div>
+      </div>
+      <div class="d-flex gap-2 mt-3">
+        <button type="submit" id="conversation-brief-save-btn" class="btn btn-sm btn-primary">Save Brief</button>
+        <button type="button" id="conversation-brief-cancel-btn" class="btn btn-sm btn-outline-secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="chat-history" class="border rounded-3 p-3 mb-3" style="height:calc(100vh - 360px); min-height:320px; overflow-y:auto; background:#0d1117; border-color:#30363d !important;">
   {% for msg in history %}
   <div class="d-flex mb-3 {% if msg.role == 'user' %}justify-content-end{% else %}justify-content-start{% endif %} gap-2">
     {% if msg.role != 'user' %}
@@ -62,6 +123,7 @@
     window.wsSlug = '{{ ws_slug }}';
     window.agentSlug = '{{ agent_slug }}';
     window.convId = {{ conv_id or 'null' }};
+    window.conversationBrief = {{ (conversation_brief or {})|tojson }};
 </script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
@@ -70,6 +132,27 @@ document.addEventListener('DOMContentLoaded', function() {
     const sendBtn = document.getElementById('send-btn');
     const composeFlowBtn = document.getElementById('compose-flow-btn');
     const suggestionsEl = document.getElementById('chat-suggestions');
+    const briefView = document.getElementById('conversation-brief-view');
+    const briefForm = document.getElementById('conversation-brief-form');
+    const briefUpdatedEl = document.getElementById('conversation-brief-updated');
+    const briefEditBtn = document.getElementById('conversation-brief-edit-btn');
+    const briefCancelBtn = document.getElementById('conversation-brief-cancel-btn');
+    const briefSaveBtn = document.getElementById('conversation-brief-save-btn');
+    const briefObjectiveView = document.getElementById('conversation-brief-objective');
+    const briefCurrentStatusView = document.getElementById('conversation-brief-current-status');
+    const briefNextStepView = document.getElementById('conversation-brief-next-step');
+    const briefBlockedByView = document.getElementById('conversation-brief-blocked-by');
+    const briefObjectiveInput = document.getElementById('brief-objective-input');
+    const briefCurrentStatusInput = document.getElementById('brief-current-status-input');
+    const briefNextStepInput = document.getElementById('brief-next-step-input');
+    const briefBlockedByInput = document.getElementById('brief-blocked-by-input');
+    var conversationBrief = Object.assign({
+      objective: '',
+      current_status: '',
+      next_step: '',
+      blocked_by: '',
+      updated_at: null
+    }, window.conversationBrief || {});
 
     if (!chatHistory || !userInput || !sendBtn) {
         console.error('Chat elements not found!');
@@ -162,6 +245,38 @@ var msgAvatarCounter = 0;
           }
         }
         return div;
+    }
+
+    function briefHtml(value, placeholder) {
+        var text = String(value || '').trim();
+        if (!text) return '<span class="text-muted">' + escapeHtml(placeholder || 'Not set') + '</span>';
+        return escapeHtml(text).replace(/\n/g, '<br>');
+    }
+
+    function renderBrief() {
+        if (!briefView) return;
+        briefObjectiveView.innerHTML = briefHtml(conversationBrief.objective, 'No objective set yet');
+        briefCurrentStatusView.innerHTML = briefHtml(conversationBrief.current_status, 'No current status set yet');
+        briefNextStepView.innerHTML = briefHtml(conversationBrief.next_step, 'No next step set yet');
+        briefBlockedByView.innerHTML = briefHtml(conversationBrief.blocked_by, 'No blockers captured');
+
+        if (briefUpdatedEl) {
+            briefUpdatedEl.textContent = conversationBrief.updated_at
+              ? ('Updated ' + String(conversationBrief.updated_at))
+              : 'Not updated yet';
+        }
+
+        if (briefObjectiveInput) briefObjectiveInput.value = conversationBrief.objective || '';
+        if (briefCurrentStatusInput) briefCurrentStatusInput.value = conversationBrief.current_status || '';
+        if (briefNextStepInput) briefNextStepInput.value = conversationBrief.next_step || '';
+        if (briefBlockedByInput) briefBlockedByInput.value = conversationBrief.blocked_by || '';
+    }
+
+    function setBriefEditing(editing) {
+        if (!briefView || !briefForm || !briefEditBtn) return;
+        briefView.classList.toggle('d-none', !!editing);
+        briefForm.classList.toggle('d-none', !editing);
+        briefEditBtn.classList.toggle('d-none', !!editing);
     }
 
     function renderSuggestions(items) {
@@ -305,6 +420,56 @@ var msgAvatarCounter = 0;
     if (composeFlowBtn) {
       composeFlowBtn.addEventListener('click', composeFlowFromPrompt);
     }
+    if (briefEditBtn) {
+      briefEditBtn.addEventListener('click', function() {
+        setBriefEditing(true);
+      });
+    }
+    if (briefCancelBtn) {
+      briefCancelBtn.addEventListener('click', function() {
+        renderBrief();
+        setBriefEditing(false);
+      });
+    }
+    if (briefForm) {
+      briefForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        if (!window.convId) return;
+        if (briefSaveBtn) briefSaveBtn.disabled = true;
+        fetch('/api/conversations/' + window.convId + '/brief', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            objective: briefObjectiveInput ? briefObjectiveInput.value : '',
+            current_status: briefCurrentStatusInput ? briefCurrentStatusInput.value : '',
+            next_step: briefNextStepInput ? briefNextStepInput.value : '',
+            blocked_by: briefBlockedByInput ? briefBlockedByInput.value : ''
+          })
+        })
+        .then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function(data) {
+          conversationBrief = Object.assign({
+            objective: '',
+            current_status: '',
+            next_step: '',
+            blocked_by: '',
+            updated_at: null
+          }, (data && data.brief) || {});
+          renderBrief();
+          setBriefEditing(false);
+          if (window.showToast) window.showToast('Brief Saved', 'Conversation brief updated.', 'success', 1800);
+        })
+        .catch(function(err) {
+          if (window.showToast) window.showToast('Brief Error', err.message, 'error');
+        })
+        .finally(function() {
+          if (briefSaveBtn) briefSaveBtn.disabled = false;
+        });
+      });
+    }
     userInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -314,6 +479,7 @@ var msgAvatarCounter = 0;
 
     // Focus input
     userInput.focus();
+    renderBrief();
     loadSuggestions();
 
     async function composeFlowFromPrompt() {

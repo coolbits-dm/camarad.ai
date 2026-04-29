@@ -1,0 +1,103 @@
+<script>
+(function () {
+  var pageType = {{ vacante_page_type|default('vacante')|tojson }};
+  window.dataLayer = window.dataLayer || [];
+  window.dataLayer.push({
+    event: "vacante_page_view",
+    page_type: pageType,
+    page_path: window.location.pathname,
+    page_url: window.location.href
+  });
+
+  document.querySelectorAll("[data-cta]").forEach(function (el) {
+    el.addEventListener("click", function () {
+      window.dataLayer.push({
+        event: "vacante_cta_click",
+        page_type: pageType,
+        cta_id: el.getAttribute("data-cta") || "",
+        href: el.getAttribute("href") || "",
+        outbound: el.hasAttribute("data-outbound") ? "1" : "0"
+      });
+    });
+  });
+
+  document.querySelectorAll("details").forEach(function (el) {
+    el.addEventListener("toggle", function () {
+      if (!el.open) return;
+      var summary = el.querySelector("summary");
+      window.dataLayer.push({
+        event: "vacante_faq_open",
+        page_type: pageType,
+        faq_label: summary ? String(summary.textContent || "").trim().slice(0, 120) : ""
+      });
+    });
+  });
+
+  var form = document.getElementById("contact-form");
+  var status = document.getElementById("contact-form-status");
+  if (form && window.fetch && window.FormData) {
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      if (status) {
+        status.hidden = true;
+        status.removeAttribute("data-state");
+        status.textContent = "";
+      }
+
+      var submitButton = form.querySelector('button[type="submit"]');
+      if (submitButton) submitButton.disabled = true;
+
+      var formData = new FormData(form);
+      window.dataLayer.push({
+        event: "vacante_contact_submit_start",
+        page_type: pageType,
+        source_path: formData.get("source_path") || window.location.pathname
+      });
+
+      fetch(form.action || window.location.pathname, {
+        method: "POST",
+        body: formData,
+        headers: { "Accept": "application/json" },
+        credentials: "same-origin"
+      })
+        .then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (payload) {
+            return { ok: response.ok, status: response.status, payload: payload || {} };
+          });
+        })
+        .then(function (result) {
+          if (!result.ok || !result.payload.ok) {
+            var message = result.payload.error || "Mesajul nu a putut fi trimis acum. Incearca din nou sau foloseste emailul direct.";
+            throw { status: result.status, message: message };
+          }
+          window.location.href = result.payload.redirect || "/multumesc?contact=1";
+        })
+        .catch(function (error) {
+          if (status) {
+            status.hidden = false;
+            status.setAttribute("data-state", "error");
+            status.textContent = error && error.message
+              ? error.message
+              : "Mesajul nu a putut fi trimis acum. Incearca din nou.";
+          }
+          window.dataLayer.push({
+            event: "vacante_contact_submit_error",
+            page_type: pageType,
+            error_status: error && error.status ? String(error.status) : "unknown"
+          });
+        })
+        .finally(function () {
+          if (submitButton) submitButton.disabled = false;
+        });
+    });
+  }
+
+  {% if vacante_contact_event %}
+  window.dataLayer.push({
+    event: "vacante_contact_submit_success",
+    page_type: pageType,
+    page_path: window.location.pathname
+  });
+  {% endif %}
+})();
+</script>

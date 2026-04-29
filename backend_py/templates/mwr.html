@@ -1,0 +1,1602 @@
+<!doctype html>
+<html lang="ro">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  {% if google_site_verification %}
+  <meta name="google-site-verification" content="{{ google_site_verification }}">
+  {% endif %}
+  {% include "_vacante/_consent_head.html" %}
+  {% if gtm_container_id %}
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','{{ gtm_container_id }}');</script>
+  <!-- End Google Tag Manager -->
+  {% endif %}
+  <title>Calatoreste mai bine | Membership de calatorie premium</title>
+  <meta name="description" content="Un membership de calatorie gandit pentru cei care vor acces mai simplu la optiuni mai bune, intr-o experienta eleganta si usor de folosit." />
+  <meta name="robots" content="index,follow" />
+  <meta name="theme-color" content="#f6f1e8" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Calatoreste mai bine, cu mai multa claritate si mai putin efort" />
+  <meta property="og:description" content="Descopera un membership de calatorie prezentat intr-o experienta premium, simpla si conforma." />
+  <meta property="og:url" content="{{ canonical_url }}" />
+  <meta property="og:image" content="{{ vacante_og_image_url }}" />
+  <meta property="og:site_name" content="Vacante Inteligente" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Calatoreste mai bine, cu mai multa claritate si mai putin efort" />
+  <meta name="twitter:description" content="Membership de calatorie pentru cei care vor o experienta mai clara, mai eleganta si mai usor de folosit." />
+  <meta name="twitter:image" content="{{ vacante_og_image_url }}" />
+  <link rel="canonical" href="{{ canonical_url }}" />
+  {% include "_vacante/_structured_data_home.html" %}
+  <link rel="icon" type="image/x-icon" href="/static/brand/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/brand/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/brand/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/brand/apple-touch-icon.png">
+  <link rel="manifest" href="/static/brand/site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --page: #f5efe5;
+      --page-deep: #ece2d5;
+      --paper: rgba(255, 250, 244, 0.82);
+      --paper-strong: #fffaf4;
+      --line: rgba(78, 58, 36, 0.12);
+      --line-strong: rgba(78, 58, 36, 0.18);
+      --text: #1f2b37;
+      --muted: #6e6257;
+      --navy: #23384d;
+      --navy-deep: #162636;
+      --gold: #a67d42;
+      --gold-soft: rgba(166, 125, 66, 0.14);
+      --sea: #8fb2c8;
+      --mint: #d8ebe4;
+      --shadow-soft: 0 18px 48px rgba(23, 32, 40, 0.08);
+      --shadow-photo: 0 28px 70px rgba(23, 32, 40, 0.14);
+      --radius-xl: 34px;
+      --radius-lg: 24px;
+      --radius-md: 18px;
+      --container: min(1180px, calc(100% - 2rem));
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(166, 125, 66, 0.18), transparent 34%),
+        radial-gradient(circle at top right, rgba(122, 165, 195, 0.18), transparent 28%),
+        linear-gradient(180deg, #f8f2ea 0%, #f5efe5 38%, #f3efe9 100%);
+    }
+
+    img {
+      display: block;
+      max-width: 100%;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .container {
+      width: var(--container);
+      margin: 0 auto;
+    }
+
+    .hero-shell {
+      position: relative;
+      overflow: hidden;
+      padding: 1rem 0 3rem;
+    }
+
+    .hero-shell::before {
+      content: "";
+      position: absolute;
+      inset: -10% auto auto 50%;
+      width: 38rem;
+      height: 38rem;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(143, 178, 200, 0.22), transparent 68%);
+      pointer-events: none;
+    }
+
+    .hero-shell::after {
+      content: "";
+      position: absolute;
+      inset: 14rem auto auto -8rem;
+      width: 26rem;
+      height: 26rem;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(166, 125, 66, 0.12), transparent 68%);
+      pointer-events: none;
+    }
+
+    .topbar {
+      width: var(--container);
+      margin: 0 auto 1.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      position: relative;
+      z-index: 2;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.9rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-mark {
+      width: 2.75rem;
+      height: 2.75rem;
+      border-radius: 16px;
+      display: inline-grid;
+      place-items: center;
+      background: linear-gradient(145deg, rgba(255, 255, 255, 0.95), rgba(242, 230, 216, 0.86));
+      border: 1px solid rgba(78, 58, 36, 0.10);
+      box-shadow: 0 12px 26px rgba(31, 43, 55, 0.08);
+      color: var(--navy);
+    }
+
+    .brand-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 0.08rem;
+    }
+
+    .brand-copy strong {
+      font-size: 1rem;
+      font-weight: 800;
+    }
+
+    .brand-copy small {
+      color: var(--muted);
+      font-size: 0.77rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .top-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      padding: 0.7rem 0.95rem;
+      border-radius: 999px;
+      background: rgba(255, 250, 244, 0.72);
+      border: 1px solid rgba(78, 58, 36, 0.08);
+      color: var(--muted);
+      font-size: 0.9rem;
+      box-shadow: 0 12px 34px rgba(23, 32, 40, 0.06);
+      backdrop-filter: blur(12px);
+    }
+
+    .hero {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      gap: 2rem;
+      align-items: center;
+    }
+
+    .hero-copy {
+      position: relative;
+      padding: 0.4rem 0 0;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      padding: 0.48rem 0.8rem;
+      border-radius: 999px;
+      background: rgba(255, 250, 244, 0.88);
+      border: 1px solid rgba(78, 58, 36, 0.10);
+      color: var(--gold);
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      box-shadow: 0 14px 30px rgba(23, 32, 40, 0.06);
+    }
+
+    h1 {
+      margin: 1.15rem 0 0;
+      font-family: "Cormorant Garamond", "Iowan Old Style", serif;
+      font-size: clamp(3.1rem, 8vw, 5.8rem);
+      line-height: 0.93;
+      letter-spacing: -0.05em;
+      font-weight: 600;
+      max-width: 10.8ch;
+      color: #1c2b38;
+    }
+
+    .hero-subtitle {
+      margin: 1.15rem 0 0;
+      max-width: 35rem;
+      color: var(--muted);
+      font-size: clamp(1rem, 2.2vw, 1.14rem);
+      line-height: 1.82;
+    }
+
+    .hero-actions {
+      margin-top: 1.65rem;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 1rem;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.7rem;
+      min-height: 3.45rem;
+      padding: 0.92rem 1.36rem;
+      border-radius: 999px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+    }
+
+    .button-primary {
+      background: linear-gradient(180deg, #24394f 0%, #182838 100%);
+      color: #fff;
+      box-shadow: 0 18px 40px rgba(26, 40, 56, 0.22);
+    }
+
+    .button-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 24px 46px rgba(26, 40, 56, 0.26);
+    }
+
+    .button-secondary {
+      background: rgba(255, 255, 255, 0.92);
+      color: #23384d;
+      border: 1px solid rgba(35, 56, 77, 0.15);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.01), 0 14px 30px rgba(23, 32, 40, 0.08);
+    }
+
+    .button-secondary:hover {
+      transform: translateY(-1px);
+      background: #ffffff;
+    }
+
+    .hero-primary-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      width: 100%;
+    }
+
+    @media (min-width: 720px) {
+      .hero-primary-actions {
+        flex-direction: row;
+      }
+    }
+
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .hero-meta span {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.62rem 0.9rem;
+      border-radius: 999px;
+      background: rgba(255, 250, 244, 0.74);
+      border: 1px solid rgba(78, 58, 36, 0.08);
+      color: var(--muted);
+      font-size: 0.92rem;
+      box-shadow: 0 12px 30px rgba(23, 32, 40, 0.05);
+    }
+
+    .hero-route {
+      margin-top: 1.2rem;
+      max-width: 31rem;
+      padding: 0.95rem 1rem 0.85rem;
+      border-radius: 24px;
+      background: rgba(255, 250, 244, 0.72);
+      border: 1px solid rgba(78, 58, 36, 0.08);
+      box-shadow: 0 16px 34px rgba(23, 32, 40, 0.05);
+      backdrop-filter: blur(12px);
+    }
+
+    .hero-route svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .hero-route-caption {
+      margin-top: 0.5rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      color: var(--muted);
+      font-size: 0.82rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .hero-visual {
+      position: relative;
+    }
+
+    .visual-stage {
+      position: relative;
+      min-height: 38rem;
+      border-radius: var(--radius-xl);
+      padding: 1.2rem;
+      background:
+        linear-gradient(180deg, rgba(255, 250, 244, 0.76), rgba(255, 250, 244, 0.48)),
+        linear-gradient(150deg, rgba(143, 178, 200, 0.18), rgba(166, 125, 66, 0.14));
+      border: 1px solid rgba(78, 58, 36, 0.08);
+      box-shadow: var(--shadow-soft);
+      overflow: hidden;
+      backdrop-filter: blur(18px);
+    }
+
+    .visual-stage::before {
+      content: "";
+      position: absolute;
+      inset: auto -4rem -5rem auto;
+      width: 16rem;
+      height: 16rem;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(166, 125, 66, 0.16), transparent 68%);
+    }
+
+    .visual-stage::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.16), rgba(255,255,255,0)),
+        repeating-linear-gradient(135deg, rgba(255,255,255,0.025) 0, rgba(255,255,255,0.025) 1px, transparent 1px, transparent 18px);
+      pointer-events: none;
+    }
+
+    .route-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      opacity: 0.78;
+    }
+
+    .route-overlay svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .photo-main,
+    .photo-card {
+      position: absolute;
+      overflow: hidden;
+      border-radius: 28px;
+      border: 1px solid rgba(255, 255, 255, 0.55);
+      box-shadow: var(--shadow-photo);
+      background: #d8d8d8;
+    }
+
+    .photo-main {
+      inset: 1.2rem 0.8rem 4.4rem 0.8rem;
+    }
+
+    .photo-main::after,
+    .photo-card::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(8, 16, 24, 0.04), rgba(8, 16, 24, 0.22));
+      pointer-events: none;
+    }
+
+    .photo-main img,
+    .photo-card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .photo-card.top {
+      width: 38%;
+      height: 43%;
+      top: 2rem;
+      right: 1.4rem;
+    }
+
+    .photo-card.bottom {
+      width: 36%;
+      height: 39%;
+      left: 1.4rem;
+      bottom: 1.4rem;
+    }
+
+    .floating-glass,
+    .floating-note {
+      position: absolute;
+      z-index: 2;
+      backdrop-filter: blur(14px);
+    }
+
+    .floating-glass {
+      top: 1.7rem;
+      left: 1.7rem;
+      width: min(18rem, calc(100% - 6rem));
+      padding: 1rem 1.05rem;
+      border-radius: 22px;
+      background: rgba(250, 245, 238, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.62);
+      box-shadow: 0 18px 42px rgba(26, 40, 56, 0.10);
+    }
+
+    .floating-glass strong {
+      display: block;
+      font-size: 1rem;
+      letter-spacing: -0.03em;
+    }
+
+    .floating-glass p {
+      margin: 0.45rem 0 0;
+      color: #61574f;
+      font-size: 0.92rem;
+      line-height: 1.65;
+    }
+
+    .floating-note {
+      right: 1.75rem;
+      bottom: 1.75rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      padding: 0.74rem 0.92rem;
+      border-radius: 999px;
+      background: rgba(250, 245, 238, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.62);
+      color: #5d5249;
+      font-size: 0.88rem;
+      font-weight: 700;
+      box-shadow: 0 14px 34px rgba(26, 40, 56, 0.10);
+    }
+
+    .destination-pill,
+    .visual-compass {
+      position: absolute;
+      z-index: 2;
+      backdrop-filter: blur(14px);
+    }
+
+    .destination-pill {
+      display: grid;
+      gap: 0.15rem;
+      padding: 0.8rem 0.95rem;
+      border-radius: 20px;
+      background: rgba(250, 245, 238, 0.76);
+      border: 1px solid rgba(255, 255, 255, 0.62);
+      box-shadow: 0 18px 40px rgba(26, 40, 56, 0.10);
+      color: #584c43;
+      font-size: 0.84rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .destination-pill strong {
+      font-size: 0.96rem;
+      letter-spacing: -0.03em;
+      text-transform: none;
+      color: #1f2b37;
+    }
+
+    .destination-pill.one {
+      left: 1.6rem;
+      bottom: 5.8rem;
+    }
+
+    .destination-pill.two {
+      right: 2rem;
+      top: 12.5rem;
+    }
+
+    .visual-compass {
+      right: 2rem;
+      top: 1.9rem;
+      width: 4.9rem;
+      height: 4.9rem;
+      border-radius: 999px;
+      display: inline-grid;
+      place-items: center;
+      background: rgba(250, 245, 238, 0.58);
+      border: 1px solid rgba(255, 255, 255, 0.52);
+      box-shadow: 0 16px 34px rgba(26, 40, 56, 0.10);
+      color: rgba(31, 43, 55, 0.9);
+    }
+
+    .ribbon {
+      margin-top: 1.1rem;
+      position: relative;
+      z-index: 2;
+    }
+
+    .ribbon-grid {
+      display: grid;
+      gap: 1rem;
+      padding: 1.1rem;
+      border-radius: 28px;
+      background: rgba(255, 250, 244, 0.7);
+      border: 1px solid rgba(78, 58, 36, 0.08);
+      box-shadow: 0 16px 38px rgba(23, 32, 40, 0.05);
+      backdrop-filter: blur(12px);
+    }
+
+    .ribbon-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.85rem;
+    }
+
+    .ribbon-index {
+      width: 2rem;
+      height: 2rem;
+      border-radius: 999px;
+      display: inline-grid;
+      place-items: center;
+      background: var(--gold-soft);
+      color: var(--gold);
+      font-weight: 800;
+      flex: 0 0 auto;
+    }
+
+    .ribbon-card strong {
+      display: block;
+      margin-bottom: 0.25rem;
+      letter-spacing: -0.02em;
+    }
+
+    .ribbon-card p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 0.93rem;
+    }
+
+    .section {
+      padding: 2rem 0;
+    }
+
+    .section-atmosphere {
+      position: relative;
+    }
+
+    .section-label {
+      display: inline-block;
+      margin-bottom: 0.8rem;
+      color: var(--gold);
+      font-size: 0.8rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .section-heading {
+      margin: 0;
+      font-family: "Cormorant Garamond", "Iowan Old Style", serif;
+      font-size: clamp(2.3rem, 5vw, 3.45rem);
+      line-height: 0.98;
+      font-weight: 600;
+      letter-spacing: -0.04em;
+      color: #1c2b38;
+    }
+
+    .section-intro {
+      margin: 0.8rem 0 0;
+      max-width: 43rem;
+      color: var(--muted);
+      line-height: 1.82;
+      font-size: 1rem;
+    }
+
+    .steps-grid,
+    .benefit-grid,
+    .proof-grid,
+    .destination-grid {
+      display: grid;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .card {
+      padding: 1.35rem;
+      border-radius: var(--radius-lg);
+      background: rgba(255, 250, 244, 0.78);
+      border: 1px solid rgba(78, 58, 36, 0.09);
+      box-shadow: 0 18px 42px rgba(23, 32, 40, 0.05);
+      backdrop-filter: blur(10px);
+    }
+
+    .step-card {
+      display: grid;
+      gap: 0.95rem;
+      align-content: start;
+    }
+
+    .icon-badge {
+      width: 3.1rem;
+      height: 3.1rem;
+      border-radius: 18px;
+      display: inline-grid;
+      place-items: center;
+      background: linear-gradient(180deg, rgba(143, 178, 200, 0.18), rgba(166, 125, 66, 0.12));
+      color: var(--navy);
+      border: 1px solid rgba(78, 58, 36, 0.08);
+    }
+
+    .step-index {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.8rem;
+      height: 1.8rem;
+      border-radius: 999px;
+      background: var(--gold-soft);
+      color: var(--gold);
+      font-size: 0.86rem;
+      font-weight: 800;
+    }
+
+    .card h3 {
+      margin: 0;
+      font-size: 1.08rem;
+      letter-spacing: -0.03em;
+    }
+
+    .card p {
+      margin: 0.45rem 0 0;
+      color: var(--muted);
+      line-height: 1.72;
+    }
+
+    .benefit-card {
+      position: relative;
+      padding-top: 1.55rem;
+      overflow: hidden;
+    }
+
+    .benefit-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto auto 0;
+      width: 100%;
+      height: 4px;
+      background: linear-gradient(90deg, rgba(166, 125, 66, 0.7), rgba(143, 178, 200, 0.44));
+    }
+
+    .benefit-card::after,
+    .proof-card::after {
+      content: "";
+      position: absolute;
+      inset: auto -2rem -2rem auto;
+      width: 7.5rem;
+      height: 7.5rem;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(166, 125, 66, 0.12), transparent 68%);
+      pointer-events: none;
+    }
+
+    .benefit-icon {
+      width: 2.8rem;
+      height: 2.8rem;
+      border-radius: 999px;
+      display: inline-grid;
+      place-items: center;
+      background: rgba(255, 255, 255, 0.72);
+      color: var(--navy);
+      border: 1px solid rgba(78, 58, 36, 0.08);
+      box-shadow: 0 10px 24px rgba(23, 32, 40, 0.06);
+      margin-bottom: 0.95rem;
+    }
+
+    .proof-card {
+      position: relative;
+      overflow: hidden;
+      padding: 1.45rem;
+    }
+
+    .proof-card::before {
+      content: "”";
+      position: absolute;
+      top: 0.55rem;
+      right: 1rem;
+      font-family: "Cormorant Garamond", "Iowan Old Style", serif;
+      font-size: 4rem;
+      line-height: 1;
+      color: rgba(166, 125, 66, 0.18);
+    }
+
+    .proof-head {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      margin-bottom: 0.95rem;
+    }
+
+    .avatar {
+      width: 3rem;
+      height: 3rem;
+      border-radius: 999px;
+      display: inline-grid;
+      place-items: center;
+      font-weight: 800;
+      color: var(--navy);
+      background: linear-gradient(145deg, rgba(143, 178, 200, 0.28), rgba(166, 125, 66, 0.18));
+      border: 1px solid rgba(78, 58, 36, 0.10);
+    }
+
+    .proof-head strong {
+      display: block;
+      font-size: 0.98rem;
+      letter-spacing: -0.02em;
+    }
+
+    .proof-head span {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .proof-card blockquote {
+      position: relative;
+      z-index: 1;
+      margin: 0;
+      font-family: "Cormorant Garamond", "Iowan Old Style", serif;
+      font-size: 1.32rem;
+      line-height: 1.36;
+      color: #2a3743;
+      letter-spacing: -0.02em;
+    }
+
+    .destination-card {
+      position: relative;
+      aspect-ratio: 1 / 1;
+      border-radius: var(--radius-xl);
+      overflow: hidden;
+      background: #d8d8d8;
+      border: 1px solid rgba(78, 58, 36, 0.08);
+      box-shadow: var(--shadow-photo);
+    }
+
+    .destination-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(180deg, rgba(12, 18, 26, 0.04) 0%, rgba(12, 18, 26, 0.14) 46%, rgba(12, 18, 26, 0.76) 100%),
+        linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0));
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .destination-card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .destination-card .destination-chip,
+    .destination-card .destination-copy {
+      position: absolute;
+      z-index: 2;
+    }
+
+    .destination-chip {
+      top: 1rem;
+      left: 1rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.58rem 0.8rem;
+      border-radius: 999px;
+      background: rgba(255, 250, 244, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.52);
+      color: #54493f;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      box-shadow: 0 12px 28px rgba(23, 32, 40, 0.10);
+      backdrop-filter: blur(10px);
+    }
+
+    .destination-copy {
+      left: 1rem;
+      bottom: 1rem;
+      width: min(calc(100% - 2rem), 18.5rem);
+      padding: 0.95rem 1rem 1rem;
+      border-radius: 22px;
+      background: rgba(15, 26, 36, 0.68);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: #fffaf4;
+      box-shadow: 0 16px 34px rgba(12, 18, 26, 0.18);
+      backdrop-filter: blur(12px);
+    }
+
+    .destination-copy strong {
+      display: block;
+      font-family: "Cormorant Garamond", "Iowan Old Style", serif;
+      font-size: 1.38rem;
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+    }
+
+    .destination-copy p {
+      margin: 0.42rem 0 0;
+      color: rgba(255, 250, 244, 0.88);
+      line-height: 1.55;
+      font-size: 0.92rem;
+    }
+
+    .audience-panel,
+    .cta-panel {
+      margin-top: 1.5rem;
+      border-radius: var(--radius-xl);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .audience-panel {
+      padding: 1.55rem;
+      background:
+        linear-gradient(180deg, rgba(255, 250, 244, 0.9), rgba(255, 250, 244, 0.7)),
+        linear-gradient(135deg, rgba(143, 178, 200, 0.14), rgba(166, 125, 66, 0.10));
+      border: 1px solid rgba(78, 58, 36, 0.08);
+      box-shadow: 0 18px 42px rgba(23, 32, 40, 0.05);
+    }
+
+    .audience-grid {
+      display: grid;
+      gap: 2rem;
+      align-items: center;
+    }
+
+    @media (min-width: 860px) {
+      .audience-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .audience-copy {
+      max-width: 42rem;
+    }
+
+    .audience-image {
+      border-radius: var(--radius-xl);
+      overflow: hidden;
+      box-shadow: var(--shadow-photo);
+      border: 1px solid rgba(78, 58, 36, 0.08);
+      background: #f8f4ed;
+    }
+
+    .audience-image img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .checklist {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 0.95rem;
+    }
+
+    .checklist li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.85rem;
+      color: var(--text);
+      font-weight: 600;
+      line-height: 1.7;
+    }
+
+    .tick {
+      flex: 0 0 auto;
+      width: 1.85rem;
+      height: 1.85rem;
+      border-radius: 999px;
+      display: inline-grid;
+      place-items: center;
+      background: rgba(216, 235, 228, 0.92);
+      color: #245c4f;
+      font-size: 0.95rem;
+      font-weight: 800;
+    }
+
+    .cta-panel {
+      padding: 1.6rem;
+      background:
+        linear-gradient(180deg, rgba(21, 35, 48, 0.96), rgba(16, 29, 40, 0.98)),
+        radial-gradient(circle at top right, rgba(166, 125, 66, 0.22), transparent 34%);
+      color: #f5f0ea;
+      box-shadow: 0 28px 60px rgba(16, 29, 40, 0.18);
+    }
+
+    .cta-panel::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.08), transparent 45%),
+        radial-gradient(circle at bottom left, rgba(143, 178, 200, 0.16), transparent 34%);
+      pointer-events: none;
+    }
+
+    .cta-inner {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      gap: 1rem;
+      align-items: center;
+    }
+
+    .cta-actions {
+      display: grid;
+      gap: 0.85rem;
+      align-items: stretch;
+    }
+
+    .cta-panel .section-label,
+    .cta-panel p {
+      color: rgba(245, 240, 234, 0.82);
+    }
+
+    .cta-panel .section-heading {
+      color: #fff9f2;
+    }
+
+    .button-light {
+      background: linear-gradient(180deg, #fffaf4 0%, #f3e8d8 100%);
+      color: var(--navy-deep);
+      box-shadow: 0 18px 42px rgba(7, 12, 18, 0.22);
+    }
+
+    .button-light:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 24px 48px rgba(7, 12, 18, 0.26);
+    }
+
+    .button-soft-light {
+      background: rgba(255, 250, 244, 0.08);
+      color: #fffaf4;
+      border: 1px solid rgba(255, 250, 244, 0.22);
+      box-shadow: none;
+    }
+
+    .button-soft-light:hover {
+      transform: translateY(-1px);
+      background: rgba(255, 250, 244, 0.14);
+    }
+
+    .cta-note {
+      margin: 0;
+      color: rgba(245, 240, 234, 0.74);
+      font-size: 0.93rem;
+      line-height: 1.7;
+      text-align: center;
+    }
+
+    footer {
+      padding: 0.5rem 0 3rem;
+    }
+
+    .footer-shell {
+      display: grid;
+      gap: 1rem;
+      padding: 1.5rem;
+      border-radius: var(--radius-lg);
+      background: rgba(255, 250, 244, 0.74);
+      border: 1px solid rgba(78, 58, 36, 0.08);
+      box-shadow: 0 16px 38px rgba(23, 32, 40, 0.05);
+      backdrop-filter: blur(10px);
+    }
+
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.95rem 1.3rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .footer-links a {
+      border-bottom: 1px solid transparent;
+    }
+
+    .footer-links a:hover {
+      border-color: currentColor;
+    }
+
+    .disclaimer {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.76;
+      max-width: 56rem;
+    }
+
+    .button:focus-visible,
+    .footer-links a:focus-visible,
+    .brand:focus-visible {
+      outline: 3px solid rgba(35, 56, 77, 0.22);
+      outline-offset: 3px;
+    }
+
+    @media (min-width: 760px) {
+      .ribbon-grid,
+      .steps-grid,
+      .benefit-grid,
+      .proof-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .cta-inner {
+        grid-template-columns: minmax(0, 1.35fr) auto;
+      }
+    }
+
+    @media (min-width: 1024px) {
+      .hero {
+        grid-template-columns: minmax(0, 0.96fr) minmax(26rem, 1.04fr);
+        gap: 2.4rem;
+      }
+
+      .ribbon-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .steps-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .benefit-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .proof-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .destination-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 1023px) {
+      .visual-stage {
+        min-height: 32rem;
+      }
+
+      .photo-card.top,
+      .photo-card.bottom {
+        width: 40%;
+      }
+
+      .destination-pill.two {
+        top: 11.6rem;
+      }
+    }
+
+    @media (max-width: 759px) {
+      .topbar {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      h1 {
+        max-width: 12ch;
+      }
+
+      .visual-stage {
+        min-height: 28rem;
+        padding: 0.95rem;
+      }
+
+      .photo-main {
+        inset: 1rem 0.4rem 4.2rem 0.4rem;
+      }
+
+      .photo-card.top {
+        width: 43%;
+        height: 36%;
+        top: 1.2rem;
+        right: 0.9rem;
+      }
+
+      .photo-card.bottom {
+        width: 44%;
+        height: 34%;
+        left: 0.9rem;
+        bottom: 1rem;
+      }
+
+      .floating-glass {
+        left: 1rem;
+        top: 1rem;
+        width: calc(100% - 5rem);
+      }
+
+      .floating-note {
+        right: 1rem;
+        bottom: 1rem;
+      }
+
+      .destination-pill.one {
+        left: 1rem;
+        bottom: 5.2rem;
+      }
+
+      .destination-pill.two {
+        right: 1rem;
+        top: 10rem;
+      }
+
+      .visual-compass {
+        right: 1rem;
+        top: 1rem;
+        width: 4.25rem;
+        height: 4.25rem;
+      }
+
+      .hero-route-caption {
+        flex-wrap: wrap;
+      }
+    }
+  </style>
+</head>
+<body data-vac-page="{{ vacante_page_type|default('home') }}">
+  {% if gtm_container_id %}
+  <!-- Google Tag Manager (noscript) -->
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ gtm_container_id }}"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+  <!-- End Google Tag Manager (noscript) -->
+  {% endif %}
+
+  <div class="hero-shell">
+    <div class="topbar">
+      <a class="brand" href="/" aria-label="MWR Travel Membership">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="18" height="18" fill="none">
+            <path d="M6 20.5 16 6l10 14.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M10.5 20.5h11" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span class="brand-copy">
+          <strong>MWR Travel</strong>
+          <small>Membership de calatorie</small>
+        </span>
+      </a>
+      <div class="top-pill">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
+          <path d="M12 3.5 5 7v5c0 4.2 2.8 8 7 9 4.2-1 7-4.8 7-9V7l-7-3.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+          <path d="m9.6 11.8 1.7 1.7 3.5-3.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Explorezi platforma in ritmul tau si vezi daca stilul acesta de calatorie ti se potriveste.
+      </div>
+    </div>
+
+    <section class="hero container">
+      <div class="hero-copy">
+        <span class="eyebrow">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+            <path d="M3.5 11.8h16.4M14.9 6.1l5 5.7-5 5.7" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Travel membership
+        </span>
+        <h1>Calatoreste mai bine, cu mai multa claritate si mai putin efort</h1>
+        <p class="hero-subtitle">Un membership MWR Life pentru cazari, zboruri si escapade — intr-o singura platforma, cu un parcurs clar si elegant. Prezentare independenta in limba romana, cu link de recomandare transparent.</p>
+        <div class="hero-actions">
+          <div class="hero-primary-actions">
+            <a class="button button-primary" href="{{ mwr_external_url }}" target="_blank" rel="noopener noreferrer" data-outbound="mwr" data-cta="hero_primary">
+              Descopera platforma
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true">
+                <path d="M7 17 17 7M9 7h8v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </a>
+            <a class="button button-secondary" href="/afla-mai-mult" data-cta="hero_learn_more">
+              Afla mai mult
+            </a>
+          </div>
+          <div class="hero-meta" aria-label="Indicii rapide">
+            <span>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+                <path d="M4 8h16M7 4h10v16H7z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+              </svg>
+              Acces mai simplu la oferte
+            </span>
+            <span>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+                <path d="M12 21c4.4-3 7-6.2 7-10.2A4.8 4.8 0 0 0 12 7a4.8 4.8 0 0 0-7 3.8C5 14.8 7.6 18 12 21Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                <circle cx="12" cy="10.8" r="1.7" stroke="currentColor" stroke-width="1.8"/>
+              </svg>
+              Potrivit pentru city breaks si vacante
+            </span>
+          </div>
+          <div class="hero-route" aria-hidden="true">
+            <svg viewBox="0 0 320 74" fill="none">
+              <path d="M12 47C58 47 63 17 113 17c49 0 47 41 92 41 46 0 52-25 103-25" stroke="rgba(166,125,66,0.5)" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="1 10"/>
+              <circle cx="12" cy="47" r="5.5" fill="#f8f2ea" stroke="#a67d42" stroke-width="2"/>
+              <circle cx="113" cy="17" r="5.5" fill="#f8f2ea" stroke="#8fb2c8" stroke-width="2"/>
+              <circle cx="205" cy="58" r="5.5" fill="#f8f2ea" stroke="#a67d42" stroke-width="2"/>
+              <circle cx="308" cy="33" r="5.5" fill="#f8f2ea" stroke="#8fb2c8" stroke-width="2"/>
+              <path d="M170 32.5 184.5 26l-5 14-2.8-4.8-6.7 8.2-1.8-1.5 6.7-8.2-4.9-1.2Z" fill="#23384d"/>
+            </svg>
+            <div class="hero-route-caption">
+              <span>Plecare clara</span>
+              <span>Selectie mai curata</span>
+              <span>Sosire fara aglomeratie</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-visual" aria-label="Imagini premium de calatorie">
+        <div class="visual-stage">
+          <div class="route-overlay" aria-hidden="true">
+            <svg viewBox="0 0 640 720" fill="none" preserveAspectRatio="none">
+              <path d="M84 560c55-68 121-118 198-150 87-37 157-120 180-228" stroke="rgba(255,250,244,0.68)" stroke-width="3.2" stroke-linecap="round" stroke-dasharray="2 14"/>
+              <circle cx="84" cy="560" r="9" fill="rgba(255,250,244,0.94)" />
+              <circle cx="282" cy="410" r="8" fill="rgba(255,250,244,0.88)" />
+              <circle cx="462" cy="182" r="9" fill="rgba(255,250,244,0.94)" />
+              <path d="M304 366 322 358l-6.5 18-3.3-6.1-8.7 10.6-2.7-2.2 8.7-10.6-6.5-1.5Z" fill="rgba(255,250,244,0.9)" />
+            </svg>
+          </div>
+          <div class="photo-main">
+            <img src="/static/images/mwr/mwr-terrace.webp" alt="Terasa eleganta cu vedere la ocean la un hotel premium" width="1200" height="1600" />
+          </div>
+          <div class="photo-card top">
+            <img src="/static/images/mwr/mwr-lounge.webp" alt="Priveliste din lounge aeroportuar catre pista" width="900" height="1400" loading="lazy" />
+          </div>
+          <div class="photo-card bottom">
+            <img src="/static/images/mwr/mwr-suite.webp" alt="Camera de hotel eleganta cu vedere la mare" width="1200" height="1400" loading="lazy" />
+          </div>
+          <div class="floating-glass">
+            <strong>O experienta mai ordonata pentru urmatoarea plecare</strong>
+            <p>Un mod mai calm de a compara variantele, fara sa sari intre zeci de taburi si site-uri.</p>
+          </div>
+          <div class="visual-compass" aria-hidden="true">
+            <svg viewBox="0 0 64 64" width="34" height="34" fill="none">
+              <circle cx="32" cy="32" r="23" stroke="currentColor" stroke-width="1.8" opacity="0.45"/>
+              <circle cx="32" cy="32" r="13" stroke="currentColor" stroke-width="1.5" opacity="0.35"/>
+              <path d="M32 12v8M52 32h-8M32 52v-8M12 32h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="m37.5 26.5-4 11-11 4 4-11 11-4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="destination-pill one">
+            <span>Coastal mood</span>
+            <strong>Ocean escape</strong>
+          </div>
+          <div class="destination-pill two">
+            <span>Refined arrival</span>
+            <strong>City lounge</strong>
+          </div>
+          <div class="floating-note">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+              <path d="M4.5 14.5c2.7-.1 4.8-.9 6.1-2.2C12.4 10.6 13 8.7 13 6.5c2.2 0 4.1.6 5.8 2.4 1.5 1.6 2.3 3.6 2.7 6.1-2.8.6-5.4 1.8-7.7 3.6C11.9 19.9 10.2 21.1 8 22c-.7-3-1.9-5.5-3.5-7.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            </svg>
+            Vacante alese mai atent, fara agitatie inutila
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="ribbon container">
+      <div class="ribbon-grid">
+        <div class="ribbon-card">
+          <span class="ribbon-index">1</span>
+          <div>
+            <strong>Mai clar</strong>
+            <p>Vezi optiunile intr-o platforma care pune accent pe comparatie simpla si selectie mai rapida.</p>
+          </div>
+        </div>
+        <div class="ribbon-card">
+          <span class="ribbon-index">2</span>
+          <div>
+            <strong>Mai elegant</strong>
+            <p>Experienta este gandita pentru cei care prefera un parcurs curat, fara zgomot si fara complicatii.</p>
+          </div>
+        </div>
+        <div class="ribbon-card">
+          <span class="ribbon-index">3</span>
+          <div>
+            <strong>Mai practic</strong>
+            <p>Poti explora variante mai bune pentru vacante, city breaks sau plecari recurente, cu mai putin efort.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <section class="section">
+      <div class="container">
+        <span class="section-label">Cum functioneaza</span>
+        <h2 class="section-heading">Trei pasi simpli, intr-un parcurs usor de urmat</h2>
+        <p class="section-intro">Nu vindem nimic direct pe acest site. Te ghidam catre platforma MWR Life, unde vezi tu singur conditiile si alegi in ritmul tau. Fara presiune, fara obligatii.</p>
+        <div class="steps-grid">
+          <article class="card step-card">
+            <div class="icon-badge" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+                <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 1 1 14 0" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <span class="step-index">1</span>
+            <div>
+              <h3>Creezi cont</h3>
+              <p>Intri in platforma si iti configurezi accesul pentru a vedea optiunile disponibile in functie de stilul tau de calatorie.</p>
+            </div>
+          </article>
+          <article class="card step-card">
+            <div class="icon-badge" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+                <rect x="4" y="5" width="16" height="14" rx="3" stroke="currentColor" stroke-width="1.9"/>
+                <path d="M8 9.5h8M8 13h5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <span class="step-index">2</span>
+            <div>
+              <h3>Accesezi platforma</h3>
+              <p>Explorezi ofertele intr-un flux simplu, cu suficienta claritate incat sa alegi mai repede ce merita vazut in detaliu.</p>
+            </div>
+          </article>
+          <article class="card step-card">
+            <div class="icon-badge" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+                <path d="M5 18.5h14M7 15l3-3 2 2 5-6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <span class="step-index">3</span>
+            <div>
+              <h3>Gasesti si rezervi oferte mai bune</h3>
+              <p>Continui catre rezervare atunci cand gasesti varianta potrivita pentru buget, perioada si nivelul de confort dorit.</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <span class="section-label">Beneficii</span>
+        <h2 class="section-heading">Ce gasesti in platforma MWR Life</h2>
+        <p class="section-intro">Scurt si concret: ce primesti cand deschizi platforma. Preturile si conditiile exacte sunt afisate pe MWR Life, nu aici.</p>
+        <div class="benefit-grid">
+          <article class="card benefit-card">
+            <span class="benefit-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+                <path d="M5 12h14M12 5l7 7-7 7" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
+            <h3>Cazari si zboruri intr-un singur loc</h3>
+            <p>Economii la cazari si zboruri devin mai vizibile cand nu mai sari intre cinci site-uri pentru acelasi drum.</p>
+          </article>
+          <article class="card benefit-card">
+            <span class="benefit-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+                <path d="M12 3.5 5 7v5c0 4.2 2.8 8 7 9 4.2-1 7-4.8 7-9V7l-7-3.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+              </svg>
+            </span>
+            <h3>Oferte negociate pentru membri</h3>
+            <p>Acces la oferte exclusive si tarife stabilite de platforma partenera MWR Life pentru cei care au cont activ.</p>
+          </article>
+          <article class="card benefit-card">
+            <span class="benefit-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+                <rect x="4" y="4" width="16" height="16" rx="4" stroke="currentColor" stroke-width="1.8"/>
+                <path d="M8 9h8M8 12h8M8 15h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </span>
+            <h3>Interfata clara, pe telefon si laptop</h3>
+            <p>Cauti, compari, salvezi — fara taburi in plus si fara parcursuri aglomerate.</p>
+          </article>
+          <article class="card benefit-card">
+            <span class="benefit-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+                <path d="M4 19h16M6 16.5l3-3 2 2 5-6 2 2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
+            <h3>Util daca pleci de 2-4 ori pe an</h3>
+            <p>Potrivit pentru calatori frecventi si ocazionali — city break-uri, vacante de vara si weekenduri spontane.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-atmosphere">
+      <div class="container">
+        <span class="section-label">Cadru vizual</span>
+        <h2 class="section-heading">Locuri care transmit genul de experienta pe care multi calatori il cauta</h2>
+        <p class="section-intro">De la resorturi cu vedere deschisa pana la lounge-uri si suite luminoase, imaginile de aici arata registrul potrivit pentru o vacanta mai bine aleasa si mai usor de planificat.</p>
+        <div class="destination-grid" aria-label="Repere editoriale de calatorie">
+          <article class="destination-card">
+            <img src="/static/images/mwr/mwr-terrace-square.webp" alt="Terasa premium la malul marii, intr-o atmosfera aerisita" width="1067" height="1067" loading="lazy" />
+            <span class="destination-chip">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
+                <path d="M12 21c4.4-3 7-6.2 7-10.2A4.8 4.8 0 0 0 12 7a4.8 4.8 0 0 0-7 3.8C5 14.8 7.6 18 12 21Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                <circle cx="12" cy="10.8" r="1.7" stroke="currentColor" stroke-width="1.8"/>
+              </svg>
+              Ocean &amp; retreat
+            </span>
+            <div class="destination-copy">
+              <strong>Escapada aerisita</strong>
+              <p>Hoteluri cu vedere deschisa, lumina buna si un ritm calm, fara aglomeratie vizuala.</p>
+            </div>
+          </article>
+          <article class="destination-card">
+            <img src="/static/images/mwr/mwr-lounge-square.webp" alt="Lounge de aeroport cu vedere spre pista si un cadru curat de plecare" width="900" height="900" loading="lazy" />
+            <span class="destination-chip">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
+                <path d="M3.5 11.8h16.4M14.9 6.1l5 5.7-5 5.7" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              Departure mood
+            </span>
+            <div class="destination-copy">
+              <strong>Plecare mai asezata</strong>
+              <p>Un cadru de lounge si tranzit care sugereaza selectie fara graba si mai putin zgomot.</p>
+            </div>
+          </article>
+          <article class="destination-card">
+            <img src="/static/images/mwr/mwr-suite-square.webp" alt="Suita premium cu vedere la mare si finisaje elegante" width="1050" height="1050" loading="lazy" />
+            <span class="destination-chip">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
+                <rect x="4" y="4" width="16" height="16" rx="4" stroke="currentColor" stroke-width="1.8"/>
+                <path d="M8 12h8M8 15h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+              Stay quality
+            </span>
+            <div class="destination-copy">
+              <strong>Confort care se vede</strong>
+              <p>Mai multa atentie pe cazare, lumina, terasa si senzatia de loc bine ales.</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <span class="section-label">Experiente</span>
+        <h2 class="section-heading">Ce spun oamenii care au cautat o experienta mai simpla</h2>
+        <div class="proof-grid">
+          <article class="card proof-card">
+            <div class="proof-head">
+              <span class="avatar" aria-hidden="true">A</span>
+              <div>
+                <strong>Membru care calatoreste ocazional</strong>
+                <span>vacante si city breaks</span>
+              </div>
+            </div>
+            <blockquote>"Am reusit sa gasesc variante mai bune pentru vacantele mele, fara sa pierd timp cautand peste tot."</blockquote>
+          </article>
+          <article class="card proof-card">
+            <div class="proof-head">
+              <span class="avatar" aria-hidden="true">M</span>
+              <div>
+                <strong>Membru cu preferinta pentru experiente simple</strong>
+                <span>proces mai clar, fara agitatie</span>
+              </div>
+            </div>
+            <blockquote>"Mi-a placut ca totul a fost mai clar. Am verificat optiunile rapid si am mers direct catre rezervare."</blockquote>
+          </article>
+          <article class="card proof-card">
+            <div class="proof-head">
+              <span class="avatar" aria-hidden="true">R</span>
+              <div>
+                <strong>Membru care planifica din timp</strong>
+                <span>mai putin efort in selectie</span>
+              </div>
+            </div>
+            <blockquote>"Pentru mine a contat faptul ca am avut o platforma simpla, fara sa sar intre zeci de site-uri."</blockquote>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <span class="section-label">Pentru cine este</span>
+        <h2 class="section-heading">Un fit bun pentru cei care prefera ordine, claritate si un parcurs mai elegant</h2>
+        <div class="audience-panel">
+          <div class="audience-grid">
+            <div class="audience-copy">
+              <ul class="checklist">
+                <li><span class="tick" aria-hidden="true">&#10003;</span><span>Persoane care calatoresc de 1-2 ori pe an</span></li>
+                <li><span class="tick" aria-hidden="true">&#10003;</span><span>Cei care vor sa economiseasca timp si bani</span></li>
+                <li><span class="tick" aria-hidden="true">&#10003;</span><span>Cei care prefera solutii simple si transparente</span></li>
+                <li><span class="tick" aria-hidden="true">&#10003;</span><span>Cei care vor explicatii fara termeni supraincarcati</span></li>
+                <li><span class="tick" aria-hidden="true">&#10003;</span><span>Cei care vor un parcurs cu pasi clari si fara presiune</span></li>
+                <li><span class="tick" aria-hidden="true">&#10003;</span><span>Cei care vor sa compare optiuni in ritmul lor</span></li>
+              </ul>
+            </div>
+            <div class="audience-image">
+              <img src="/static/images/mwr/mwr-stef.png" alt="Femeie cu telefonul intr-un cadru de resort premium" width="1121" height="1403" loading="lazy" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    {% include "_vacante/_home_faq.html" %}
+
+    <section class="section">
+      <div class="container">
+        <div class="cta-panel">
+          <div class="cta-inner">
+            <div>
+              <span class="section-label">Pasul urmator</span>
+              <h2 class="section-heading">Vezi platforma cand ai 5 minute linistite</h2>
+              <p>Se deschide in tab nou. Nu ti se cere nimic decat daca hotarasti sa creezi cont pe MWR Life. Daca ai intrebari, scrie-ne intai — raspundem in 24h lucratoare.</p>
+            </div>
+            <div class="cta-actions">
+              <a class="button button-light" href="{{ mwr_external_url }}" target="_blank" rel="noopener noreferrer" data-outbound="mwr" data-cta="final_panel">Acceseaza platforma</a>
+              <a class="button button-soft-light" href="/afla-mai-mult#contact" data-cta="final_contact">Pune o intrebare mai intai</a>
+              <p class="cta-note">Daca vrei sa verifici mai intai daca membershipul ti se potriveste, intra pe pagina explicativa si trimite un mesaj.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+        <div class="footer-shell">
+        <div class="footer-links">
+          <a href="/afla-mai-mult" data-cta="footer_more">Afla mai mult</a>
+          <a href="/intrebari-frecvente" data-cta="footer_faq">Intrebari frecvente</a>
+          <a href="/afla-mai-mult#contact" data-cta="footer_contact">Contact</a>
+          <a href="/mwr/privacy">Privacy Policy</a>
+          <a href="/mwr/terms">Terms &amp; Conditions</a>
+          <a href="mailto:{{ mwr_contact_email }}" data-cta="footer_email">Email: {{ mwr_contact_email }}</a>
+          {% if mwr_whatsapp_url %}<a href="{{ mwr_whatsapp_url }}" target="_blank" rel="noopener noreferrer" data-cta="footer_whatsapp">WhatsApp</a>{% endif %}
+        </div>
+        {% include "_vacante/_footer_disclosure.html" %}
+        <p class="disclaimer">Acest site prezinta un serviciu de tip membership pentru beneficii de calatorie. Rezultatele pot varia in functie de utilizare.</p>
+      </div>
+    </div>
+  </footer>
+
+  {% include "_vacante/_sticky_cta.html" %}
+  {% include "_vacante/_whatsapp_float.html" %}
+  {% include "_vacante/_cookie_banner.html" %}
+  {% include "_vacante/_analytics.html" %}
+
+  {% if mwr_live_chat_snippet %}
+    {{ mwr_live_chat_snippet | safe }}
+  {% else %}
+    <!-- Live chat widget placeholder: populate MWR_LIVE_CHAT_SNIPPET env var with a Crisp/Tawk script tag. -->
+  {% endif %}
+</body>
+</html>

@@ -1,19 +1,53 @@
-from flask import Flask, render_template, request, jsonify, g, redirect, url_for, make_response, has_request_context
+from flask import Flask, render_template, request, jsonify, g, redirect, url_for, make_response, has_request_context, Response, stream_with_context, send_file, session
 from config import Config
-from database import init_db, get_db, save_message, get_messages, get_daily_message_count, is_user_premium, get_recent_conversations, get_conversation_context, create_new_conversation, get_or_create_conversation, update_conversation_title, search_conversations
-from models import workspaces, get_agent_name, simulate_response, detect_handover, enhance_context, get_llm_response, get_api_docs_context
+from database import init_db, get_db, save_message, get_messages, get_daily_message_count, is_user_premium, get_recent_conversations, get_conversation_context, create_new_conversation, get_or_create_conversation, update_conversation_title, search_conversations, get_conversation_brief, update_conversation_brief
+from models import workspaces, AGENT_REGISTRY_BY_SLUG, get_agent_name, get_agent_display_name, get_agent_role_label, get_agent_category, simulate_response, detect_handover, enhance_context, get_llm_response, get_api_docs_context
+from rag_store import (
+    create_collection as rag_create_collection,
+    ensure_schema as ensure_rag_schema,
+    format_retrieval_citations as rag_format_citations,
+    format_retrieval_excerpts as rag_format_excerpts,
+    ingest_bytes as rag_ingest_bytes,
+    ingest_local_path as rag_ingest_local_path,
+    list_collections as rag_list_collections,
+    list_documents as rag_list_documents,
+    rag_config as rag_runtime_config,
+    rag_enabled as rag_runtime_enabled,
+    semantic_search as rag_semantic_search,
+    slugify_text as rag_slugify_text,
+)
 import markdown
 import json
 import copy
 import math
+import csv
+import base64
+import hashlib
+import difflib
+import sqlite3
+import smtplib
+import random
+import traceback
 from markupsafe import Markup
 import os
 import time
 import requests
 import re
 import uuid
+import threading
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+from pathlib import Path
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 from werkzeug.exceptions import HTTPException
+from zoneinfo import ZoneInfo
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+except Exception:  # pragma: no cover - optional fallback only
+    Fernet = None
+
+    class InvalidToken(Exception):
+        pass
 
 # ── Agent-to-Connector relevance map ──────────────────────────────
 # Maps each agent slug to the connectors whose API docs are most relevant
@@ -43,6 +77,23 @@ AGENT_CONNECTOR_MAP = {
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config.from_object(Config)
 
+
+def _safe_file_mtime_iso(path):
+    try:
+        ts = float(os.path.getmtime(path))
+        return datetime.utcfromtimestamp(ts).replace(microsecond=0).isoformat() + "Z"
+    except Exception:
+        return ""
+
+
+APP_BUILD_INFO = {
+    "commit": str(os.getenv("APP_COMMIT_SHA") or os.getenv("COMMIT_SHA") or "unknown"),
+    "build_time": str(os.getenv("APP_BUILD_TIME") or ""),
+    "app_py_mtime": _safe_file_mtime_iso(__file__),
+    "pid": int(os.getpid()),
+}
+print("app_startup_buildinfo", json.dumps(APP_BUILD_INFO, ensure_ascii=True))
+
 # ── Coolbits Gateway (Google stack) ────────────────────────────────
 # We can reuse Coolbits' mature OAuth + MCC logic by proxying Camarad connector calls to
 # the local Coolbits service. Keep it feature-flagged until fully wired in UI.
@@ -54,6 +105,14 @@ COOLBITS_WORKSPACE_ID = str(os.getenv("COOLBITS_WORKSPACE_ID", "business")).stri
 AUTH_REQUIRED = str(os.getenv("AUTH_REQUIRED", "1")).strip().lower() in ("1", "true", "yes", "on")
 AUTH_COOKIE_SECURE = str(os.getenv("AUTH_COOKIE_SECURE", "0")).strip().lower() in ("1", "true", "yes", "on")
 _coolbits_auth_cache = {"token": None, "fetched_at": 0.0}
+_coolbits_health_cache = {
+    "ok": None,
+    "status_code": None,
+    "checked_at": 0.0,
+    "checked_at_iso": None,
+    "error": None,
+    "path": None,
+}
 FORCE_VERTEX_ALL_AGENTS = str(os.getenv("FORCE_VERTEX_ALL_AGENTS", "1")).strip().lower() in ("1", "true", "yes", "on")
 _ALL_WORKSPACE_AGENT_SLUGS = {
     str(agent_slug).strip().lower()
@@ -69,9 +128,59 @@ COOLBITS_VERTEX_PROFILE = str(os.getenv("COOLBITS_VERTEX_PROFILE", "google-verte
 GOOGLE_SITE_VERIFICATION = str(os.getenv("GOOGLE_SITE_VERIFICATION", "")).strip()
 GOOGLE_SITE_VERIFICATION_FILE = str(os.getenv("GOOGLE_SITE_VERIFICATION_FILE", "")).strip()
 GTM_CONTAINER_ID = str(os.getenv("GTM_CONTAINER_ID", "GTM-KGGP4B9N")).strip().upper()
+MWR_REFERRAL_URL = str(os.getenv("MWR_REFERRAL_URL", os.getenv("MWR_EXTERNAL_URL", "https://example.com/mwr"))).strip() or "https://example.com/mwr"
+MWR_EXTERNAL_URL = MWR_REFERRAL_URL
+MWR_CONTACT_EMAIL = str(os.getenv("MWR_CONTACT_EMAIL", "contact@example.com")).strip() or "contact@example.com"
+MWR_WHATSAPP_URL = str(os.getenv("MWR_WHATSAPP_URL", "")).strip()
+MWR_LIVE_CHAT_SNIPPET = str(os.getenv("MWR_LIVE_CHAT_SNIPPET", "")).strip()
+MWR_CONTACT_FORM_ENDPOINT = str(os.getenv("MWR_CONTACT_FORM_ENDPOINT", "")).strip()
+SENDGRID_API_KEY = str(os.getenv("SENDGRID_API_KEY", "")).strip()
+SMTP_HOST = str(os.getenv("SMTP_HOST", "")).strip()
+try:
+    SMTP_PORT = int(str(os.getenv("SMTP_PORT", "587")).strip() or "587")
+except Exception:
+    SMTP_PORT = 587
+SMTP_USERNAME = str(os.getenv("SMTP_USERNAME", os.getenv("SMTP_USER", ""))).strip()
+SMTP_PASSWORD = str(os.getenv("SMTP_PASSWORD", "")).strip()
+SMTP_FROM_EMAIL = str(os.getenv("SMTP_FROM_EMAIL", MWR_CONTACT_EMAIL)).strip() or MWR_CONTACT_EMAIL
+SMTP_FROM_NAME = str(os.getenv("SMTP_FROM_NAME", "Vacante Inteligente")).strip() or "Vacante Inteligente"
+SMTP_TLS = str(os.getenv("SMTP_TLS", "1")).strip().lower() in ("1", "true", "yes", "on")
+SMTP_SSL = str(os.getenv("SMTP_SSL", "0")).strip().lower() in ("1", "true", "yes", "on")
+try:
+    MWR_CONTACT_RATE_LIMIT_PER_HOUR = max(1, min(25, int(str(os.getenv("MWR_CONTACT_RATE_LIMIT_PER_HOUR", "5")).strip() or "5")))
+except Exception:
+    MWR_CONTACT_RATE_LIMIT_PER_HOUR = 5
 BILLING_INTERNAL_TOKEN = str(os.getenv("BILLING_INTERNAL_TOKEN", "")).strip()
+MCC_ALLOWED_EMAILS = str(os.getenv("MCC_ALLOWED_EMAILS", "")).strip()
+MCC_ALLOWED_DOMAINS = str(os.getenv("MCC_ALLOWED_DOMAINS", "")).strip()
+MCC_HUSTLERR_LOGIN_CUSTOMER_ID = str(os.getenv("MCC_HUSTLERR_LOGIN_CUSTOMER_ID", "")).strip()
+MCC_COOLBITS_LOGIN_CUSTOMER_ID = str(os.getenv("MCC_COOLBITS_LOGIN_CUSTOMER_ID", "")).strip()
+MCC_LEADLION_LOGIN_CUSTOMER_ID = str(os.getenv("MCC_LEADLION_LOGIN_CUSTOMER_ID", "")).strip()
+MCC_ENABLE_DEV_MOCKS = str(os.getenv("MCC_ENABLE_DEV_MOCKS", "0")).strip().lower() in ("1", "true", "yes", "on")
+MCC_CACHE_TTL_SECONDS = max(60, min(900, int(os.getenv("MCC_CACHE_TTL_SECONDS", "900") or 900)))
+MCC_PROBE_CACHE_TTL_SECONDS = max(60, min(900, int(os.getenv("MCC_PROBE_CACHE_TTL_SECONDS", "300") or 300)))
+MCC_ACCOUNTS_CACHE_TTL_SECONDS = max(60, min(3600, int(os.getenv("MCC_ACCOUNTS_CACHE_TTL_SECONDS", "900") or 900)))
+MCC_CACHE_STALE_SECONDS = max(60, min(24 * 3600, int(os.getenv("MCC_CACHE_STALE_SECONDS", "3600") or 3600)))
+MCC_EXPORT_DIR = str(os.getenv("MCC_EXPORT_DIR", "exports/mcc_private")).strip() or "exports/mcc_private"
+_MCC_CACHE = {}
+_MCC_ACCOUNTS_LOCKS = {}
+_MCC_ACCOUNTS_LOCKS_GUARD = threading.Lock()
+_MCC_UPSTREAM_COOLDOWN = {}
+_MCC_UPSTREAM_COOLDOWN_GUARD = threading.Lock()
 def _billing_phase3_enabled():
     return str(os.getenv("BILLING_PHASE3_ENABLED", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _is_vacante_host():
+    host = str(request.host or "").split(":")[0].strip().lower()
+    return host in ("vacanteinteligente.com", "www.vacanteinteligente.com")
+
+
+try:
+    if rag_runtime_enabled():
+        ensure_rag_schema()
+except Exception as _rag_bootstrap_error:
+    print(f"rag_schema_bootstrap_error: {_rag_bootstrap_error}")
 
 
 def _env_int(name, default, min_value=0, max_value=10_000_000):
@@ -147,57 +256,170 @@ def inject_site_integrations():
 
 PRICING_PLAN_CATALOG = [
     {
-        "code": "starter",
-        "label": "Starter",
-        "description": "For solo operators and small teams.",
-        "price": {"currency": "EUR", "amount": 6, "interval": "month", "trial_days": 15},
+        "code": "free",
+        "label": "Free",
+        "public": False,
+        "description": "Internal trial/demo tier for product evaluation and onboarding.",
+        "stripe_product_name": "Camarad Free",
+        "pricing": {
+            "monthly": {"currency": "USD", "amount": 0, "interval": "month", "trial_days": 14, "price_id": ""},
+        },
         "entitlements": {
             "workspaces_max": 1,
-            "projects_max": 3,
-            "agents_max": 5,
-            "connectors_max": 6,
+            "projects_max": 2,
+            "agents_max": 4,
+            "connectors_max": 4,
             "tokens_monthly": 100000,
-            "max_per_message": 120,
-            "daily_limit": 1200,
+            "max_per_message": 80,
+            "daily_limit": 1000,
         },
-        "cta": "Start trial",
+        "cta": "Start Free",
     },
     {
-        "code": "pro",
-        "label": "Pro",
-        "description": "For active agencies and growth teams.",
-        "price": {"currency": "EUR", "amount": 18, "interval": "month", "trial_days": 15},
+        "code": "personal",
+        "label": "Personal",
+        "public": True,
+        "description": "For focused individual use with full managed AI access.",
+        "stripe_product_name": "Camarad Personal",
+        "pricing": {
+            "monthly": {
+                "currency": "USD",
+                "amount": 62,
+                "interval": "month",
+                "trial_days": 14,
+                "price_id": str(os.getenv("STRIPE_PRICE_PERSONAL_MONTHLY", "")).strip(),
+            },
+            "yearly": {
+                "currency": "USD",
+                "amount": 499,
+                "interval": "year",
+                "trial_days": 14,
+                "price_id": str(os.getenv("STRIPE_PRICE_PERSONAL_YEARLY", "")).strip(),
+                "savings_pct": 33,
+                "savings_label": "~33% off",
+            },
+        },
         "entitlements": {
-            "workspaces_max": 3,
+            "workspaces_max": 1,
             "projects_max": 10,
-            "agents_max": 12,
-            "connectors_max": 20,
-            "tokens_monthly": 600000,
-            "max_per_message": 220,
-            "daily_limit": 6000,
+            "agents_max": 8,
+            "connectors_max": 12,
+            "tokens_monthly": 1500000,
+            "max_per_message": 300,
+            "daily_limit": 15000,
         },
-        "cta": "Upgrade to Pro",
+        "cta": "Choose Personal",
     },
     {
-        "code": "enterprise",
-        "label": "Enterprise",
-        "description": "For multi-client operations and larger execution teams.",
-        "price": {"currency": "EUR", "amount": 40, "interval": "month", "trial_days": 15},
-        "entitlements": {
-            "workspaces_max": 8,
-            "projects_max": 40,
-            "agents_max": 25,
-            "connectors_max": 40,
-            "tokens_monthly": 2000000,
-            "max_per_message": 300,
-            "daily_limit": 20000,
+        "code": "business",
+        "label": "Business",
+        "public": True,
+        "description": "For operating teams that need more flows, connectors, and runtime volume.",
+        "stripe_product_name": "Camarad Business",
+        "pricing": {
+            "monthly": {
+                "currency": "USD",
+                "amount": 149,
+                "interval": "month",
+                "trial_days": 14,
+                "price_id": str(os.getenv("STRIPE_PRICE_BUSINESS_MONTHLY", "")).strip(),
+            },
+            "yearly": {
+                "currency": "USD",
+                "amount": 1499,
+                "interval": "year",
+                "trial_days": 14,
+                "price_id": str(os.getenv("STRIPE_PRICE_BUSINESS_YEARLY", "")).strip(),
+                "savings_pct": 16,
+                "savings_label": "~16% off",
+            },
         },
-        "cta": "Upgrade to Enterprise",
+        "entitlements": {
+            "workspaces_max": 2,
+            "projects_max": 25,
+            "agents_max": 18,
+            "connectors_max": 24,
+            "tokens_monthly": 5000000,
+            "max_per_message": 600,
+            "daily_limit": 50000,
+        },
+        "cta": "Choose Business",
+    },
+    {
+        "code": "agency",
+        "label": "Agency",
+        "public": True,
+        "description": "For multi-client execution teams with the highest CT and orchestration headroom.",
+        "stripe_product_name": "Camarad Agency",
+        "pricing": {
+            "monthly": {
+                "currency": "USD",
+                "amount": 199,
+                "interval": "month",
+                "trial_days": 14,
+                "price_id": str(os.getenv("STRIPE_PRICE_AGENCY_MONTHLY", "")).strip(),
+            },
+            "yearly": {
+                "currency": "USD",
+                "amount": 2099,
+                "interval": "year",
+                "trial_days": 14,
+                "price_id": str(os.getenv("STRIPE_PRICE_AGENCY_YEARLY", "")).strip(),
+                "savings_pct": 12,
+                "savings_label": "~12% off",
+            },
+        },
+        "entitlements": {
+            "workspaces_max": 4,
+            "projects_max": 80,
+            "agents_max": 40,
+            "connectors_max": 40,
+            "tokens_monthly": 12000000,
+            "max_per_message": 1200,
+            "daily_limit": 150000,
+        },
+        "cta": "Choose Agency",
+    },
+    {
+        "code": "developer",
+        "label": "Developer",
+        "public": True,
+        "description": "For builders shipping integrations, custom agents, and API-first workflows.",
+        "stripe_product_name": "Camarad Developer",
+        "pricing": {
+            "monthly": {
+                "currency": "USD",
+                "amount": 199,
+                "interval": "month",
+                "trial_days": 14,
+                "price_id": str(os.getenv("STRIPE_PRICE_DEVELOPER_MONTHLY", "")).strip(),
+            },
+            "yearly": {
+                "currency": "USD",
+                "amount": 2099,
+                "interval": "year",
+                "trial_days": 14,
+                "price_id": str(os.getenv("STRIPE_PRICE_DEVELOPER_YEARLY", "")).strip(),
+                "savings_pct": 12,
+                "savings_label": "~12% off",
+            },
+        },
+        "entitlements": {
+            "workspaces_max": 4,
+            "projects_max": 80,
+            "agents_max": 40,
+            "connectors_max": 40,
+            "tokens_monthly": 12000000,
+            "max_per_message": 1200,
+            "daily_limit": 150000,
+        },
+        "cta": "Coming Soon",
+        "cta_disabled": True,
     },
 ]
 
-EUR_PER_RON = float(os.getenv("EUR_PER_RON", "0.20"))
-EUR_PER_USD = float(os.getenv("EUR_PER_USD", "0.92"))
+USD_PER_RON = float(os.getenv("USD_PER_RON", "0.22"))
+USD_PER_EUR = float(os.getenv("USD_PER_EUR", "1.09"))
 
 
 def _pricing_catalog_map():
@@ -206,50 +428,1035 @@ def _pricing_catalog_map():
 
 def _normalize_plan_code(raw_code):
     c = str(raw_code or "").strip().lower()
-    if c in ("free", "starter", ""):
-        return "starter"
-    if c in ("pro", "premium"):
-        return "pro"
-    if c in ("enterprise", "ent"):
-        return "enterprise"
-    return c or "starter"
+    if c in ("", "free", "trial", "demo"):
+        return "free"
+    if c in ("starter", "personal"):
+        return "personal"
+    if c in ("pro", "premium", "business"):
+        return "business"
+    if c in ("enterprise", "ent", "agency"):
+        return "agency"
+    if c in ("developer", "development", "dev"):
+        return "developer"
+    return c or "free"
 
 
-def _amount_to_eur(amount, currency):
+def _normalize_plan_interval(raw_interval):
+    value = str(raw_interval or "").strip().lower()
+    if value in ("year", "annual", "yearly"):
+        return "yearly"
+    return "monthly"
+
+
+def _pricing_plan_entry(plan_code):
+    return _pricing_catalog_map().get(_normalize_plan_code(plan_code))
+
+
+def _pricing_plan_price(plan_code, interval=None):
+    plan = plan_code if isinstance(plan_code, dict) else _pricing_plan_entry(plan_code)
+    if not isinstance(plan, dict):
+        return {}
+    pricing = plan.get("pricing") if isinstance(plan.get("pricing"), dict) else {}
+    key = _normalize_plan_interval(interval or "monthly")
+    return pricing.get(key) or pricing.get("monthly") or {}
+
+
+def _public_pricing_plans():
+    return [plan for plan in PRICING_PLAN_CATALOG if isinstance(plan, dict) and bool(plan.get("public"))]
+
+
+def _amount_to_usd(amount, currency):
     try:
         v = float(amount or 0)
     except Exception:
         return 0.0
     cur = str(currency or "").strip().upper()
     if cur in ("RON", "LEI", "ROL"):
-        return round(v * EUR_PER_RON, 2)
-    if cur in ("USD",):
-        return round(v * EUR_PER_USD, 2)
+        return round(v * USD_PER_RON, 2)
+    if cur in ("EUR",):
+        return round(v * USD_PER_EUR, 2)
     return round(v, 2)
 
 
-def _stripe_subscriptions_to_eur(rows):
+def _stripe_subscriptions_to_usd(rows):
     out = []
     for r in (rows or []):
         if not isinstance(r, dict):
             continue
         x = dict(r)
-        x["amount"] = _amount_to_eur(x.get("amount") or 0, x.get("currency"))
-        x["currency"] = "EUR"
+        x["amount"] = _amount_to_usd(x.get("amount") or 0, x.get("currency"))
+        x["currency"] = "USD"
         out.append(x)
     return out
 
 
-def _stripe_payments_to_eur(rows):
+def _stripe_payments_to_usd(rows):
     out = []
     for r in (rows or []):
         if not isinstance(r, dict):
             continue
         x = dict(r)
-        x["amount"] = _amount_to_eur(x.get("amount") or 0, x.get("currency"))
-        x["currency"] = "EUR"
+        x["amount"] = _amount_to_usd(x.get("amount") or 0, x.get("currency"))
+        x["currency"] = "USD"
         out.append(x)
     return out
+
+
+PUBLIC_PROOF_LAST_VERIFIED = "2026-03-08"
+PUBLIC_STATUS_BADGES = {
+    "live": "Live & Verified",
+    "beta": "Beta / Internal",
+    "planned": "Planned",
+}
+PUBLIC_CONNECTOR_STATUS = [
+    {
+        "id": "google-ads",
+        "name": "Google Ads",
+        "category": "data_connector",
+        "status": "live",
+        "auth_type": "OAuth 2.0",
+        "scope_live": [
+            "account hierarchy and MCC child account read",
+            "campaign and customer metrics",
+            "cost, clicks, impressions, conversions, ROAS",
+        ],
+        "scope_not_public": [
+            "public write actions are not enabled",
+            "product policy remains read-only for reporting flows",
+        ],
+        "evidence": "Verified on live Google Ads reporting pulls and MCC summaries in the Camarad/Coolbits stack.",
+        "last_verified": PUBLIC_PROOF_LAST_VERIFIED,
+    },
+    {
+        "id": "ga4",
+        "name": "Google Analytics 4",
+        "category": "data_connector",
+        "status": "live",
+        "auth_type": "OAuth 2.0",
+        "scope_live": [
+            "property overview, pages, sources, events, funnel slices",
+            "traffic and conversion overlays for PPC analysis",
+            "drift checks against Ads snapshots where mapped",
+        ],
+        "scope_not_public": [
+            "requires authenticated workspace for live property access",
+        ],
+        "evidence": "Verified through live Coolbits-backed GA4 reads in the current Google stack.",
+        "last_verified": PUBLIC_PROOF_LAST_VERIFIED,
+    },
+    {
+        "id": "google-search-console",
+        "name": "Google Search Console",
+        "category": "data_connector",
+        "status": "live",
+        "auth_type": "OAuth 2.0",
+        "scope_live": [
+            "properties, overview, queries, pages, countries, devices",
+            "clicks, impressions, CTR, average position",
+        ],
+        "scope_not_public": [
+            "public demo does not expose live site data without auth",
+        ],
+        "evidence": "Verified on the internal Google stack surfaces used by SEO and growth flows.",
+        "last_verified": PUBLIC_PROOF_LAST_VERIFIED,
+    },
+    {
+        "id": "meta-ads",
+        "name": "Meta Ads",
+        "category": "data_connector",
+        "status": "beta",
+        "auth_type": "OAuth 2.0",
+        "scope_live": [
+            "read-path mocks and internal wiring for accounts, campaigns, ad sets, ads",
+        ],
+        "scope_not_public": [
+            "not presented as publicly verified production read flow yet",
+        ],
+        "evidence": "Internal connector surface exists; public proof-of-life is not published yet.",
+        "last_verified": PUBLIC_PROOF_LAST_VERIFIED,
+    },
+    {
+        "id": "stripe",
+        "name": "Stripe",
+        "category": "data_connector",
+        "status": "planned",
+        "auth_type": "API key",
+        "scope_live": [
+            "public product plan billing already runs through Stripe",
+        ],
+        "scope_not_public": [
+            "workspace-level customer finance connector is not positioned as live yet",
+        ],
+        "evidence": "Billing exists for Camarad plans, but the customer-facing Stripe data connector remains roadmap-only.",
+        "last_verified": PUBLIC_PROOF_LAST_VERIFIED,
+    },
+]
+PUBLIC_MODEL_PROVIDER_STATUS = [
+    {
+        "id": "vertex-gemini-2.5-flash-lite",
+        "provider_slug": "vertex",
+        "provider_name": "Google Vertex AI",
+        "model_label": "Gemini 2.5 Flash-Lite",
+        "provider_model_id": "gemini-2.5-flash-lite",
+        "role": "Fast chat and routing",
+        "max_output_tokens": 8192,
+        "cost_input_per_1k_usd": 0.000075,
+        "cost_output_per_1k_usd": 0.000300,
+        "status": "live",
+        "notes": "Current runtime target in the Coolbits model registry.",
+    },
+    {
+        "id": "vertex-gemini-2.5-pro",
+        "provider_slug": "vertex",
+        "provider_name": "Google Vertex AI",
+        "model_label": "Gemini 2.5 Pro",
+        "provider_model_id": "gemini-2.5-pro",
+        "role": "Deep analysis",
+        "max_output_tokens": 8192,
+        "cost_input_per_1k_usd": 0.003500,
+        "cost_output_per_1k_usd": 0.007000,
+        "status": "live",
+        "notes": "Current runtime target in the Coolbits model registry.",
+    },
+    {
+        "id": "openai-gpt-4.1-mini",
+        "provider_slug": "openai",
+        "provider_name": "OpenAI",
+        "model_label": "GPT-4.1 mini",
+        "provider_model_id": "gpt-4.1-mini",
+        "role": "Light reasoning and routing",
+        "max_output_tokens": 16384,
+        "cost_input_per_1k_usd": 0.000150,
+        "cost_output_per_1k_usd": 0.000600,
+        "status": "live",
+        "notes": "Server-side only; shown as the current provider target, not a browser key flow.",
+    },
+    {
+        "id": "openai-gpt-4.1",
+        "provider_slug": "openai",
+        "provider_name": "OpenAI",
+        "model_label": "GPT-4.1",
+        "provider_model_id": "gpt-4.1",
+        "role": "General reasoning",
+        "max_output_tokens": 8192,
+        "cost_input_per_1k_usd": 0.005000,
+        "cost_output_per_1k_usd": 0.015000,
+        "status": "live",
+        "notes": "Server-side only; managed or BYOK billing is resolved inside the backend layer.",
+    },
+    {
+        "id": "anthropic-claude-sonnet",
+        "provider_slug": "anthropic",
+        "provider_name": "Anthropic",
+        "model_label": "Claude Sonnet 4",
+        "provider_model_id": "claude-sonnet-4-20250514",
+        "role": "Balanced reasoning and writing",
+        "max_output_tokens": 8192,
+        "cost_input_per_1k_usd": 0.003000,
+        "cost_output_per_1k_usd": 0.015000,
+        "status": "live",
+        "notes": "Current runtime target in the Coolbits model registry.",
+    },
+    {
+        "id": "anthropic-claude-haiku",
+        "provider_slug": "anthropic",
+        "provider_name": "Anthropic",
+        "model_label": "Claude 3.5 Haiku",
+        "provider_model_id": "claude-3-5-haiku-20241022",
+        "role": "Fast tasks",
+        "max_output_tokens": 8192,
+        "cost_input_per_1k_usd": 0.000800,
+        "cost_output_per_1k_usd": 0.004000,
+        "status": "live",
+        "notes": "Current runtime target in the Coolbits model registry.",
+    },
+    {
+        "id": "xai-grok-3-mini",
+        "provider_slug": "xai",
+        "provider_name": "xAI",
+        "model_label": "Grok 3 Mini Fast",
+        "provider_model_id": "grok-3-mini-fast",
+        "role": "Fast reasoning",
+        "max_output_tokens": 8192,
+        "cost_input_per_1k_usd": 0.000300,
+        "cost_output_per_1k_usd": 0.000500,
+        "status": "live",
+        "notes": "Current runtime target in the Coolbits model registry.",
+    },
+    {
+        "id": "xai-grok-3",
+        "provider_slug": "xai",
+        "provider_name": "xAI",
+        "model_label": "Grok 3",
+        "provider_model_id": "grok-3",
+        "role": "Deep analysis",
+        "max_output_tokens": 16384,
+        "cost_input_per_1k_usd": 0.003000,
+        "cost_output_per_1k_usd": 0.015000,
+        "status": "live",
+        "notes": "Current runtime target in the Coolbits model registry.",
+    },
+]
+PUBLIC_DEMO_LIMITATIONS = [
+    "The public demo uses static or privacy-safe data and does not save workspace changes.",
+    "Live connector runs require an authenticated workspace and the user's own OAuth or provider access.",
+    "Google Ads is presented as read/reporting-first in product; public write actions are not exposed.",
+    "All model provider traffic is routed server-side. Standard provider keys are never exposed in the browser.",
+]
+LLM_CATALOG_LAST_VERIFIED = "2026-03-08"
+LLM_PROVIDER_CATALOG = [
+    {
+        "slug": "xai",
+        "label": "xAI / Grok",
+        "status": "live",
+        "supports_byok": True,
+        "supports_managed": True,
+        "allow_custom_model": True,
+        "default_model": "grok-4-1-fast-reasoning",
+        "notes": "Latest Grok reasoning targets exposed in xAI API docs.",
+        "models": [
+            {"id": "grok-4-1-fast-reasoning", "label": "Grok 4.1 Fast Reasoning", "latest": True, "max_output_tokens": 16384, "aliases": ["grok", "grok-beta"]},
+            {"id": "grok-4", "label": "Grok 4", "latest": True, "max_output_tokens": 16384},
+            {"id": "grok-4-fast-reasoning", "label": "Grok 4 Fast Reasoning", "latest": True, "max_output_tokens": 16384},
+            {"id": "grok-3", "label": "Grok 3", "latest": False, "max_output_tokens": 16384},
+            {"id": "grok-3-mini", "label": "Grok 3 Mini", "latest": False, "max_output_tokens": 8192},
+        ],
+    },
+    {
+        "slug": "openai",
+        "label": "OpenAI",
+        "status": "live",
+        "supports_byok": True,
+        "supports_managed": True,
+        "allow_custom_model": True,
+        "default_model": "gpt-5.4",
+        "notes": "Curated OpenAI catalog; live workspace availability is resolved separately from the provider API.",
+        "models": [
+            {"id": "gpt-5.4", "label": "GPT-5.4", "latest": True, "max_output_tokens": 16384},
+            {"id": "gpt-5.4-pro", "label": "GPT-5.4 Pro", "latest": True, "max_output_tokens": 16384},
+            {"id": "gpt-5.2", "label": "GPT-5.2", "latest": True, "max_output_tokens": 16384},
+            {"id": "gpt-5", "label": "GPT-5", "latest": True, "max_output_tokens": 16384},
+            {"id": "gpt-5-mini", "label": "GPT-5 mini", "latest": True, "max_output_tokens": 16384},
+            {"id": "gpt-5-nano", "label": "GPT-5 nano", "latest": True, "max_output_tokens": 8192},
+            {"id": "gpt-4.1", "label": "GPT-4.1", "latest": False, "max_output_tokens": 8192},
+            {"id": "gpt-4.1-mini", "label": "GPT-4.1 mini", "latest": False, "max_output_tokens": 16384},
+            {"id": "gpt-4.1-nano", "label": "GPT-4.1 nano", "latest": False, "max_output_tokens": 16384},
+            {"id": "gpt-4o", "label": "GPT-4o", "latest": False, "max_output_tokens": 16384, "aliases": ["gpt 4o"]},
+            {"id": "gpt-4o-mini", "label": "GPT-4o mini", "latest": False, "max_output_tokens": 16384},
+            {"id": "o4-mini", "label": "o4-mini", "latest": True, "max_output_tokens": 16384},
+            {"id": "o3", "label": "o3", "latest": True, "max_output_tokens": 16384},
+        ],
+    },
+    {
+        "slug": "anthropic",
+        "label": "Anthropic",
+        "status": "live",
+        "supports_byok": True,
+        "supports_managed": True,
+        "allow_custom_model": True,
+        "default_model": "claude-sonnet-4-5",
+        "notes": "Curated Claude catalog; keep aliases for stable latest-family selection and validation.",
+        "models": [
+            {"id": "claude-opus-4-5", "label": "Claude Opus 4.5", "latest": True, "max_output_tokens": 8192},
+            {"id": "claude-sonnet-4-5", "label": "Claude Sonnet 4.5", "latest": True, "max_output_tokens": 8192},
+            {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5", "latest": True, "max_output_tokens": 8192},
+            {"id": "claude-opus-4-5-20250929", "label": "Claude Opus 4.5 (dated)", "latest": False, "max_output_tokens": 8192},
+            {"id": "claude-sonnet-4-5-20250929", "label": "Claude Sonnet 4.5 (dated)", "latest": False, "max_output_tokens": 8192},
+            {"id": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5 (dated)", "latest": False, "max_output_tokens": 8192},
+            {"id": "claude-opus-4-1-20250805", "label": "Claude Opus 4.1", "latest": False, "max_output_tokens": 8192},
+            {"id": "claude-opus-4-20250514", "label": "Claude Opus 4", "latest": False, "max_output_tokens": 8192},
+            {"id": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4", "latest": False, "max_output_tokens": 8192},
+            {"id": "claude-3-7-sonnet-20250219", "label": "Claude 3.7 Sonnet", "latest": False, "max_output_tokens": 8192},
+            {"id": "claude-3-5-sonnet-20241022", "label": "Claude 3.5 Sonnet", "latest": False, "max_output_tokens": 8192, "aliases": ["claude-3.5", "claude 3.5"]},
+            {"id": "claude-3-5-haiku-20241022", "label": "Claude 3.5 Haiku", "latest": False, "max_output_tokens": 8192},
+        ],
+    },
+    {
+        "slug": "vertex",
+        "label": "Google Gemini / Vertex",
+        "status": "live",
+        "supports_byok": False,
+        "supports_managed": True,
+        "allow_custom_model": True,
+        "default_model": "gemini-2.5-pro",
+        "notes": "Current Gemini API / Vertex model families shown as latest available.",
+        "models": [
+            {"id": "gemini-3-pro-preview", "label": "Gemini 3 Pro Preview", "latest": True, "max_output_tokens": 8192},
+            {"id": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview", "latest": True, "max_output_tokens": 8192},
+            {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "latest": True, "max_output_tokens": 8192},
+            {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "latest": True, "max_output_tokens": 8192},
+            {"id": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash-Lite", "latest": True, "max_output_tokens": 8192},
+            {"id": "gemini-2.0-flash", "label": "Gemini 2.0 Flash", "latest": False, "max_output_tokens": 8192},
+            {"id": "gemini-2.0-flash-lite", "label": "Gemini 2.0 Flash-Lite", "latest": False, "max_output_tokens": 8192},
+        ],
+    },
+    {
+        "slug": "perplexity",
+        "label": "Perplexity",
+        "status": "beta",
+        "supports_byok": True,
+        "supports_managed": False,
+        "allow_custom_model": True,
+        "default_model": "sonar-reasoning-pro",
+        "notes": "Reasoning and search-first models from Perplexity model cards.",
+        "models": [
+            {"id": "sonar-deep-research", "label": "Sonar Deep Research", "latest": True, "max_output_tokens": 8192},
+            {"id": "sonar-reasoning-pro", "label": "Sonar Reasoning Pro", "latest": True, "max_output_tokens": 8192},
+            {"id": "sonar-pro", "label": "Sonar Pro", "latest": True, "max_output_tokens": 8192},
+            {"id": "sonar", "label": "Sonar", "latest": True, "max_output_tokens": 8192},
+        ],
+    },
+    {
+        "slug": "mistral",
+        "label": "Mistral",
+        "status": "beta",
+        "supports_byok": True,
+        "supports_managed": False,
+        "allow_custom_model": True,
+        "default_model": "mistral-large-2512",
+        "notes": "Latest stable and latest aliases from Mistral model docs.",
+        "models": [
+            {"id": "mistral-large-2512", "label": "Mistral Large 25.12", "latest": True, "max_output_tokens": 8192},
+            {"id": "mistral-medium-2508", "label": "Mistral Medium 25.08", "latest": True, "max_output_tokens": 8192},
+            {"id": "mistral-small-2506", "label": "Mistral Small 25.06", "latest": True, "max_output_tokens": 8192},
+            {"id": "mistral-small-latest", "label": "Mistral Small Latest", "latest": True, "max_output_tokens": 8192},
+            {"id": "codestral-latest", "label": "Codestral Latest", "latest": True, "max_output_tokens": 8192},
+            {"id": "devstral-medium-latest", "label": "Devstral Medium Latest", "latest": True, "max_output_tokens": 8192},
+            {"id": "magistral-medium-latest", "label": "Magistral Medium Latest", "latest": True, "max_output_tokens": 8192},
+        ],
+    },
+    {
+        "slug": "cohere",
+        "label": "Cohere",
+        "status": "beta",
+        "supports_byok": True,
+        "supports_managed": False,
+        "allow_custom_model": True,
+        "default_model": "command-a-03-2025",
+        "notes": "Latest command-family models from Cohere docs.",
+        "models": [
+            {"id": "command-a-03-2025", "label": "Command A", "latest": True, "max_output_tokens": 8192},
+            {"id": "command-a-reasoning-08-2025", "label": "Command A Reasoning", "latest": True, "max_output_tokens": 8192},
+            {"id": "command-a-vision-07-2025", "label": "Command A Vision", "latest": True, "max_output_tokens": 8192},
+            {"id": "command-r-plus-08-2024", "label": "Command R+", "latest": False, "max_output_tokens": 8192},
+            {"id": "command-r-08-2024", "label": "Command R", "latest": False, "max_output_tokens": 8192},
+            {"id": "command-r7b-12-2024", "label": "Command R7B", "latest": False, "max_output_tokens": 8192},
+        ],
+    },
+    {
+        "slug": "meta",
+        "label": "Meta Llama",
+        "status": "planned",
+        "supports_byok": True,
+        "supports_managed": False,
+        "allow_custom_model": True,
+        "default_model": "",
+        "notes": "Meta model selection stays manual here until a provider-authenticated model directory is wired cleanly.",
+        "models": [],
+    },
+    {
+        "slug": "huggingface",
+        "label": "Hugging Face",
+        "status": "beta",
+        "supports_byok": True,
+        "supports_managed": False,
+        "allow_custom_model": True,
+        "default_model": "openai/gpt-oss-120b",
+        "notes": "Curated chat-completions-capable models from Hugging Face inference docs.",
+        "models": [
+            {"id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "latest": True, "max_output_tokens": 8192},
+            {"id": "openai/gpt-oss-20b", "label": "GPT-OSS 20B", "latest": True, "max_output_tokens": 8192},
+            {"id": "Qwen/Qwen3-Coder-480B-A35B-Instruct", "label": "Qwen3 Coder 480B A35B", "latest": True, "max_output_tokens": 8192},
+            {"id": "deepseek-ai/DeepSeek-R1-0528", "label": "DeepSeek R1 0528", "latest": True, "max_output_tokens": 8192},
+            {"id": "zai-org/GLM-4.5", "label": "GLM 4.5", "latest": True, "max_output_tokens": 8192},
+            {"id": "moonshotai/Kimi-K2-Instruct-0905", "label": "Kimi K2 Instruct 0905", "latest": True, "max_output_tokens": 8192},
+        ],
+    },
+]
+LLM_PROVIDER_ALIAS_MAP = {
+    "grok": "xai",
+    "xai": "xai",
+    "xai / grok": "xai",
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "anthropic (claude)": "anthropic",
+    "claude": "anthropic",
+    "google gemini": "vertex",
+    "google vertex": "vertex",
+    "gemini": "vertex",
+    "vertex": "vertex",
+    "google": "vertex",
+    "perplexity": "perplexity",
+    "mistral": "mistral",
+    "cohere": "cohere",
+    "meta": "meta",
+    "meta llama": "meta",
+    "llama": "meta",
+    "hugging face": "huggingface",
+    "huggingface": "huggingface",
+    "hf": "huggingface",
+}
+LLM_MODEL_LEGACY_ALIASES = {
+    "grok-1": "xai",
+    "grok-beta": "xai",
+    "gpt-4o": "openai",
+    "gpt-4o-mini": "openai",
+    "claude-3.5": "anthropic",
+    "claude-3-5": "anthropic",
+    "gemini-1.5": "vertex",
+    "google-vertex-sterile": "vertex",
+}
+
+
+def _public_status_badge(status):
+    key = str(status or "").strip().lower()
+    return PUBLIC_STATUS_BADGES.get(key, "Internal")
+
+
+def _public_ct_value_usd():
+    try:
+        conn = get_db()
+        _ensure_pricing_engine_tables(conn)
+        row = _current_ct_rate_row(conn)
+        if row and row["ct_value_usd"] is not None:
+            return float(row["ct_value_usd"] or SHADOW_DEFAULT_CT_VALUE_USD)
+    except Exception:
+        pass
+    return float(SHADOW_DEFAULT_CT_VALUE_USD)
+
+
+def _usd_per_1m_from_per_1k(value):
+    try:
+        return round(float(value or 0.0) * 1000.0, 4)
+    except Exception:
+        return 0.0
+
+
+def _estimate_blended_cost_usd_per_1m(input_usd_per_1m, output_usd_per_1m, input_share=0.75):
+    try:
+        inp = float(input_usd_per_1m or 0.0)
+        out = float(output_usd_per_1m or 0.0)
+        share = max(0.0, min(1.0, float(input_share)))
+        return round((inp * share) + (out * (1.0 - share)), 4)
+    except Exception:
+        return 0.0
+
+
+def _estimate_cbt(cost_usd, ct_value_usd):
+    try:
+        cost = float(cost_usd or 0.0)
+        ct_value = float(ct_value_usd or 0.0)
+        if cost <= 0 or ct_value <= 0:
+            return 0
+        return int(math.ceil(cost / ct_value))
+    except Exception:
+        return 0
+
+
+def _public_connector_status_rows():
+    rows = []
+    for row in (PUBLIC_CONNECTOR_STATUS or []):
+        item = copy.deepcopy(row)
+        item["status_label"] = _public_status_badge(item.get("status"))
+        rows.append(item)
+    return rows
+
+
+def _public_model_provider_rows():
+    ct_value_usd = _public_ct_value_usd()
+    rows = []
+    for row in (PUBLIC_MODEL_PROVIDER_STATUS or []):
+        item = copy.deepcopy(row)
+        input_usd_per_1m = _usd_per_1m_from_per_1k(item.get("cost_input_per_1k_usd"))
+        output_usd_per_1m = _usd_per_1m_from_per_1k(item.get("cost_output_per_1k_usd"))
+        blended_usd_per_1m = _estimate_blended_cost_usd_per_1m(input_usd_per_1m, output_usd_per_1m)
+        item["status_label"] = _public_status_badge(item.get("status"))
+        item["cost_input_usd_per_1m"] = input_usd_per_1m
+        item["cost_output_usd_per_1m"] = output_usd_per_1m
+        item["blended_usd_per_1m"] = blended_usd_per_1m
+        item["cbt_input_per_1m"] = _estimate_cbt(input_usd_per_1m, ct_value_usd)
+        item["cbt_output_per_1m"] = _estimate_cbt(output_usd_per_1m, ct_value_usd)
+        item["cbt_blended_per_1m"] = _estimate_cbt(blended_usd_per_1m, ct_value_usd)
+        item["last_verified"] = PUBLIC_PROOF_LAST_VERIFIED
+        rows.append(item)
+    return {
+        "items": rows,
+        "ct_value_usd": round(float(ct_value_usd or 0.0), 10),
+        "blended_assumption": "75% input / 25% output",
+    }
+
+
+def _llm_catalog_payload():
+    providers = []
+    for provider in (LLM_PROVIDER_CATALOG or []):
+        item = copy.deepcopy(provider)
+        item["status_label"] = _public_status_badge(item.get("status"))
+        providers.append(item)
+    return {
+        "ok": True,
+        "last_verified": LLM_CATALOG_LAST_VERIFIED,
+        "providers": providers,
+        "provider_aliases": dict(LLM_PROVIDER_ALIAS_MAP),
+        "legacy_model_aliases": dict(LLM_MODEL_LEGACY_ALIASES),
+    }
+
+
+def _normalize_llm_provider_slug(value):
+    key = str(value or "").strip().lower()
+    if not key:
+        return ""
+    return str(LLM_PROVIDER_ALIAS_MAP.get(key) or key)
+
+
+def _find_llm_provider(provider_slug):
+    slug = _normalize_llm_provider_slug(provider_slug)
+    for provider in (LLM_PROVIDER_CATALOG or []):
+        if str(provider.get("slug") or "") == slug:
+            return provider
+    return None
+
+
+def _infer_llm_provider_from_model(model_value):
+    normalized = str(model_value or "").strip().lower()
+    if not normalized:
+        return ""
+    legacy = str(LLM_MODEL_LEGACY_ALIASES.get(normalized) or "").strip()
+    if legacy:
+        return _normalize_llm_provider_slug(legacy)
+    for provider in (LLM_PROVIDER_CATALOG or []):
+        for model in (provider.get("models") or []):
+            model_id = str(model.get("id") or "").strip().lower()
+            if model_id == normalized:
+                return str(provider.get("slug") or "")
+            if str(model.get("label") or "").strip().lower() == normalized:
+                return str(provider.get("slug") or "")
+            for alias in (model.get("aliases") or []):
+                if str(alias or "").strip().lower() == normalized:
+                    return str(provider.get("slug") or "")
+    return ""
+
+
+def _managed_llm_env_key(provider_slug):
+    env_by_provider = {
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "xai": "XAI_API_KEY",
+        "vertex": "GOOGLE_API_KEY",
+        "perplexity": "PERPLEXITY_API_KEY",
+        "mistral": "MISTRAL_API_KEY",
+        "cohere": "COHERE_API_KEY",
+        "huggingface": "HUGGINGFACE_API_KEY",
+        "meta": "META_API_KEY",
+    }
+    return env_by_provider.get(_normalize_llm_provider_slug(provider_slug)) or None
+
+
+def _lookup_agent_llm_record(user_id, agent_slug, client_id=None):
+    conn = get_db()
+    try:
+        _ensure_client_tables(conn)
+        cursor = conn.cursor()
+        row = None
+        scoped_client_id = int(client_id or 0)
+        if client_id is not None:
+            row = cursor.execute(
+                """
+                SELECT llm_provider, llm_model
+                FROM agents_config
+                WHERE user_id = ? AND agent_slug = ? AND COALESCE(client_id, 0) = ?
+                LIMIT 1
+                """,
+                (int(user_id), str(agent_slug), scoped_client_id),
+            ).fetchone()
+        if not row:
+            row = cursor.execute(
+                """
+                SELECT llm_provider, llm_model
+                FROM agents_config
+                WHERE user_id = ? AND agent_slug = ? AND COALESCE(client_id, 0) = 0
+                LIMIT 1
+                """,
+                (int(user_id), str(agent_slug)),
+            ).fetchone()
+        if not row:
+            return {"llm_provider": "", "llm_model": ""}
+        return {
+            "llm_provider": str(row[0] or ""),
+            "llm_model": str(row[1] or ""),
+        }
+    finally:
+        conn.close()
+
+
+def _resolve_llm_runtime_credentials(user_id, provider_slug, agent_slug=None, client_id=None):
+    """3-tier credential resolution: BYOK → managed_provider_accounts → env fallback.
+
+    Returns dict with:
+      provider, api_key, source (byok|managed_gateway|managed_key|legacy_env|none),
+      credential_mode, billing_owner, managed_account_id, record
+    """
+    provider = _normalize_llm_provider_slug(provider_slug)
+    api_key = ""
+    source = "none"
+    credential_mode = "none"
+    billing_owner = "unknown"
+    managed_account_id = None
+    record = {"llm_provider": "", "llm_model": ""}
+    provider_credential = None
+
+    # ── Tier 1: BYOK — canonical provider_credentials store ───────
+    if user_id and agent_slug:
+        try:
+            record = _lookup_agent_llm_record(user_id, agent_slug, client_id)
+        except Exception:
+            record = {"llm_provider": "", "llm_model": ""}
+        provider_credential = _lookup_provider_credential(
+            user_id,
+            provider,
+            agent_slug=agent_slug,
+            client_id=client_id,
+        )
+        api_key = str((provider_credential or {}).get("api_key") or "").strip()
+        if api_key and str((provider_credential or {}).get("mode") or "byok") == "byok":
+            source = "byok"
+            credential_mode = "byok"
+            billing_owner = f"client:{int(client_id)}" if client_id is not None else f"workspace_user:{int(user_id)}"
+
+    # ── Tier 2: Managed — managed_provider_accounts table ─────────
+    if not api_key:
+        mpa = _lookup_managed_provider_account(provider)
+        if mpa:
+            managed_account_id = mpa["id"]
+            billing_owner = mpa["owner_label"]
+            # Gateway auth (Vertex) — no api_key needed; gateway handles it.
+            if mpa["auth_type"] == "gateway":
+                source = "managed_gateway"
+                credential_mode = "managed_gateway"
+                # api_key stays empty; caller uses gateway path
+            else:
+                # Resolve key from env_var_name or api_key_encrypted
+                env_name = str(mpa.get("env_var_name") or "").strip()
+                if env_name:
+                    api_key = str(os.getenv(env_name, "")).strip()
+                if not api_key:
+                    api_key = str(mpa.get("api_key_encrypted") or "").strip()
+                if api_key:
+                    source = "managed_key"
+                    credential_mode = "managed_key"
+
+    # ── Tier 3: Env-var fallback (legacy) ─────────────────────────
+    if not api_key and source == "none":
+        env_name = _managed_llm_env_key(provider)
+        if env_name:
+            api_key = str(os.getenv(env_name, "")).strip()
+            if api_key:
+                source = "legacy_env"
+                credential_mode = "legacy_env"
+                billing_owner = "COOL BITS / Camarad"
+
+    return {
+        "provider": provider,
+        "api_key": api_key,
+        "source": source,
+        "credential_mode": credential_mode,
+        "billing_owner": billing_owner,
+        "managed_account_id": managed_account_id,
+        "record": record,
+        "provider_credential": provider_credential,
+    }
+
+
+def _lookup_managed_provider_account(provider_slug):
+    """Find the highest-priority active managed account for a provider."""
+    provider = _normalize_llm_provider_slug(provider_slug)
+    if not provider:
+        return None
+    try:
+        conn = get_db()
+        _ensure_client_tables(conn)
+        row = conn.execute(
+            """
+            SELECT id, provider_slug, account_label, owner_label,
+                   credential_mode, auth_type, api_key_encrypted,
+                   env_var_name, priority, notes
+            FROM managed_provider_accounts
+            WHERE provider_slug = ? AND is_active = 1
+            ORDER BY priority ASC
+            LIMIT 1
+            """,
+            (provider,),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": int(row[0]),
+            "provider_slug": str(row[1]),
+            "account_label": str(row[2]),
+            "owner_label": str(row[3]),
+            "credential_mode": str(row[4]),
+            "auth_type": str(row[5]),
+            "api_key_encrypted": str(row[6] or ""),
+            "env_var_name": str(row[7] or ""),
+            "priority": int(row[8]),
+            "notes": str(row[9] or ""),
+        }
+    except Exception as e:
+        print(f"lookup_managed_provider_account_error: {e}")
+        return None
+
+
+def _coolbits_gateway_health(force=False, ttl_seconds=60, timeout_seconds=2):
+    now = time.time()
+    cached_ok = _coolbits_health_cache.get("ok")
+    cached_at = float(_coolbits_health_cache.get("checked_at") or 0.0)
+    if not force and cached_ok is not None and (now - cached_at) < max(1, int(ttl_seconds or 60)):
+        return dict(_coolbits_health_cache)
+
+    result = {
+        "ok": False,
+        "status_code": None,
+        "checked_at": now,
+        "checked_at_iso": _utc_now_iso(),
+        "error": None,
+        "path": None,
+    }
+    for path in ("/healthz", "/health"):
+        try:
+            response = requests.get(f"{COOLBITS_URL}{path}", timeout=max(1, int(timeout_seconds or 2)))
+            result["status_code"] = int(response.status_code)
+            result["path"] = path
+            if response.status_code < 400:
+                payload = None
+                try:
+                    payload = response.json() if response.content else {}
+                except Exception:
+                    payload = None
+                if not isinstance(payload, dict) or payload.get("ok") is not False:
+                    result["ok"] = True
+                    result["error"] = None
+                    break
+                result["error"] = str(payload.get("error") or "coolbits_gateway_not_ok")
+            else:
+                result["error"] = f"coolbits_gateway_http_{response.status_code}"
+        except Exception as exc:
+            result["error"] = f"coolbits_gateway_unreachable: {exc}"
+
+    _coolbits_health_cache.update(result)
+    return dict(_coolbits_health_cache)
+
+
+def _resolve_coolbits_managed_provider(provider_slug, agent_slug=None, model_id=None):
+    provider = _normalize_llm_provider_slug(provider_slug)
+    agent = str(agent_slug or "").strip().lower()
+    if not COOLBITS_GATEWAY_ENABLED:
+        return None
+    if provider != "vertex":
+        return None
+    if not agent:
+        return None
+    if agent not in REAL_AGENT_SLUGS:
+        return None
+
+    live_models = []
+    normalized_model = str(model_id or "").strip()
+    if normalized_model:
+        live_models.append(normalized_model)
+    if str(COOLBITS_VERTEX_PROFILE or "").strip():
+        live_models.append(str(COOLBITS_VERTEX_PROFILE).strip())
+    seen = set()
+    deduped = []
+    for item in live_models:
+        if item and item not in seen:
+            seen.add(item)
+            deduped.append(item)
+
+    gateway_health = _coolbits_gateway_health(force=False, ttl_seconds=60, timeout_seconds=2)
+    is_healthy = bool(gateway_health.get("ok"))
+    checked_at = gateway_health.get("checked_at_iso") or _utc_now_iso()
+    reason = "Routed via Coolbits managed Vertex gateway"
+    status = "validated"
+    if not is_healthy:
+        status = "invalid"
+        reason = str(gateway_health.get("error") or "Coolbits gateway health check failed")
+
+    return {
+        "provider_id": provider,
+        "status": status,
+        "source": "workspace_env",
+        "validated_at": checked_at if is_healthy else None,
+        "reason": reason,
+        "live_models": deduped,
+        "gateway_health": gateway_health,
+    }
+
+
+def _curated_provider_model_ids(provider_slug):
+    provider = _find_llm_provider(provider_slug)
+    if not provider:
+        return []
+    out = []
+    for model in (provider.get("models") or []):
+        model_id = str(model.get("id") or "").strip()
+        if model_id:
+            out.append(model_id)
+    return out
+
+
+def _validate_openai_availability(api_key, timeout_seconds=12):
+    response = requests.get(
+        "https://api.openai.com/v1/models",
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=timeout_seconds,
+    )
+    payload = response.json()
+    if response.status_code >= 400:
+        return {
+            "status": "validation_failed",
+            "error": payload.get("error") or {"message": "openai_validation_failed"},
+            "live_models": [],
+        }
+    models = sorted(
+        [
+            str(item.get("id") or "").strip()
+            for item in (payload.get("data") or [])
+            if str(item.get("id") or "").strip()
+        ]
+    )
+    return {"status": "active", "error": None, "live_models": models}
+
+
+def _validate_xai_availability(api_key, timeout_seconds=12):
+    response = requests.get(
+        "https://api.x.ai/v1/models",
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=timeout_seconds,
+    )
+    payload = response.json()
+    if response.status_code >= 400:
+        return {
+            "status": "validation_failed",
+            "error": payload.get("error") or {"message": "xai_validation_failed"},
+            "live_models": [],
+        }
+    models = sorted(
+        [
+            str(item.get("id") or "").strip()
+            for item in (payload.get("data") or [])
+            if str(item.get("id") or "").strip()
+        ]
+    )
+    return {"status": "active", "error": None, "live_models": models}
+
+
+def _validate_vertex_availability(api_key, timeout_seconds=12):
+    response = requests.get(
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        params={"key": api_key},
+        timeout=timeout_seconds,
+    )
+    payload = response.json()
+    if response.status_code >= 400:
+        return {
+            "status": "validation_failed",
+            "error": payload.get("error") or {"message": "vertex_validation_failed"},
+            "live_models": [],
+        }
+    models = sorted(
+        [
+            str(item.get("name") or "").split("/")[-1].strip()
+            for item in (payload.get("models") or [])
+            if str(item.get("name") or "").strip()
+        ]
+    )
+    return {"status": "active", "error": None, "live_models": models}
+
+
+def _validate_anthropic_availability(api_key, timeout_seconds=15):
+    response = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={
+            "model": "claude-3-5-haiku-20241022",
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "ping"}],
+        },
+        timeout=timeout_seconds,
+    )
+    payload = response.json()
+    if response.status_code >= 400:
+        return {
+            "status": "validation_failed",
+            "error": payload.get("error") or {"message": "anthropic_validation_failed"},
+            "live_models": [],
+        }
+    return {
+        "status": "validated",
+        "error": None,
+        "live_models": _curated_provider_model_ids("anthropic"),
+    }
+
+
+def _validate_provider_availability(provider_slug, api_key):
+    provider = _normalize_llm_provider_slug(provider_slug)
+    if not api_key:
+        return {
+            "status": "missing_credentials",
+            "error": {"message": "missing_api_key"},
+            "live_models": [],
+        }
+    if provider == "openai":
+        return _validate_openai_availability(api_key)
+    if provider == "xai":
+        return _validate_xai_availability(api_key)
+    if provider == "vertex":
+        return _validate_vertex_availability(api_key)
+    if provider == "anthropic":
+        return _validate_anthropic_availability(api_key)
+    return {
+        "status": "catalog_only",
+        "error": {"message": "provider_validation_not_implemented"},
+        "live_models": [],
+    }
+
+
+def _utc_now_iso():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _merge_llm_availability_models(provider_slug, live_models):
+    seen = set()
+    merged = []
+    curated = _curated_provider_model_ids(provider_slug)
+    live_set = {str(model_id or "").strip() for model_id in (live_models or []) if str(model_id or "").strip()}
+    for model_id in curated:
+        normalized = str(model_id or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append({
+            "id": normalized,
+            "catalog": True,
+            "live": normalized in live_set,
+            "source": "catalog",
+            "uncurated": False,
+        })
+    for model_id in sorted(live_set):
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        merged.append({
+            "id": model_id,
+            "catalog": False,
+            "live": True,
+            "source": "live",
+            "uncurated": True,
+        })
+    return merged
 
 
 def _coolbits_browser_base_url():
@@ -284,6 +1491,28 @@ def _build_real_agent_objective(agent_slug, ws_slug, user_message, recent_histor
     connected_txt = ", ".join(connected_connectors[:6]) if connected_connectors else "none"
     focus_connectors = AGENT_CONNECTOR_MAP.get(agent_slug, []) or []
     focus_txt = ", ".join(focus_connectors[:6]) if focus_connectors else "none"
+    rag_block = ""
+    if rag_runtime_enabled() and _agent_rag_enabled(uid, client_id, agent_slug):
+        try:
+            client_slug = _current_client_slug_for_rag(uid, client_id)
+            rag_rows = rag_semantic_search(
+                user_message,
+                workspace_id=ws_slug,
+                agent_slug=agent_slug,
+                user_id=uid,
+                client_id=client_id,
+                client_slug=client_slug,
+                top_k=3,
+            )
+            if rag_rows:
+                rag_block = (
+                    "Knowledge base excerpts:\n"
+                    + rag_format_excerpts(rag_rows)
+                    + "\n\n"
+                    + "Use the excerpts above when they are relevant. Cite them only when they actually support your answer.\n\n"
+                )
+        except Exception:
+            rag_block = ""
 
     return (
         f"{base}\n\n"
@@ -295,6 +1524,7 @@ def _build_real_agent_objective(agent_slug, ws_slug, user_message, recent_histor
         f"- Role focus tools: {focus_txt}\n"
         f"- User request: {user_message[:900]}\n"
         f"- Recent chat:\n{history_txt}\n\n"
+        f"{rag_block}"
         f"Output rules:\n"
         f"- You are speaking as a Camarad agent, not as a generic model.\n"
         f"- If user asks your role/environment, explain your concrete role in Camarad and what you can do now.\n"
@@ -373,6 +1603,132 @@ def _get_chat_runtime_context(user_id, client_id):
             except Exception:
                 pass
     return info
+
+
+def _current_client_slug_for_rag(user_id, client_id):
+    try:
+        uid = int(user_id or 0)
+        cid = int(client_id or 0)
+    except Exception:
+        return None
+    if uid <= 0 or cid <= 0:
+        return None
+    conn = None
+    try:
+        conn = get_db()
+        _ensure_client_tables(conn)
+        row = conn.execute(
+            "SELECT name, company_name FROM clients WHERE id = ? AND user_id = ? LIMIT 1",
+            (cid, uid),
+        ).fetchone()
+        if not row:
+            return None
+        label = str(row[1] or row[0] or "").strip()
+        return rag_slugify_text(label) if label else None
+    except Exception:
+        return None
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+def _agent_rag_enabled(user_id, client_id, agent_slug):
+    try:
+        uid = int(user_id or 0)
+    except Exception:
+        uid = 0
+    agent = str(agent_slug or "").strip().lower()
+    if uid <= 0 or not agent:
+        return False
+    conn = None
+    try:
+        conn = get_db()
+        _ensure_client_tables(conn)
+        scoped_client_id = None
+        try:
+            scoped_client_id = int(client_id) if client_id is not None else None
+        except Exception:
+            scoped_client_id = None
+        if scoped_client_id is not None:
+            row = conn.execute(
+                """
+                SELECT rag_enabled
+                FROM agents_config
+                WHERE user_id = ? AND agent_slug = ? AND COALESCE(client_id, 0) = ?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (uid, agent, scoped_client_id),
+            ).fetchone()
+            if row is not None:
+                return bool(row[0])
+        row = conn.execute(
+            """
+            SELECT rag_enabled
+            FROM agents_config
+            WHERE user_id = ? AND agent_slug = ? AND COALESCE(client_id, 0) = 0
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (uid, agent),
+        ).fetchone()
+        if row is not None:
+            return bool(row[0])
+    except Exception:
+        return False
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+    return False
+
+
+def _rag_search_rows_live(query, limit=3, agent_slug=None):
+    text = str(query or "").strip()
+    top_n = max(1, min(int(limit or 3), 10))
+    if not text or not rag_runtime_enabled():
+        return []
+    try:
+        ensure_rag_schema()
+        uid = get_current_user_id()
+        cid = get_current_client_id()
+        ws_slug = _current_workspace_slug() or "business"
+        agent = str(agent_slug or "").strip().lower()
+        client_slug = _current_client_slug_for_rag(uid, cid)
+        rows = rag_semantic_search(
+            text,
+            workspace_id=ws_slug,
+            agent_slug=agent or None,
+            user_id=uid,
+            client_id=cid,
+            client_slug=client_slug,
+            top_k=top_n,
+        )
+        out = []
+        for row in rows or []:
+            meta = row.get("metadata_json") or {}
+            page_start = meta.get("page_start")
+            page_end = meta.get("page_end")
+            content_txt = str(row.get("content") or "").strip()
+            out.append({
+                "title": str(row.get("filename") or row.get("collection_name") or "Document").strip(),
+                "summary": content_txt[:260],
+                "content": content_txt,
+                "source": str(row.get("source_uri") or row.get("filename") or "").strip(),
+                "score": float(row.get("score") or 0.0),
+                "page_start": page_start,
+                "page_end": page_end,
+                "collection_name": str(row.get("collection_name") or "").strip(),
+                "kb_name": str(row.get("kb_name") or "").strip(),
+            })
+        return out
+    except Exception:
+        return []
 
 
 def _should_attach_docs_context(agent_slug, user_message):
@@ -592,6 +1948,137 @@ def _generate_real_agent_response(agent_slug, ws_slug, user_message, recent_hist
     return None
 
 
+def _fallback_orchestrator_agent_analysis(agent_slug, connector_steps):
+    conn_steps = list(connector_steps or [])
+    roas_vals = [((r.get("data") or {}).get("metric_values") or {}).get("roas") for r in conn_steps]
+    roas_vals = [x for x in roas_vals if isinstance(x, (int, float))]
+    revenue_vals = [((r.get("data") or {}).get("metric_values") or {}).get("revenue") for r in conn_steps]
+    revenue_vals = [x for x in revenue_vals if isinstance(x, (int, float))]
+    uptime_vals = [((r.get("data") or {}).get("metric_values") or {}).get("uptime") for r in conn_steps]
+    uptime_vals = [x for x in uptime_vals if isinstance(x, (int, float))]
+
+    if roas_vals:
+        avg_roas = sum(roas_vals) / len(roas_vals)
+        if avg_roas < 3:
+            return "ROAS below target. Reallocate spend to best performers and pause weak segments."
+        return "ROAS healthy. Scale top ad groups gradually."
+    if revenue_vals:
+        total_revenue = sum(revenue_vals)
+        return f"Revenue signals look stable at {round(total_revenue, 2)}. Validate margin drivers before reallocating budget."
+    if uptime_vals:
+        min_uptime = min(uptime_vals)
+        if min_uptime < 99.9:
+            return "Infrastructure health needs attention. Prioritize incident review and isolate critical reliability risks."
+        return "Infrastructure health looks stable. Keep monitoring deployment and uptime regressions."
+    return "No blocking signals detected. Continue monitoring."
+
+
+def _execute_orchestrator_agent_node(uid, client_id, flow_name, agent_slug, node_label, connector_steps, prior_results):
+    ws_slug = _workspace_slug_for_agent(agent_slug) or "business"
+    prompt_lines = [
+        f"Flow: {str(flow_name or 'Untitled Flow').strip()}",
+        f"Agent node: {str(node_label or agent_slug or 'Agent').strip()}",
+        "Task: analyze the current flow context and produce a concise execution recommendation.",
+    ]
+
+    connector_lines = []
+    for step in list(connector_steps or [])[-6:]:
+        step_data = step.get("data") or {}
+        connector_name = str(step_data.get("connector") or step.get("label") or "connector").strip()
+        metric_values = step_data.get("metric_values") or step_data.get("kpis") or {}
+        metrics_txt = ", ".join(
+            f"{mk}={mv}" for mk, mv in list(metric_values.items())[:8]
+        ) if isinstance(metric_values, dict) and metric_values else str(step.get("output") or "").strip()
+        source = str(step_data.get("source") or "unknown").strip()
+        connector_lines.append(f"- {connector_name} [{source}]: {metrics_txt[:360]}")
+
+    if connector_lines:
+        prompt_lines.append("Connector signals:")
+        prompt_lines.extend(connector_lines)
+
+    prior_lines = []
+    for step in list(prior_results or [])[-4:]:
+        if step.get("type") == "connector":
+            continue
+        step_label = str(step.get("label") or step.get("node_label") or step.get("type") or "step").strip()
+        step_out = str(step.get("output") or "").strip()
+        if step_out:
+            prior_lines.append(f"- {step_label}: {step_out[:280]}")
+    if prior_lines:
+        prompt_lines.append("Previous flow steps:")
+        prompt_lines.extend(prior_lines)
+
+    prompt_lines.extend([
+        "Output format:",
+        "- Start with a one-line diagnosis.",
+        "- Then give 3 concrete next actions.",
+        "- Keep it grounded in the signals above.",
+    ])
+    prompt = "\n".join(prompt_lines)
+
+    analysis = None
+    provider = "mock"
+    model = "simulate_response"
+    execution_path = "local_mock"
+    source = "mock"
+    fallback_used = False
+    fallback_reason = None
+    credential_mode = "none"
+    billing_owner = "unknown"
+    managed_account_id = None
+
+    try:
+        runtime = _resolve_llm_runtime_credentials(
+            user_id=uid,
+            provider_slug="vertex",
+            agent_slug=agent_slug,
+            client_id=client_id,
+        )
+        credential_mode = str(runtime.get("credential_mode") or "none")
+        billing_owner = str(runtime.get("billing_owner") or "unknown")
+        managed_account_id = runtime.get("managed_account_id")
+    except Exception:
+        runtime = {}
+
+    try:
+        live_analysis = _generate_real_agent_response(agent_slug, ws_slug, prompt, recent_history=[])
+    except Exception as live_err:
+        live_analysis = None
+        fallback_reason = str(live_err)
+
+    if live_analysis:
+        analysis = _sanitize_real_agent_output(agent_slug, ws_slug, prompt, live_analysis)
+        provider = "vertex"
+        model = COOLBITS_VERTEX_PROFILE
+        execution_path = "managed_gateway"
+        source = "live"
+    else:
+        fallback_used = True
+        if not fallback_reason:
+            fallback_reason = "real_agent_response_empty"
+        analysis = _fallback_orchestrator_agent_analysis(agent_slug, connector_steps)
+
+    data = {
+        "agent": agent_slug,
+        "analysis": analysis,
+        "recommendation": analysis,
+        "input_connectors": len(list(connector_steps or [])),
+        "source": source,
+        "provider": provider,
+        "model": model,
+        "execution_path": execution_path,
+        "fallback_used": fallback_used,
+        "fallback_reason": fallback_reason,
+        "credential_mode": credential_mode,
+        "billing_owner": billing_owner,
+        "managed_account_id": managed_account_id,
+        "prompt_preview": prompt[:800],
+    }
+    inp = f"Context from {len(list(connector_steps or []))} connector(s)"
+    out = analysis
+    return data, inp, out
+
+
 def _coolbits_get_request_token():
     if not has_request_context():
         return None
@@ -672,12 +2159,19 @@ def _ensure_users_auth_schema(conn):
         "ALTER TABLE users ADD COLUMN auth_provider TEXT DEFAULT 'local'",
         "ALTER TABLE users ADD COLUMN created_at TEXT",
         "ALTER TABLE users ADD COLUMN last_login_at TEXT",
+        "ALTER TABLE users ADD COLUMN is_owner INTEGER DEFAULT 0",
     ):
         try:
             conn.execute(stmt)
             conn.commit()
         except Exception:
             pass
+    # Seed uid=1 as platform owner (idempotent).
+    try:
+        conn.execute("UPDATE users SET is_owner = 1 WHERE id = 1 AND COALESCE(is_owner, 0) = 0")
+        conn.commit()
+    except Exception:
+        pass
     try:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email)")
         conn.commit()
@@ -1037,20 +2531,38 @@ PRICING_PRESETS = {
         "monthly_reset_hour": 0,
         "monthly_reset_minute": 0,
     },
-    "pro": {
-        "cost_multiplier": 0.7,
-        "monthly_grant": 10000,
-        "max_per_message": 150,
-        "daily_limit": 1000,
+    "personal": {
+        "cost_multiplier": 0.9,
+        "monthly_grant": 25000,
+        "max_per_message": 240,
+        "daily_limit": 2500,
         "monthly_reset_day": 1,
         "monthly_reset_hour": 0,
         "monthly_reset_minute": 0,
     },
-    "enterprise": {
-        "cost_multiplier": 0.5,
-        "monthly_grant": 50000,
-        "max_per_message": 300,
-        "daily_limit": 5000,
+    "business": {
+        "cost_multiplier": 0.75,
+        "monthly_grant": 75000,
+        "max_per_message": 500,
+        "daily_limit": 7000,
+        "monthly_reset_day": 1,
+        "monthly_reset_hour": 0,
+        "monthly_reset_minute": 0,
+    },
+    "agency": {
+        "cost_multiplier": 0.6,
+        "monthly_grant": 200000,
+        "max_per_message": 900,
+        "daily_limit": 18000,
+        "monthly_reset_day": 1,
+        "monthly_reset_hour": 0,
+        "monthly_reset_minute": 0,
+    },
+    "developer": {
+        "cost_multiplier": 0.6,
+        "monthly_grant": 200000,
+        "max_per_message": 900,
+        "daily_limit": 18000,
         "monthly_reset_day": 1,
         "monthly_reset_hour": 0,
         "monthly_reset_minute": 0,
@@ -1095,6 +2607,10 @@ DEFAULT_USER_SETTINGS = {
         "preferred_llm": "Grok",
         "byok_enabled": False,
         "strict_client_scope": True,
+    },
+    "permissions": {
+        "workspace_role": "member",
+        "scopes": [],
     },
     "economy": {
         "preset": "free",
@@ -1187,6 +2703,27 @@ def _sanitize_user_settings(settings_obj):
     integrations["preferred_llm"] = llm if llm in VALID_LLM else "Grok"
     integrations["byok_enabled"] = _to_bool(integrations.get("byok_enabled"), False)
     integrations["strict_client_scope"] = _to_bool(integrations.get("strict_client_scope"), True)
+
+    permissions = merged.get("permissions") if isinstance(merged.get("permissions"), dict) else {}
+    raw_ws_role = str(
+        permissions.get("workspace_role")
+        or permissions.get("role")
+        or profile.get("role")
+        or "member"
+    ).strip().lower()
+    if raw_ws_role in ("owner", "admin", "member", "guest"):
+        workspace_role = raw_ws_role
+    elif raw_ws_role in ("superadmin", "super_admin"):
+        workspace_role = "owner"
+    else:
+        workspace_role = "member"
+    raw_scopes = permissions.get("scopes")
+    scopes = []
+    if isinstance(raw_scopes, list):
+        scopes = [str(s).strip().lower() for s in raw_scopes if str(s or "").strip()][:200]
+    permissions["workspace_role"] = workspace_role
+    permissions["scopes"] = scopes
+    merged["permissions"] = permissions
 
 
     economy = merged["economy"]
@@ -1295,6 +2832,39 @@ def _save_user_settings(conn, user_id, settings_obj):
     return sanitized
 
 
+def _ensure_settings_audit_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS settings_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            payload_json TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_settings_audit_user_id ON settings_audit_log(user_id)")
+    except Exception:
+        pass
+
+
+def _log_settings_audit(conn, *, user_id, action, payload=None):
+    _ensure_settings_audit_table(conn)
+    conn.execute(
+        """
+        INSERT INTO settings_audit_log (user_id, action, payload_json)
+        VALUES (?, ?, ?)
+        """,
+        (
+            int(user_id or 0),
+            str(action or "").strip() or "settings_update",
+            json.dumps(payload or {}, ensure_ascii=False),
+        ),
+    )
+
+
 def _get_user_settings(user_id):
     conn = get_db()
     try:
@@ -1306,6 +2876,10 @@ def _get_user_settings(user_id):
 
 _PERSONAL_ASSISTANT_NAME_MIGRATED = False
 _CLIENT_SCOPED_CONFIGS_MIGRATED = False
+_MANAGED_PROVIDER_ACCOUNTS_SEEDED = False
+_PROVIDER_CREDENTIALS_MIGRATED = False
+_AGENTS_CONFIG_API_KEY_REMOVED = False
+_PROVIDER_CREDENTIALS_FERNET = None
 
 
 def _table_exists(conn, table_name):
@@ -1351,6 +2925,211 @@ def _has_unique_index_on_columns(conn, table_name, wanted_cols):
         if cols == wanted:
             return True
     return False
+
+
+def _workspace_slug_for_agent(agent_slug):
+    slug = str(agent_slug or "").strip().lower()
+    if not slug:
+        return ""
+    for ws_slug, ws_data in (workspaces or {}).items():
+        agents = (ws_data or {}).get("agents") or {}
+        if slug in agents:
+            return str(ws_slug or "").strip().lower()
+    reg = AGENT_REGISTRY_BY_SLUG.get(slug) or {}
+    return str(reg.get("category") or "").strip().lower()
+
+
+def _provider_credentials_secret():
+    secret = str(
+        os.getenv("PROVIDER_CREDENTIALS_SECRET")
+        or app.config.get("SECRET_KEY")
+        or os.getenv("COOLBITS_JWT_SECRET")
+        or "dev-provider-credentials-secret"
+    ).strip()
+    digest = hashlib.sha256(secret.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest)
+
+
+def _provider_credentials_fernet():
+    global _PROVIDER_CREDENTIALS_FERNET
+    if _PROVIDER_CREDENTIALS_FERNET is not None:
+        return _PROVIDER_CREDENTIALS_FERNET
+    if Fernet is None:
+        return None
+    _PROVIDER_CREDENTIALS_FERNET = Fernet(_provider_credentials_secret())
+    return _PROVIDER_CREDENTIALS_FERNET
+
+
+def _encrypt_provider_secret(raw_secret):
+    value = str(raw_secret or "").strip()
+    if not value:
+        return None
+    fernet = _provider_credentials_fernet()
+    if fernet is None:
+        raise RuntimeError("provider_credentials_encryption_unavailable")
+    return fernet.encrypt(value.encode("utf-8")).decode("utf-8")
+
+
+def _decrypt_provider_secret(encrypted_secret):
+    raw = str(encrypted_secret or "").strip()
+    if not raw:
+        return ""
+    fernet = _provider_credentials_fernet()
+    if fernet is None:
+        raise RuntimeError("provider_credentials_encryption_unavailable")
+    try:
+        return fernet.decrypt(raw.encode("utf-8")).decode("utf-8")
+    except InvalidToken:
+        return ""
+
+
+def _mask_provider_secret(secret):
+    value = str(secret or "").strip()
+    if not value:
+        return ""
+    if len(value) <= 6:
+        return "••••••"
+    return value[:3] + "••••••" + value[-2:]
+
+
+def _provider_credential_metadata_json(metadata=None):
+    try:
+        return json.dumps(metadata or {}, ensure_ascii=False)
+    except Exception:
+        return "{}"
+
+
+def _provider_credential_metadata_load(raw):
+    try:
+        data = json.loads(raw) if raw else {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _upsert_provider_credential(conn, *, user_id, provider_slug, workspace_slug="", client_id=0, api_key=None, mode="byok", status="active", last_validated_at=None, last_error=None, metadata=None):
+    provider = _normalize_llm_provider_slug(provider_slug)
+    if not provider:
+        return None
+    encrypted = _encrypt_provider_secret(api_key) if str(api_key or "").strip() else None
+    key_last4 = str(api_key or "").strip()[-4:] if str(api_key or "").strip() else None
+    meta = dict(metadata or {})
+    if key_last4:
+        meta["key_last4"] = key_last4
+    conn.execute(
+        """
+        INSERT INTO provider_credentials
+            (user_id, client_id, workspace_slug, provider_slug, mode,
+             secret_encrypted, status, last_validated_at, last_error,
+             metadata_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(user_id, client_id, workspace_slug, provider_slug) DO UPDATE SET
+            mode = excluded.mode,
+            secret_encrypted = excluded.secret_encrypted,
+            status = excluded.status,
+            last_validated_at = excluded.last_validated_at,
+            last_error = excluded.last_error,
+            metadata_json = excluded.metadata_json,
+            updated_at = datetime('now')
+        """,
+        (
+            int(user_id or 0),
+            int(client_id or 0),
+            str(workspace_slug or "").strip().lower(),
+            provider,
+            str(mode or "byok")[:24],
+            encrypted,
+            str(status or "active")[:24],
+            str(last_validated_at or "").strip() or None,
+            str(last_error or "").strip() or None,
+            _provider_credential_metadata_json(meta),
+        ),
+    )
+    row = conn.execute(
+        """
+        SELECT id, user_id, client_id, workspace_slug, provider_slug, mode,
+               secret_encrypted, status, last_validated_at, last_error,
+               metadata_json, created_at, updated_at
+        FROM provider_credentials
+        WHERE user_id = ? AND client_id = ? AND workspace_slug = ? AND provider_slug = ?
+        LIMIT 1
+        """,
+        (int(user_id or 0), int(client_id or 0), str(workspace_slug or "").strip().lower(), provider),
+    ).fetchone()
+    return row
+
+
+def _delete_provider_credential(conn, *, user_id, provider_slug, workspace_slug="", client_id=0):
+    provider = _normalize_llm_provider_slug(provider_slug)
+    if not provider:
+        return 0
+    cur = conn.execute(
+        """
+        DELETE FROM provider_credentials
+        WHERE user_id = ? AND client_id = ? AND workspace_slug = ? AND provider_slug = ?
+        """,
+        (int(user_id or 0), int(client_id or 0), str(workspace_slug or "").strip().lower(), provider),
+    )
+    return int(cur.rowcount or 0)
+
+
+def _lookup_provider_credential(user_id, provider_slug, agent_slug=None, client_id=None):
+    provider = _normalize_llm_provider_slug(provider_slug)
+    if int(user_id or 0) <= 0 or not provider:
+        return None
+    workspace_slug = _workspace_slug_for_agent(agent_slug)
+    conn = get_db()
+    try:
+        _ensure_client_tables(conn)
+        rows = conn.execute(
+            """
+            SELECT id, user_id, client_id, workspace_slug, provider_slug, mode,
+                   secret_encrypted, status, last_validated_at, last_error,
+                   metadata_json, created_at, updated_at
+            FROM provider_credentials
+            WHERE user_id = ?
+              AND provider_slug = ?
+              AND client_id IN (?, 0)
+              AND workspace_slug IN (?, '')
+            ORDER BY
+              CASE WHEN client_id = ? THEN 0 ELSE 1 END,
+              CASE WHEN workspace_slug = ? THEN 0 ELSE 1 END,
+              datetime(updated_at) DESC,
+              id DESC
+            LIMIT 1
+            """,
+            (
+                int(user_id or 0),
+                provider,
+                int(client_id or 0),
+                str(workspace_slug or "").strip().lower(),
+                int(client_id or 0),
+                str(workspace_slug or "").strip().lower(),
+            ),
+        ).fetchall()
+        if not rows:
+            return None
+        row = rows[0]
+        secret = _decrypt_provider_secret(row[6]) if row[6] else ""
+        metadata = _provider_credential_metadata_load(row[10])
+        return {
+            "id": int(row[0]),
+            "user_id": int(row[1]),
+            "client_id": int(row[2] or 0),
+            "workspace_slug": str(row[3] or ""),
+            "provider_slug": str(row[4] or ""),
+            "mode": str(row[5] or "byok"),
+            "api_key": secret,
+            "status": str(row[7] or ""),
+            "last_validated_at": str(row[8] or "") or None,
+            "last_error": str(row[9] or "") or None,
+            "metadata": metadata,
+            "created_at": str(row[11] or "") or None,
+            "updated_at": str(row[12] or "") or None,
+            "key_last4": str(metadata.get("key_last4") or "") or (secret[-4:] if secret else ""),
+        }
+    finally:
+        conn.close()
 
 
 def _rebuild_agents_config_per_client(conn):
@@ -1478,6 +3257,131 @@ def _rebuild_connectors_config_per_client(conn):
     conn.execute(f"DROP TABLE {old_name}")
 
 
+def _migrate_agent_api_keys_to_provider_credentials(conn):
+    if "api_key" not in _table_columns(conn, "agents_config"):
+        return 0
+    rows = conn.execute(
+        """
+        SELECT id, user_id, COALESCE(client_id, 0), agent_slug, llm_provider, llm_model, api_key, updated_at
+        FROM agents_config
+        WHERE COALESCE(TRIM(api_key), '') <> ''
+        ORDER BY datetime(updated_at) DESC, id DESC
+        """
+    ).fetchall()
+    if not rows:
+        return 0
+
+    migrated = 0
+    seen = set()
+    for row in rows:
+        user_id = int(row[1] or 0)
+        client_id = int(row[2] or 0)
+        agent_slug = str(row[3] or "").strip().lower()
+        provider = _normalize_llm_provider_slug(row[4]) or _infer_llm_provider_from_model(row[5])
+        api_key = str(row[6] or "").strip()
+        workspace_slug = _workspace_slug_for_agent(agent_slug)
+        if not user_id or not provider or not api_key:
+            continue
+        dedupe_key = (user_id, client_id, workspace_slug, provider)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        _upsert_provider_credential(
+            conn,
+            user_id=user_id,
+            client_id=client_id,
+            workspace_slug=workspace_slug,
+            provider_slug=provider,
+            api_key=api_key,
+            mode="byok",
+            status="active",
+            last_validated_at=str(row[7] or "").strip() or None,
+            metadata={
+                "migrated_from": "agents_config.api_key",
+                "migrated_from_agent_slug": agent_slug,
+            },
+        )
+        migrated += 1
+
+    conn.execute(
+        """
+        UPDATE agents_config
+        SET api_key = NULL,
+            updated_at = datetime('now')
+        WHERE COALESCE(TRIM(api_key), '') <> ''
+        """
+    )
+    return migrated
+
+
+def _rebuild_agents_config_without_api_key(conn):
+    if not _table_exists(conn, "agents_config"):
+        return False
+    cols = _table_columns(conn, "agents_config")
+    if "api_key" not in cols:
+        return False
+
+    old_name = "agents_config_old_drop_api_key"
+    conn.execute(f"DROP TABLE IF EXISTS {old_name}")
+    conn.execute("ALTER TABLE agents_config RENAME TO agents_config_old_drop_api_key")
+    conn.execute(
+        """
+        CREATE TABLE agents_config (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER DEFAULT 1,
+            client_id INTEGER NOT NULL DEFAULT 0,
+            agent_slug TEXT NOT NULL,
+            custom_name TEXT,
+            avatar_base64 TEXT,
+            avatar_colors TEXT,
+            llm_provider TEXT,
+            llm_model TEXT,
+            temperature REAL DEFAULT 0.7,
+            max_tokens INTEGER DEFAULT 2048,
+            rag_enabled INTEGER DEFAULT 1,
+            status TEXT DEFAULT 'Active',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(user_id, agent_slug, client_id)
+        )
+        """
+    )
+    old_cols = _table_columns(conn, old_name)
+    expr = {
+        "id": "id" if "id" in old_cols else "NULL",
+        "user_id": "user_id" if "user_id" in old_cols else "1",
+        "client_id": "COALESCE(client_id, 0)" if "client_id" in old_cols else "0",
+        "agent_slug": "agent_slug" if "agent_slug" in old_cols else "''",
+        "custom_name": "custom_name" if "custom_name" in old_cols else "NULL",
+        "avatar_base64": "avatar_base64" if "avatar_base64" in old_cols else "NULL",
+        "avatar_colors": "avatar_colors" if "avatar_colors" in old_cols else "NULL",
+        "llm_provider": "llm_provider" if "llm_provider" in old_cols else "NULL",
+        "llm_model": "llm_model" if "llm_model" in old_cols else "NULL",
+        "temperature": "temperature" if "temperature" in old_cols else "0.7",
+        "max_tokens": "max_tokens" if "max_tokens" in old_cols else "2048",
+        "rag_enabled": "rag_enabled" if "rag_enabled" in old_cols else "1",
+        "status": "status" if "status" in old_cols else "'Active'",
+        "created_at": "created_at" if "created_at" in old_cols else "datetime('now')",
+        "updated_at": "updated_at" if "updated_at" in old_cols else "datetime('now')",
+    }
+    conn.execute(
+        f"""
+        INSERT INTO agents_config (
+            id, user_id, client_id, agent_slug, custom_name, avatar_base64, avatar_colors,
+            llm_provider, llm_model, temperature, max_tokens, rag_enabled, status, created_at, updated_at
+        )
+        SELECT
+            {expr["id"]}, {expr["user_id"]}, {expr["client_id"]}, {expr["agent_slug"]}, {expr["custom_name"]},
+            {expr["avatar_base64"]}, {expr["avatar_colors"]}, {expr["llm_provider"]}, {expr["llm_model"]},
+            {expr["temperature"]}, {expr["max_tokens"]}, {expr["rag_enabled"]},
+            {expr["status"]}, {expr["created_at"]}, {expr["updated_at"]}
+        FROM {old_name}
+        """
+    )
+    conn.execute(f"DROP TABLE {old_name}")
+    return True
+
+
 def _ensure_client_tables(conn):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS clients (
@@ -1512,6 +3416,11 @@ def _ensure_client_tables(conn):
     for stmt in (
         "ALTER TABLE flows ADD COLUMN client_id INTEGER",
         "ALTER TABLE conversations ADD COLUMN client_id INTEGER",
+        "ALTER TABLE conversations ADD COLUMN brief_objective TEXT",
+        "ALTER TABLE conversations ADD COLUMN brief_current_status TEXT",
+        "ALTER TABLE conversations ADD COLUMN brief_next_step TEXT",
+        "ALTER TABLE conversations ADD COLUMN brief_blocked_by TEXT",
+        "ALTER TABLE conversations ADD COLUMN brief_updated_at TEXT",
         "ALTER TABLE agents_config ADD COLUMN client_id INTEGER",
         "ALTER TABLE connectors_config ADD COLUMN client_id INTEGER",
     ):
@@ -1538,8 +3447,8 @@ def _ensure_client_tables(conn):
             except Exception:
                 pass
 
-    # One-time migration: keep slug `life-coach` but persist branding as "Personal Assistant"
-    # when custom_name is empty. This avoids UI regressions without breaking history.
+    # One-time migration: keep slug `life-coach` but persist canonical display_name
+    # when custom_name is empty. Uses AGENT_REGISTRY canonical name.
     global _PERSONAL_ASSISTANT_NAME_MIGRATED
     if not _PERSONAL_ASSISTANT_NAME_MIGRATED:
         try:
@@ -1550,12 +3459,175 @@ def _ensure_client_tables(conn):
                 WHERE agent_slug = ?
                   AND (custom_name IS NULL OR TRIM(custom_name) = '')
                 """,
-                ("Personal Assistant", "life-coach"),
+                ("Life Coach", "life-coach"),
             )
             conn.commit()
             _PERSONAL_ASSISTANT_NAME_MIGRATED = True
         except Exception:
             pass
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provider_credentials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            client_id INTEGER NOT NULL DEFAULT 0,
+            workspace_slug TEXT NOT NULL DEFAULT '',
+            provider_slug TEXT NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'byok',
+            secret_encrypted TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            last_validated_at TEXT,
+            last_error TEXT,
+            metadata_json TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(user_id, client_id, workspace_slug, provider_slug)
+        )
+        """
+    )
+    for stmt in (
+        "CREATE INDEX IF NOT EXISTS idx_provider_credentials_user ON provider_credentials(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_provider_credentials_provider ON provider_credentials(provider_slug)",
+        "CREATE INDEX IF NOT EXISTS idx_provider_credentials_scope ON provider_credentials(user_id, client_id, workspace_slug)",
+    ):
+        try:
+            conn.execute(stmt)
+        except Exception:
+            pass
+
+    global _PROVIDER_CREDENTIALS_MIGRATED
+    if not _PROVIDER_CREDENTIALS_MIGRATED:
+        try:
+            _migrate_agent_api_keys_to_provider_credentials(conn)
+            conn.commit()
+            _PROVIDER_CREDENTIALS_MIGRATED = True
+        except Exception:
+            pass
+
+    global _AGENTS_CONFIG_API_KEY_REMOVED
+    if not _AGENTS_CONFIG_API_KEY_REMOVED:
+        try:
+            if _rebuild_agents_config_without_api_key(conn):
+                conn.commit()
+            _AGENTS_CONFIG_API_KEY_REMOVED = True
+        except Exception:
+            pass
+
+    # ── Managed Provider Accounts ─────────────────────────────────────
+    # Central table for provider credentials managed by COOL BITS / Camarad.
+    # BYOK keys live in provider_credentials; this table holds platform-wide
+    # managed keys and enables the 3-mode credential resolution chain:
+    #   BYOK (provider_credentials) → Managed (managed_provider_accounts) → env fallback.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS managed_provider_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider_slug TEXT NOT NULL,
+            account_label TEXT NOT NULL,
+            owner_label TEXT NOT NULL DEFAULT 'COOL BITS / Camarad',
+            credential_mode TEXT NOT NULL DEFAULT 'managed',
+            auth_type TEXT NOT NULL DEFAULT 'api_key',
+            api_key_encrypted TEXT,
+            env_var_name TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            priority INTEGER NOT NULL DEFAULT 10,
+            rate_limit_rpm INTEGER,
+            monthly_budget_usd REAL,
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_mpa_provider_label "
+            "ON managed_provider_accounts(provider_slug, account_label)"
+        )
+    except Exception:
+        pass
+
+    # Seed default managed provider accounts (once).
+    global _MANAGED_PROVIDER_ACCOUNTS_SEEDED
+    if not _MANAGED_PROVIDER_ACCOUNTS_SEEDED:
+        _seed_managed_provider_accounts(conn)
+        _MANAGED_PROVIDER_ACCOUNTS_SEEDED = True
+
+
+def _seed_managed_provider_accounts(conn):
+    """Insert default managed-key rows for each supported provider."""
+    seeds = [
+        {
+            "provider_slug": "openai",
+            "account_label": "camarad",
+            "owner_label": "COOL BITS / Camarad",
+            "credential_mode": "managed",
+            "auth_type": "api_key",
+            "env_var_name": "OPENAI_API_KEY",
+            "priority": 10,
+            "notes": "OpenAI managed fallback — Phase 1 default.",
+        },
+        {
+            "provider_slug": "anthropic",
+            "account_label": "camarad",
+            "owner_label": "COOL BITS / Camarad",
+            "credential_mode": "managed",
+            "auth_type": "api_key",
+            "env_var_name": "ANTHROPIC_API_KEY",
+            "priority": 10,
+            "notes": "Anthropic managed fallback.",
+        },
+        {
+            "provider_slug": "xai",
+            "account_label": "camarad",
+            "owner_label": "COOL BITS / Camarad",
+            "credential_mode": "managed",
+            "auth_type": "api_key",
+            "env_var_name": "XAI_API_KEY",
+            "priority": 10,
+            "notes": "xAI / Grok managed fallback.",
+        },
+        {
+            "provider_slug": "vertex",
+            "account_label": "camarad-gateway",
+            "owner_label": "COOL BITS / Camarad",
+            "credential_mode": "managed",
+            "auth_type": "gateway",
+            "env_var_name": None,
+            "priority": 5,
+            "notes": "Vertex via Coolbits gateway — highest priority managed provider.",
+        },
+    ]
+    for seed in seeds:
+        try:
+            exists = conn.execute(
+                "SELECT id FROM managed_provider_accounts WHERE provider_slug = ? AND account_label = ? LIMIT 1",
+                (seed["provider_slug"], seed["account_label"]),
+            ).fetchone()
+            if not exists:
+                conn.execute(
+                    """
+                    INSERT INTO managed_provider_accounts
+                        (provider_slug, account_label, owner_label, credential_mode,
+                         auth_type, env_var_name, is_active, priority, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        seed["provider_slug"],
+                        seed["account_label"],
+                        seed["owner_label"],
+                        seed["credential_mode"],
+                        seed["auth_type"],
+                        seed.get("env_var_name"),
+                        seed["priority"],
+                        seed.get("notes", ""),
+                    ),
+                )
+        except Exception:
+            pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
 
 
 CT_MONTHLY_GRANT_FREE = 1000
@@ -1623,6 +3695,19 @@ def _ensure_usage_ledger_table(conn):
         "ALTER TABLE usage_ledger ADD COLUMN phase3_applied_at TEXT",
         "ALTER TABLE usage_ledger ADD COLUMN phase3_cap_reason TEXT",
         "ALTER TABLE usage_ledger ADD COLUMN meta_json TEXT",
+        # ── Credential + billing truth columns ────────────────────────
+        "ALTER TABLE usage_ledger ADD COLUMN credential_mode TEXT DEFAULT 'unknown'",
+        "ALTER TABLE usage_ledger ADD COLUMN billing_owner TEXT DEFAULT 'unknown'",
+        "ALTER TABLE usage_ledger ADD COLUMN execution_path TEXT DEFAULT 'unknown'",
+        "ALTER TABLE usage_ledger ADD COLUMN fallback_used INTEGER DEFAULT 0",
+        "ALTER TABLE usage_ledger ADD COLUMN fallback_reason TEXT",
+        "ALTER TABLE usage_ledger ADD COLUMN sell_price_usd REAL DEFAULT 0",
+        "ALTER TABLE usage_ledger ADD COLUMN margin_usd REAL DEFAULT 0",
+        "ALTER TABLE usage_ledger ADD COLUMN managed_account_id INTEGER",
+        # ── Cost-source truth column ──────────────────────────────────
+        "ALTER TABLE usage_ledger ADD COLUMN cost_source TEXT DEFAULT 'missing'",
+        # ── Event classification ──────────────────────────────────────
+        "ALTER TABLE usage_ledger ADD COLUMN is_billable_event INTEGER DEFAULT 1",
     ):
         try:
             conn.execute(stmt)
@@ -1638,6 +3723,9 @@ def _ensure_usage_ledger_table(conn):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ledger_status_created ON usage_ledger(status, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ledger_provider_model_created ON usage_ledger(provider, model, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ledger_phase3_created ON usage_ledger(phase3_applied, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ledger_credential_mode ON usage_ledger(credential_mode, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ledger_billing_owner ON usage_ledger(billing_owner, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ledger_event_type ON usage_ledger(event_type, created_at)")
     except Exception:
         pass
     _ensure_pricing_engine_tables(conn)
@@ -1960,6 +4048,13 @@ def _shadow_usage_preflight(
     step_id=None,
     trace_id=None,
     cost_estimate_usd=0.0,
+    credential_mode="unknown",
+    billing_owner="unknown",
+    execution_path="unknown",
+    fallback_used=False,
+    fallback_reason=None,
+    managed_account_id=None,
+    is_billable_event=True,
     meta=None,
 ):
     try:
@@ -1971,11 +4066,17 @@ def _shadow_usage_preflight(
                 user_id, client_id, workspace_id, event_type, amount, description, created_at,
                 request_id, run_id, step_id, agent_id, trace_id,
                 provider, model, region, model_class,
-                cost_estimate_usd, cost_final_usd, status, meta_json
+                cost_estimate_usd, cost_final_usd, status, meta_json,
+                credential_mode, billing_owner, execution_path,
+                fallback_used, fallback_reason, managed_account_id,
+                is_billable_event
             ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'),
                       ?, ?, ?, ?, ?,
                       ?, ?, ?, ?,
-                      ?, 0, 'ok', ?)
+                      ?, 0, 'ok', ?,
+                      ?, ?, ?,
+                      ?, ?, ?,
+                      ?)
             """,
             (
                 int(user_id),
@@ -1995,6 +4096,13 @@ def _shadow_usage_preflight(
                 str(model_class or "auto")[:24],
                 float(cost_estimate_usd or 0.0),
                 meta_json[:8000],
+                str(credential_mode or "unknown")[:24],
+                str(billing_owner or "unknown")[:128],
+                str(execution_path or "unknown")[:48],
+                1 if fallback_used else 0,
+                str(fallback_reason or "")[:200] or None,
+                int(managed_account_id) if managed_account_id else None,
+                1 if is_billable_event else 0,
             ),
         )
     except Exception as e:
@@ -2100,6 +4208,20 @@ def _shadow_usage_finalize(
             "minimum_ct_debit": minimum_ct,
         })
         meta_json = json.dumps(meta_dict, ensure_ascii=True)
+
+        # ── Cost source truth ─────────────────────────────────────────
+        # actual  = real usage-based API callback (future)
+        # estimated = computed from pricing_catalog × tokens
+        # missing = no pricing catalog entry → cost is a guess at best
+        cost_source = "estimated" if pricing else "missing"
+
+        # ── Sell price & margin (only when cost is trustworthy) ───────
+        sell_price_usd = None
+        margin_usd = None
+        if cost_source != "missing" and billable_usd is not None:
+            sell_price_usd = float(billable_usd)
+            margin_usd = sell_price_usd - float(computed_cost_final_usd or 0.0)
+
         conn.execute(
             """
             UPDATE usage_ledger
@@ -2118,6 +4240,9 @@ def _shadow_usage_finalize(
                 risk_buffer_pct = ?,
                 target_margin_pct = ?,
                 minimum_ct_debit = ?,
+                sell_price_usd = ?,
+                margin_usd = ?,
+                cost_source = ?,
                 meta_json = ?
             WHERE request_id = ?
             """,
@@ -2137,6 +4262,9 @@ def _shadow_usage_finalize(
                 float(risk_buffer),
                 float(target_margin),
                 int(minimum_ct),
+                float(sell_price_usd) if sell_price_usd is not None else None,
+                float(margin_usd) if margin_usd is not None else None,
+                str(cost_source)[:16],
                 meta_json[:8000],
                 str(request_id or "")[:96],
             ),
@@ -2303,7 +4431,11 @@ def _get_user_ct_snapshot(conn, user_id, client_id=None):
 
     row = conn.execute(
         """
-        SELECT COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0)
+        SELECT COALESCE(SUM(CASE
+            WHEN amount < 0 THEN -amount
+            WHEN LOWER(COALESCE(event_type, '')) = 'refund' AND amount > 0 THEN -amount
+            ELSE 0
+        END), 0)
         FROM usage_ledger
         WHERE user_id = ?
           AND created_at >= ?
@@ -2311,7 +4443,7 @@ def _get_user_ct_snapshot(conn, user_id, client_id=None):
         """,
         (int(user_id), cycle_start, cycle_end),
     ).fetchone()
-    used_month = int((row[0] if row else 0) or 0)
+    used_month = int(max(0, int((row[0] if row else 0) or 0)))
 
     if client_id is None:
         row = conn.execute(
@@ -2445,7 +4577,11 @@ def _phase3_workspace_daily_spent(conn, user_id, workspace_id):
         return 0
     row = conn.execute(
         """
-        SELECT COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0)
+        SELECT COALESCE(SUM(CASE
+            WHEN amount < 0 THEN -amount
+            WHEN LOWER(COALESCE(event_type, '')) = 'refund' AND amount > 0 THEN -amount
+            ELSE 0
+        END), 0)
         FROM usage_ledger
         WHERE user_id = ?
           AND workspace_id = ?
@@ -2453,7 +4589,7 @@ def _phase3_workspace_daily_spent(conn, user_id, workspace_id):
         """,
         (int(user_id), ws),
     ).fetchone()
-    return int((row[0] if row else 0) or 0)
+    return int(max(0, int((row[0] if row else 0) or 0)))
 
 
 def _phase3_resolve_ct_debit(conn, request_id, requested_amt):
@@ -2518,6 +4654,137 @@ def _phase3_mark_request(conn, request_id, **kwargs):
         return
     params.append(str(request_id)[:96])
     conn.execute(f"UPDATE usage_ledger SET {', '.join(sets)} WHERE request_id = ?", tuple(params))
+
+
+def _refund_ct_spend(conn, *, request_id, user_id, reason="", error_code=None, client_id=None, workspace_id=None):
+    rid = _shadow_request_id(request_id)
+    try:
+        uid = int(user_id or 0)
+    except Exception:
+        uid = 0
+    if not rid or uid <= 0:
+        return {"success": False, "refunded": False, "error": "missing_request_id"}
+
+    _ensure_usage_ledger_table(conn)
+    refund_request_id = f"refund:{hashlib.sha1(rid.encode('utf-8')).hexdigest()}"[:96]
+    existing = conn.execute(
+        """
+        SELECT amount
+        FROM usage_ledger
+        WHERE request_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (refund_request_id,),
+    ).fetchone()
+    if existing:
+        spent = int(existing["amount"] or 0)
+        snap = _get_user_ct_snapshot(conn, uid, client_id=client_id)
+        return {
+            "success": True,
+            "refunded": True,
+            "idempotent": True,
+            "amount": int(max(0, spent)),
+            "new_balance": int(snap.get("ct_balance", 0) or 0),
+            "refund_request_id": refund_request_id,
+        }
+
+    row = conn.execute(
+        """
+        SELECT
+            user_id,
+            client_id,
+            workspace_id,
+            event_type,
+            ct_actual_debit,
+            ct_debit_applied,
+            credential_mode,
+            billing_owner,
+            execution_path,
+            meta_json
+        FROM usage_ledger
+        WHERE request_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (rid,),
+    ).fetchone()
+    if not row:
+        return {"success": False, "refunded": False, "error": "request_not_found"}
+
+    if str(row["event_type"] or "").strip().lower() != "run_flow":
+        return {"success": False, "refunded": False, "error": "non_refundable_event"}
+
+    spent = int(row["ct_debit_applied"] or row["ct_actual_debit"] or 0)
+    if spent <= 0:
+        return {"success": False, "refunded": False, "error": "nothing_to_refund"}
+
+    effective_client_id = client_id if client_id is not None else row["client_id"]
+    effective_workspace_id = workspace_id if workspace_id is not None else row["workspace_id"]
+    reason_txt = str(reason or "Refund for failed flow execution").strip()[:300]
+    err_code = str(error_code or "orchestrator_execute_failed").strip()[:64] or None
+
+    meta = {
+        "original_request_id": rid,
+        "refund_reason": reason_txt,
+        "refund_error_code": err_code,
+        "refunded_at": datetime.now().isoformat(),
+        "shadow_mode": True,
+    }
+    conn.execute(
+        """
+        INSERT INTO usage_ledger (
+            user_id, client_id, workspace_id, event_type, amount, description, created_at,
+            request_id, status, error_code, is_billable_event,
+            credential_mode, billing_owner, execution_path, meta_json
+        ) VALUES (?, ?, ?, 'refund', ?, ?, datetime('now'),
+                  ?, 'ok', ?, 0,
+                  ?, ?, ?, ?)
+        """,
+        (
+            uid,
+            int(effective_client_id) if effective_client_id is not None else None,
+            str(effective_workspace_id or "").strip() or None,
+            int(spent),
+            reason_txt,
+            refund_request_id,
+            err_code,
+            str(row["credential_mode"] or "unknown")[:24],
+            str(row["billing_owner"] or "unknown")[:128],
+            str(row["execution_path"] or "unknown")[:48],
+            json.dumps(meta, ensure_ascii=True)[:8000],
+        ),
+    )
+
+    orig_meta = {}
+    try:
+        orig_meta = json.loads(row["meta_json"]) if row["meta_json"] else {}
+    except Exception:
+        orig_meta = {}
+    orig_meta.update({
+        "refunded": True,
+        "refund_request_id": refund_request_id,
+        "refund_reason": reason_txt,
+        "refund_error_code": err_code,
+    })
+    conn.execute(
+        """
+        UPDATE usage_ledger
+        SET status = ?, error_code = ?, meta_json = ?
+        WHERE request_id = ?
+        """,
+        ("refunded", err_code, json.dumps(orig_meta, ensure_ascii=True)[:8000], rid),
+    )
+
+    snap = _get_user_ct_snapshot(conn, uid, client_id=effective_client_id)
+    return {
+        "success": True,
+        "refunded": True,
+        "idempotent": False,
+        "amount": int(spent),
+        "new_balance": int(snap.get("ct_balance", 0) or 0),
+        "refund_request_id": refund_request_id,
+    }
 
 
 def _spend_ct_phase3(conn, user_id, amount, *, request_id, event_type="unknown", description="", client_id=None, workspace_id=None):
@@ -2635,14 +4902,18 @@ def _spend_ct(conn, user_id, amount, event_type="unknown", description="", clien
     daily_limit = int(snap.get("daily_limit", 0) or 0)
     used_today_row = conn.execute(
         """
-        SELECT COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0)
+        SELECT COALESCE(SUM(CASE
+            WHEN amount < 0 THEN -amount
+            WHEN LOWER(COALESCE(event_type, '')) = 'refund' AND amount > 0 THEN -amount
+            ELSE 0
+        END), 0)
         FROM usage_ledger
         WHERE user_id = ?
           AND DATE(created_at) = DATE('now')
         """,
         (int(user_id),),
     ).fetchone()
-    used_today = int((used_today_row[0] if used_today_row else 0) or 0)
+    used_today = int(max(0, int((used_today_row[0] if used_today_row else 0) or 0)))
     if daily_limit > 0 and (used_today + amt) > daily_limit:
         return {
             "success": False,
@@ -2724,8 +4995,9 @@ def _default_agent_custom_name(agent_slug: str) -> str:
     s = str(agent_slug or "").strip().lower()
     if not s:
         return "Agent"
-    if s == "life-coach":
-        return "Personal Assistant"
+    reg = AGENT_REGISTRY_BY_SLUG.get(s)
+    if reg:
+        return reg["display_name"]
     for _ws_data in workspaces.values():
         agents = _ws_data.get("agents") or {}
         if s in agents:
@@ -2758,19 +5030,20 @@ def _ensure_vertex_defaults_for_user(user_id):
             custom_name = _default_agent_custom_name(agent_slug)
             if default_name:
                 custom_name = default_name
-            cursor.execute(
+            _db_retry(lambda: cursor.execute(
                 """
                 INSERT OR IGNORE INTO agents_config
                 (user_id, client_id, agent_slug, custom_name, llm_provider, llm_model, temperature, max_tokens, rag_enabled, status, updated_at)
-                VALUES (?, NULL, ?, ?, 'vertex', ?, 0.7, 2048, 1, 'Active', datetime('now'))
+                VALUES (?, 0, ?, ?, 'vertex', ?, 0.7, 2048, 1, 'Active', datetime('now'))
                 """,
                 (int(user_id), str(agent_slug), str(custom_name), str(COOLBITS_VERTEX_PROFILE)),
-            )
-            cursor.execute(
+            ))
+            _db_retry(lambda: cursor.execute(
                 """
                 UPDATE agents_config
                 SET llm_provider = 'vertex',
                     llm_model = ?,
+                    custom_name = CASE WHEN COALESCE(custom_name, '') = '' THEN ? ELSE custom_name END,
                     updated_at = datetime('now')
                 WHERE user_id = ?
                   AND agent_slug = ?
@@ -2779,9 +5052,9 @@ def _ensure_vertex_defaults_for_user(user_id):
                       OR COALESCE(llm_model, '') <> ?
                   )
                 """,
-                (str(COOLBITS_VERTEX_PROFILE), int(user_id), str(agent_slug), str(COOLBITS_VERTEX_PROFILE)),
-            )
-        conn.commit()
+                (str(COOLBITS_VERTEX_PROFILE), str(custom_name), int(user_id), str(agent_slug), str(COOLBITS_VERTEX_PROFILE)),
+            ))
+        _db_retry(lambda: conn.commit())
     except Exception as e:
         print(f"ensure_vertex_defaults_error: {e}")
     finally:
@@ -2840,6 +5113,14 @@ def readyz():
         },
     }
     return jsonify(payload), (200 if db_ok else 503)
+
+
+@app.route("/api/_buildinfo")
+def api_buildinfo():
+    payload = dict(APP_BUILD_INFO)
+    payload["now_utc"] = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    payload["pid"] = int(os.getpid())
+    return jsonify(payload), 200
 
 # @app.before_request
 # def before_request():
@@ -2954,7 +5235,12 @@ def _build_chat_home_payload(user_id, client_id, settings_obj):
     convo_sql = """
         SELECT c.id, c.workspace_slug, c.agent_slug, c.title, c.created_at,
                (SELECT content FROM messages WHERE conv_id = c.id ORDER BY timestamp DESC LIMIT 1) AS last_message,
-               (SELECT MAX(timestamp) FROM messages WHERE conv_id = c.id) AS last_activity
+               (SELECT MAX(timestamp) FROM messages WHERE conv_id = c.id) AS last_activity,
+               c.brief_objective,
+               c.brief_current_status,
+               c.brief_next_step,
+               c.brief_blocked_by,
+               c.brief_updated_at
         FROM conversations c
         WHERE c.user_id = ?
     """
@@ -2977,13 +5263,24 @@ def _build_chat_home_payload(user_id, client_id, settings_obj):
             continue
         msg = str(row[5] or "").strip()
         if len(msg) > 120:
-            msg = msg[:120] + "…"
+            msg = msg[:120] + "..."
+        brief = {
+            "objective": str(row[7] or "").strip(),
+            "current_status": str(row[8] or "").strip(),
+            "next_step": str(row[9] or "").strip(),
+            "blocked_by": str(row[10] or "").strip(),
+            "updated_at": row[11],
+        }
+        has_brief = any(brief.get(field) for field in ("objective", "current_status", "next_step", "blocked_by"))
         latest_by_agent[key] = {
             "conv_id": int(row[0]),
             "title": (row[3] or "").strip(),
             "created_at": row[4],
             "last_message": msg,
             "last_activity": row[6] or row[4],
+            "brief": brief,
+            "has_brief": has_brief,
+            "brief_signal": _build_conversation_brief_signal(brief) if has_brief else None,
         }
 
     group_order = ["personal", "business", "agency", "development"]
@@ -2999,7 +5296,9 @@ def _build_chat_home_payload(user_id, client_id, settings_obj):
             known_slugs.add(agent_slug)
             cfg = agent_cfg.get(agent_slug) or {}
             latest = latest_by_agent.get((ws_slug, agent_slug)) or {}
-            name = str(cfg.get("custom_name") or default_name or _humanize_slug(agent_slug)).strip()
+            reg = AGENT_REGISTRY_BY_SLUG.get(agent_slug) or {}
+            name = str(cfg.get("custom_name") or get_agent_display_name(agent_slug, fallback=default_name)).strip()
+            role_label = get_agent_role_label(agent_slug, fallback=name)
             conv_id = latest.get("conv_id")
             open_url = f"/chat/{ws_slug}/{agent_slug}?conv_id={conv_id}" if conv_id else f"/chat/{ws_slug}/{agent_slug}"
             status_text = _agent_presence_label(cfg.get("status"))
@@ -3009,6 +5308,7 @@ def _build_chat_home_payload(user_id, client_id, settings_obj):
                 "workspace_icon": _workspace_icon_class(ws_slug),
                 "agent_slug": agent_slug,
                 "agent_name": name,
+                "agent_role_label": role_label,
                 "status": status_text,
                 "status_class": status_text.lower(),
                 "avatar_base64": cfg.get("avatar_base64"),
@@ -3020,7 +5320,10 @@ def _build_chat_home_payload(user_id, client_id, settings_obj):
                 "last_message": latest.get("last_message") or "Start a new conversation",
                 "last_activity": latest.get("last_activity") or "",
                 "last_activity_label": _compact_time_label(latest.get("last_activity")),
-                "search_text": f"{name} {agent_slug} {ws_name}".lower(),
+                "has_brief": bool(latest.get("has_brief")),
+                "brief": latest.get("brief") or _empty_conversation_brief(),
+                "brief_signal": latest.get("brief_signal"),
+                "search_text": f"{name} {role_label} {agent_slug} {ws_name} {reg.get('category') or ws_slug}".lower(),
             }
             ws_agents.append(card)
             flat_agents.append(card)
@@ -3037,6 +5340,7 @@ def _build_chat_home_payload(user_id, client_id, settings_obj):
         extra_agents = []
         for agent_slug in extra_slugs:
             cfg = agent_cfg.get(agent_slug) or {}
+            reg = AGENT_REGISTRY_BY_SLUG.get(agent_slug) or {}
             latest = None
             latest_ws = "other"
             for (ws_key, slug_key), item in latest_by_agent.items():
@@ -3044,7 +5348,8 @@ def _build_chat_home_payload(user_id, client_id, settings_obj):
                     latest = item
                     latest_ws = ws_key
                     break
-            name = str(cfg.get("custom_name") or _humanize_slug(agent_slug)).strip()
+            name = str(cfg.get("custom_name") or get_agent_display_name(agent_slug)).strip()
+            role_label = get_agent_role_label(agent_slug, fallback=name)
             conv_id = latest.get("conv_id") if latest else None
             open_url = f"/chat/{latest_ws}/{agent_slug}?conv_id={conv_id}" if conv_id else f"/chat/{latest_ws}/{agent_slug}"
             status_text = _agent_presence_label(cfg.get("status"))
@@ -3054,6 +5359,7 @@ def _build_chat_home_payload(user_id, client_id, settings_obj):
                 "workspace_icon": _workspace_icon_class("other"),
                 "agent_slug": agent_slug,
                 "agent_name": name,
+                "agent_role_label": role_label,
                 "status": status_text,
                 "status_class": status_text.lower(),
                 "avatar_base64": cfg.get("avatar_base64"),
@@ -3065,7 +5371,10 @@ def _build_chat_home_payload(user_id, client_id, settings_obj):
                 "last_message": (latest or {}).get("last_message") or "Start a new conversation",
                 "last_activity": (latest or {}).get("last_activity") or "",
                 "last_activity_label": _compact_time_label((latest or {}).get("last_activity")),
-                "search_text": f"{name} {agent_slug} other".lower(),
+                "has_brief": bool((latest or {}).get("has_brief")),
+                "brief": (latest or {}).get("brief") or _empty_conversation_brief(),
+                "brief_signal": (latest or {}).get("brief_signal"),
+                "search_text": f"{name} {role_label} {agent_slug} other {reg.get('category') or 'other'}".lower(),
             }
             extra_agents.append(card)
             flat_agents.append(card)
@@ -3111,6 +5420,866 @@ def _must_complete_onboarding(user_id):
     if int(user_id or 0) <= 0:
         return False
     return not _is_onboarding_complete(_get_user_settings(int(user_id)))
+
+
+def _mcc_csv_set(raw):
+    out = set()
+    for token in str(raw or "").split(","):
+        value = str(token or "").strip().lower()
+        if value:
+            out.add(value)
+    return out
+
+
+def _mcc_get_user_email(user_id):
+    if int(user_id or 0) <= 0:
+        return ""
+    settings = _get_user_settings(int(user_id))
+    profile = settings.get("profile") if isinstance(settings, dict) else {}
+    email = _normalize_email((profile or {}).get("email"))
+    if email:
+        return email
+    conn = None
+    try:
+        conn = get_db()
+        row = conn.execute("SELECT email FROM users WHERE id = ? LIMIT 1", (int(user_id),)).fetchone()
+        if row:
+            return _normalize_email(row[0])
+    except Exception:
+        return ""
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return ""
+
+
+def _mcc_internal_authorized():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return False, "unauthenticated", ""
+    uid = get_current_user_id()
+    if int(uid or 0) <= 0:
+        return False, "unauthorized", ""
+    email = _mcc_get_user_email(uid)
+    allowed_emails = _mcc_csv_set(MCC_ALLOWED_EMAILS)
+    allowed_domains = _mcc_csv_set(MCC_ALLOWED_DOMAINS)
+    if not allowed_emails and not allowed_domains:
+        return False, "allowlist_not_configured", email
+    if email and email in allowed_emails:
+        return True, "ok", email
+    domain = email.split("@", 1)[1] if ("@" in email) else ""
+    if domain and domain in allowed_domains:
+        return True, "ok", email
+    return False, "forbidden", email
+
+
+MCC_EMAIL_OWNER_SLUG = {
+    "ppc@hustlerrmedia.com": "hustlerr",
+    "coolbits.dm@gmail.com": "coolbits",
+    "andrei.ciprian@leadlion.ro": "leadlion",
+}
+
+
+def _mcc_owner_slug_for_email(email):
+    return str(MCC_EMAIL_OWNER_SLUG.get(str(email or "").strip().lower()) or "").strip().lower()
+
+
+def _mcc_default_login_customer_id_for_slug(slug):
+    key = str(slug or "").strip().lower()
+    if key == "hustlerr":
+        return _mcc_to_customer_id(MCC_HUSTLERR_LOGIN_CUSTOMER_ID) or "9810709746"
+    if key == "coolbits":
+        return _mcc_to_customer_id(MCC_COOLBITS_LOGIN_CUSTOMER_ID)
+    if key == "leadlion":
+        return _mcc_to_customer_id(MCC_LEADLION_LOGIN_CUSTOMER_ID)
+    return ""
+
+
+def _mcc_filter_registry_for_email(items, email):
+    rows = list(items or [])
+    owner_slug = _mcc_owner_slug_for_email(email)
+    if not owner_slug:
+        return rows
+    scoped = [r for r in rows if str((r or {}).get("slug") or "").strip().lower() == owner_slug]
+    return scoped if scoped else rows
+
+
+def _mcc_default_slug(items, email):
+    rows = list(items or [])
+    if not rows:
+        return ""
+    owner_slug = _mcc_owner_slug_for_email(email)
+    if owner_slug:
+        for r in rows:
+            if str((r or {}).get("slug") or "").strip().lower() == owner_slug:
+                return owner_slug
+    for r in rows:
+        if str((r or {}).get("slug") or "").strip().lower() == "hustlerr":
+            return "hustlerr"
+    return str(rows[0].get("slug") or "").strip().lower()
+
+
+def _mcc_normalize_login_customer_id(raw, min_len=8, max_len=16):
+    digits = _mcc_to_customer_id(raw)
+    if not digits:
+        return ""
+    if len(digits) < int(min_len) or len(digits) > int(max_len):
+        return ""
+    return digits
+
+
+def _mcc_slug_from_login_customer_id(login_customer_id):
+    digits = _mcc_normalize_login_customer_id(login_customer_id)
+    if not digits:
+        return ""
+    return f"mcc_{digits}"
+
+
+def _mcc_registry_get_by_login_customer_id(conn, user_id, login_customer_id):
+    target = _mcc_normalize_login_customer_id(login_customer_id)
+    if not target:
+        return None
+    for item in _mcc_registry_list(conn, user_id):
+        if _mcc_normalize_login_customer_id((item or {}).get("login_customer_id")) == target:
+            return item
+    return None
+
+
+def _mcc_connected_config(conn, user_id, requested_mcc_id=None):
+    req = str(requested_mcc_id or "").strip()
+    if req:
+        by_slug = _mcc_registry_get(conn, user_id, req)
+        if by_slug:
+            return by_slug
+        by_login = _mcc_registry_get_by_login_customer_id(conn, user_id, req)
+        if by_login:
+            return by_login
+    active_login = _mcc_normalize_login_customer_id(session.get("mcc_login_customer_id") or "")
+    if not active_login:
+        active_login = _mcc_normalize_login_customer_id(request.cookies.get("camarad_mcc_login_customer_id") or "")
+    if active_login:
+        by_login = _mcc_registry_get_by_login_customer_id(conn, user_id, active_login)
+        if by_login:
+            return by_login
+    active_slug = str(session.get("mcc_selected_slug") or request.cookies.get("camarad_mcc_slug") or "").strip().lower()
+    if active_slug:
+        by_slug = _mcc_registry_get(conn, user_id, active_slug)
+        if by_slug:
+            return by_slug
+    return None
+
+
+def _mcc_api_guard():
+    ok, reason, _email = _mcc_internal_authorized()
+    if ok:
+        return None
+    if reason in ("unauthenticated", "unauthorized"):
+        return jsonify({"error": "unauthorized"}), 401
+    if reason == "allowlist_not_configured":
+        return jsonify({"error": "forbidden", "reason": "mcc allowlist not configured"}), 403
+    return jsonify({"error": "forbidden"}), 403
+
+
+def _mcc_watchlist_ws_slug():
+    raw = ""
+    try:
+        raw = str(
+            request.args.get("ws_slug")
+            or request.args.get("workspace")
+            or request.args.get("workspace_id")
+            or request.args.get("ws")
+            or ""
+        ).strip().lower()
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = str(_current_workspace_slug() or "").strip().lower()
+    safe = re.sub(r"[^a-z0-9_-]", "", raw)
+    return safe[:80] or "agency"
+
+
+def _mcc_watchlist_name(name):
+    cleaned = str(name or "").strip()
+    if not cleaned:
+        return ""
+    return cleaned[:120]
+
+
+def _mcc_watchlist_get(conn, ws_slug, watchlist_id):
+    try:
+        wanted_id = int(watchlist_id or 0)
+    except Exception:
+        wanted_id = 0
+    if wanted_id <= 0:
+        return None
+    row = conn.execute(
+        """
+        SELECT id, ws_slug, name, created_at, updated_at
+        FROM mcc_watchlists
+        WHERE id = ? AND ws_slug = ?
+        LIMIT 1
+        """,
+        (int(wanted_id), str(ws_slug or "")),
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": int(row[0]),
+        "ws_slug": str(row[1] or ""),
+        "name": str(row[2] or ""),
+        "created_at": str(row[3] or ""),
+        "updated_at": str(row[4] or ""),
+    }
+
+
+def _mcc_watchlist_default(conn, ws_slug):
+    existing = conn.execute(
+        """
+        SELECT id
+        FROM mcc_watchlists
+        WHERE ws_slug = ? AND name = 'Default'
+        LIMIT 1
+        """,
+        (str(ws_slug or ""),),
+    ).fetchone()
+    if existing:
+        return int(existing[0])
+    _mcc_db_write(
+        conn,
+        """
+        INSERT INTO mcc_watchlists (ws_slug, name, created_at, updated_at)
+        VALUES (?, 'Default', datetime('now'), datetime('now'))
+        """,
+        (str(ws_slug or ""),),
+    )
+    created = conn.execute(
+        """
+        SELECT id
+        FROM mcc_watchlists
+        WHERE ws_slug = ? AND name = 'Default'
+        LIMIT 1
+        """,
+        (str(ws_slug or ""),),
+    ).fetchone()
+    return int(created[0]) if created else 0
+
+
+def _mcc_watchlist_item_count(conn, watchlist_id):
+    row = conn.execute(
+        "SELECT COUNT(1) FROM mcc_watchlist_items WHERE watchlist_id = ?",
+        (int(watchlist_id or 0),),
+    ).fetchone()
+    return int(_mcc_num((row or [0])[0], int))
+
+
+def _mcc_watchlist_snapshot(conn, ws_slug, watchlist_id):
+    wl = _mcc_watchlist_get(conn, ws_slug, watchlist_id)
+    if not wl:
+        return None
+    return {
+        "id": int(wl.get("id") or 0),
+        "name": str(wl.get("name") or ""),
+        "count": _mcc_watchlist_item_count(conn, wl.get("id")),
+    }
+
+
+def _mcc_watchlist_brief_windows(raw_window):
+    text = str(raw_window or "7,30")
+    out = []
+    for token in text.split(","):
+        token = str(token or "").strip()
+        if not token:
+            continue
+        try:
+            val = int(token)
+        except Exception:
+            continue
+        if val in (7, 30):
+            out.append(val)
+    uniq = sorted(set(out))
+    return uniq or [7, 30]
+
+
+def _mcc_watchlist_brief_cache_key(ws_slug, watchlist_id, customer_id, window_days):
+    return f"brief:{str(ws_slug or '')}:{int(_mcc_num(watchlist_id, int))}:{str(customer_id or '')}:{int(_mcc_num(window_days, int))}"
+
+
+def _mcc_watchlist_brief_cache_get(conn, cache_key):
+    if conn is None:
+        return None
+    now_epoch = int(time.time())
+    try:
+        row = conn.execute(
+            "SELECT value_json, expires_epoch FROM mcc_cache_entries WHERE cache_key = ? LIMIT 1",
+            (str(cache_key or ""),),
+        ).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    expires_epoch = int(_mcc_num((row or [None, 0])[1], int))
+    if expires_epoch <= now_epoch:
+        return None
+    try:
+        val = json.loads(str((row or ["null"])[0] or "null"))
+    except Exception:
+        return None
+    return val if isinstance(val, dict) else None
+
+
+def _mcc_watchlist_brief_cache_set(conn, cache_key, payload, ttl_sec):
+    if conn is None:
+        return False
+    safe_ttl = int(max(60, min(7 * 24 * 3600, int(ttl_sec or 21600))))
+    now_epoch = int(time.time())
+    expires_epoch = now_epoch + safe_ttl
+    try:
+        value_json = json.dumps(payload if isinstance(payload, dict) else {}, ensure_ascii=True)
+    except Exception:
+        value_json = "{}"
+    return bool(_mcc_db_write(
+        conn,
+        """
+        INSERT INTO mcc_cache_entries (cache_key, value_json, expires_epoch, stale_epoch, updated_at)
+        VALUES (?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(cache_key) DO UPDATE SET
+          value_json = excluded.value_json,
+          expires_epoch = excluded.expires_epoch,
+          stale_epoch = excluded.stale_epoch,
+          updated_at = datetime('now')
+        """,
+        (str(cache_key or ""), value_json, int(expires_epoch), int(expires_epoch)),
+    ))
+
+
+def _mcc_pct_delta(cur, base):
+    cur_f = float(_mcc_num(cur, float))
+    base_f = float(_mcc_num(base, float))
+    if base_f <= 0:
+        return 0.0
+    return round(((cur_f - base_f) / base_f) * 100.0, 2)
+
+
+def _mcc_watchlist_brief_flags(metrics_7, metrics_30):
+    m7 = metrics_7 if isinstance(metrics_7, dict) else {}
+    m30 = metrics_30 if isinstance(metrics_30, dict) else {}
+    cost_7 = float(_mcc_num(m7.get("cost"), float))
+    cost_30 = float(_mcc_num(m30.get("cost"), float))
+    roas_7 = float(_mcc_num(m7.get("roas"), float))
+    roas_30 = float(_mcc_num(m30.get("roas"), float))
+    conv_7 = float(_mcc_num(m7.get("conversions"), float))
+    out = []
+    if roas_30 > 0 and roas_7 < (roas_30 * 0.7):
+        out.append("ROAS_DROP")
+    expected_cost_7 = (cost_30 / 30.0) * 7.0 if cost_30 > 0 else 0.0
+    if expected_cost_7 > 0 and cost_7 > (expected_cost_7 * 1.4):
+        out.append("SPEND_SPIKE")
+    if conv_7 <= 0 and cost_7 > 50.0:
+        out.append("NO_CONVERSIONS")
+    return out
+
+
+def _mcc_watchlist_brief_lock(login_customer_id):
+    return _mcc_accounts_key_lock(_mcc_cache_key("watchlist_brief_lock", _mcc_to_customer_id(login_customer_id)))
+
+
+def _mcc_date_between(days, tz_name="UTC"):
+    safe_days = max(1, min(int(days or 30), 365))
+    try:
+        tz = ZoneInfo(str(tz_name or "UTC"))
+    except Exception:
+        tz = timezone.utc
+    end = datetime.now(tz).date()
+    start = end - timedelta(days=safe_days - 1)
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+
+def _mcc_cache_key(*parts):
+    return "|".join([str(p or "") for p in parts])
+
+
+def _mcc_cache_get(*parts):
+    key = _mcc_cache_key(*parts)
+    row = _MCC_CACHE.get(key)
+    if not isinstance(row, dict):
+        return None
+    exp = float(row.get("exp") or 0.0)
+    if exp <= time.time():
+        _MCC_CACHE.pop(key, None)
+        return None
+    return row.get("value")
+
+
+def _mcc_cache_set(value, *parts):
+    key = _mcc_cache_key(*parts)
+    _MCC_CACHE[key] = {"exp": time.time() + float(MCC_CACHE_TTL_SECONDS), "value": value}
+
+
+def _mcc_pcache_key(endpoint, mcc_slug, login_customer_id):
+    return _mcc_cache_key("pcache", endpoint, mcc_slug, login_customer_id)
+
+
+def _mcc_pcache_get(conn, key, allow_stale=False):
+    if conn is None:
+        return None, "miss"
+    now = int(time.time())
+    try:
+        row = conn.execute(
+            "SELECT value_json, expires_epoch, stale_epoch FROM mcc_cache_entries WHERE cache_key = ? LIMIT 1",
+            (str(key or ""),),
+        ).fetchone()
+    except Exception:
+        return None, "miss"
+    if not row:
+        return None, "miss"
+    try:
+        value = json.loads(str(row[0] or "null"))
+    except Exception:
+        value = None
+    expires_epoch = int(_mcc_num(row[1], int))
+    stale_epoch = int(_mcc_num(row[2], int))
+    if value is None:
+        return None, "miss"
+    if expires_epoch > now:
+        return value, "fresh"
+    if allow_stale and stale_epoch > now:
+        return value, "stale"
+    return None, "expired"
+
+
+def _mcc_pcache_set(conn, key, value, ttl_seconds, stale_seconds=MCC_CACHE_STALE_SECONDS):
+    if conn is None:
+        return False
+    now = int(time.time())
+    expires_epoch = now + int(max(1, ttl_seconds))
+    stale_epoch = expires_epoch + int(max(1, stale_seconds))
+    try:
+        payload = json.dumps(value, ensure_ascii=True)
+    except Exception:
+        return False
+    return bool(_mcc_db_write(
+        conn,
+        """
+        INSERT INTO mcc_cache_entries (cache_key, value_json, expires_epoch, stale_epoch, updated_at)
+        VALUES (?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(cache_key) DO UPDATE SET
+            value_json = excluded.value_json,
+            expires_epoch = excluded.expires_epoch,
+            stale_epoch = excluded.stale_epoch,
+            updated_at = datetime('now')
+        """,
+        (str(key or ""), payload, int(expires_epoch), int(stale_epoch)),
+    ))
+
+
+def _mcc_rate_limited_gateway(gw):
+    if not isinstance(gw, dict):
+        return False
+    err = str(gw.get("error") or "").lower()
+    if not err:
+        return False
+    markers = (
+        "429",
+        "rate_limited",
+        "resource has been exhausted",
+        "rate exceeded",
+        "quota",
+    )
+    return any(m in err for m in markers)
+
+
+def _mcc_gateway_retry_after_seconds(gw, default_seconds=20):
+    if not isinstance(gw, dict):
+        return int(default_seconds)
+    try:
+        direct = int(gw.get("retry_after_s") or gw.get("retry_after") or 0)
+        if direct > 0:
+            return max(1, min(300, direct))
+    except Exception:
+        pass
+    raw = str(gw.get("error") or "")
+    m = re.search(r"retry[-_ ]?after[^0-9]*(\d+)", raw, flags=re.IGNORECASE)
+    if m:
+        try:
+            return max(1, min(300, int(m.group(1))))
+        except Exception:
+            pass
+    return int(default_seconds)
+
+
+def _db_retry(fn, tries=6, base=0.05):
+    last_exc = None
+    for i in range(int(max(1, tries))):
+        try:
+            return fn()
+        except sqlite3.OperationalError as exc:
+            last_exc = exc
+            if "locked" not in str(exc).lower():
+                raise
+            sleep_s = float(base) * (2 ** i) + (random.random() * float(base))
+            time.sleep(min(1.25, sleep_s))
+    if last_exc is not None:
+        raise last_exc
+    return fn()
+
+
+def _mcc_accounts_key_lock(key):
+    safe_key = str(key or "")
+    with _MCC_ACCOUNTS_LOCKS_GUARD:
+        lock = _MCC_ACCOUNTS_LOCKS.get(safe_key)
+        if lock is None:
+            lock = threading.Lock()
+            _MCC_ACCOUNTS_LOCKS[safe_key] = lock
+    return lock
+
+
+def _mcc_rate_limit_get(key):
+    safe_key = str(key or "")
+    now = time.time()
+    with _MCC_UPSTREAM_COOLDOWN_GUARD:
+        until = float(_MCC_UPSTREAM_COOLDOWN.get(safe_key) or 0.0)
+        if until <= now:
+            if safe_key in _MCC_UPSTREAM_COOLDOWN:
+                _MCC_UPSTREAM_COOLDOWN.pop(safe_key, None)
+            return 0
+        return int(max(1.0, min(300.0, math.ceil(until - now))))
+
+
+def _mcc_rate_limit_set(key, seconds):
+    safe_key = str(key or "")
+    safe_seconds = int(max(1, min(300, int(seconds or 1))))
+    until = time.time() + float(safe_seconds)
+    with _MCC_UPSTREAM_COOLDOWN_GUARD:
+        prev = float(_MCC_UPSTREAM_COOLDOWN.get(safe_key) or 0.0)
+        _MCC_UPSTREAM_COOLDOWN[safe_key] = max(prev, until)
+
+
+def _mcc_rate_limit_clear(key):
+    safe_key = str(key or "")
+    with _MCC_UPSTREAM_COOLDOWN_GUARD:
+        _MCC_UPSTREAM_COOLDOWN.pop(safe_key, None)
+
+
+def _mcc_prepare_conn(conn):
+    try:
+        conn.execute("PRAGMA busy_timeout = 5000")
+    except Exception:
+        pass
+
+
+def _mcc_db_write(conn, sql, params=(), retries=4, sleep_s=0.12):
+    last_exc = None
+    for _ in range(int(retries)):
+        try:
+            conn.execute(sql, tuple(params))
+            return True
+        except sqlite3.OperationalError as exc:
+            last_exc = exc
+            if "locked" in str(exc).lower():
+                time.sleep(float(sleep_s))
+                continue
+            return False
+        except Exception:
+            return False
+    return False if last_exc else True
+
+
+def _ensure_mcc_tables(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcc_registry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            slug TEXT NOT NULL,
+            name TEXT NOT NULL,
+            login_customer_id TEXT NOT NULL,
+            owner TEXT,
+            note TEXT,
+            status TEXT DEFAULT 'active',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(user_id, slug)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcc_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL,
+            mcc_slug TEXT NOT NULL,
+            status TEXT DEFAULT 'running',
+            account_count INTEGER DEFAULT 0,
+            failure_count INTEGER DEFAULT 0,
+            started_at TEXT DEFAULT (datetime('now')),
+            finished_at TEXT,
+            duration_ms INTEGER DEFAULT 0,
+            summary_json TEXT,
+            errors_json TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcc_run_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            run_utc TEXT NOT NULL,
+            mcc_slug TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            customer_id TEXT,
+            account_name TEXT,
+            status TEXT NOT NULL,
+            message TEXT,
+            duration_ms INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcc_cache_entries (
+            cache_key TEXT PRIMARY KEY,
+            value_json TEXT NOT NULL,
+            expires_epoch INTEGER NOT NULL,
+            stale_epoch INTEGER NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcc_watchlists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ws_slug TEXT NOT NULL,
+            name TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(ws_slug, name)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcc_watchlist_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            watchlist_id INTEGER NOT NULL,
+            customer_id TEXT NOT NULL,
+            descriptive_name TEXT,
+            is_manager INTEGER DEFAULT 0,
+            added_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(watchlist_id, customer_id),
+            FOREIGN KEY(watchlist_id) REFERENCES mcc_watchlists(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mcc_registry_user ON mcc_registry(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mcc_runs_user_created ON mcc_runs(user_id, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mcc_run_events_run ON mcc_run_events(run_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mcc_cache_exp ON mcc_cache_entries(expires_epoch)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mcc_watchlists_ws_slug ON mcc_watchlists(ws_slug)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mcc_watchlist_items_watchlist ON mcc_watchlist_items(watchlist_id)")
+
+
+def _mcc_seed_registry(conn, user_id):
+    defaults = [
+        ("coolbits", "CoolBits", _mcc_default_login_customer_id_for_slug("coolbits"), "internal", "", "active"),
+        ("leadlion", "LeadLion", _mcc_default_login_customer_id_for_slug("leadlion"), "internal", "", "active"),
+        ("hustlerr", "Hustlerr", _mcc_default_login_customer_id_for_slug("hustlerr"), "internal", "", "active"),
+    ]
+    try:
+        conn.execute("PRAGMA busy_timeout = 3000")
+    except Exception:
+        pass
+    seeded_any = False
+    for slug, name, login_customer_id, owner, note, status in defaults:
+        try:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO mcc_registry (user_id, slug, name, login_customer_id, owner, note, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (int(user_id), slug, name, login_customer_id, owner, note, status),
+            )
+            seeded_any = True
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc).lower():
+                return False
+            raise
+    if seeded_any:
+        try:
+            conn.commit()
+        except Exception:
+            pass
+    return True
+
+
+def _mcc_registry_defaults():
+    return [
+        {"slug": "coolbits", "name": "CoolBits", "login_customer_id": _mcc_default_login_customer_id_for_slug("coolbits"), "owner": "internal", "note": "", "status": "active", "updated_at": ""},
+        {"slug": "leadlion", "name": "LeadLion", "login_customer_id": _mcc_default_login_customer_id_for_slug("leadlion"), "owner": "internal", "note": "", "status": "active", "updated_at": ""},
+        {"slug": "hustlerr", "name": "Hustlerr", "login_customer_id": _mcc_default_login_customer_id_for_slug("hustlerr"), "owner": "internal", "note": "", "status": "active", "updated_at": ""},
+    ]
+
+
+def _mcc_registry_list(conn, user_id):
+    _mcc_prepare_conn(conn)
+    _ensure_mcc_tables(conn)
+    rows = conn.execute(
+        """
+        SELECT slug, name, login_customer_id, owner, note, status, updated_at
+        FROM mcc_registry
+        WHERE user_id = ?
+        ORDER BY name ASC
+        """,
+        (int(user_id),),
+    ).fetchall()
+    if not rows:
+        seeded = _mcc_seed_registry(conn, user_id)
+        if seeded:
+            rows = conn.execute(
+                """
+                SELECT slug, name, login_customer_id, owner, note, status, updated_at
+                FROM mcc_registry
+                WHERE user_id = ?
+                ORDER BY name ASC
+                """,
+                (int(user_id),),
+            ).fetchall()
+    if not rows:
+        return _mcc_registry_defaults()
+    out = []
+    for r in rows:
+        slug = str(r[0] or "")
+        login_customer_id = _mcc_to_customer_id(r[2] or "")
+        if not login_customer_id:
+            login_customer_id = _mcc_default_login_customer_id_for_slug(slug)
+        out.append({
+            "slug": slug,
+            "name": str(r[1] or ""),
+            "login_customer_id": login_customer_id,
+            "owner": str(r[3] or ""),
+            "note": str(r[4] or ""),
+            "status": str(r[5] or "active"),
+            "updated_at": str(r[6] or ""),
+        })
+    return out
+
+
+def _mcc_registry_get(conn, user_id, mcc_id):
+    items = _mcc_registry_list(conn, user_id)
+    key = str(mcc_id or "").strip().lower()
+    for item in items:
+        if str(item.get("slug") or "").strip().lower() == key:
+            return item
+    return None
+
+
+def _mcc_to_customer_id(raw):
+    txt = str(raw or "").strip()
+    if not txt:
+        return ""
+    if "/" in txt:
+        m = re.search(r"customers/([0-9\-]+)", txt)
+        if m:
+            txt = m.group(1)
+    digits = re.sub(r"[^0-9]", "", txt)
+    return digits
+
+
+def _mcc_gaql_limit(limit, fallback):
+    try:
+        value = int(limit or fallback)
+    except Exception:
+        value = int(fallback)
+    return max(1, min(2000, value))
+
+
+def _mcc_build_gaql(report_name, start, end, limit=200):
+    safe_limit = _mcc_gaql_limit(limit, 200)
+    date_filter = f"segments.date BETWEEN '{start}' AND '{end}'"
+    static = {
+        "accounts": (
+            "SELECT customer_client.client_customer, customer_client.descriptive_name, customer_client.level, "
+            "customer_client.manager, customer_client.status, customer_client.currency_code, customer_client.time_zone, "
+            "customer_client.hidden FROM customer_client WHERE customer_client.level = 1"
+        ),
+        "customer_kpis": (
+            f"SELECT metrics.cost_micros, metrics.conversions, metrics.conversions_value FROM customer WHERE {date_filter}"
+        ),
+        "campaigns": (
+            "SELECT campaign.id, campaign.name, campaign.advertising_channel_type, campaign.status, "
+            "campaign.bidding_strategy_type, campaign.start_date, campaign.end_date, metrics.impressions, "
+            "metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value "
+            f"FROM campaign WHERE {date_filter} ORDER BY metrics.cost_micros DESC LIMIT {safe_limit}"
+        ),
+        "asset_groups": (
+            "SELECT campaign.id, campaign.name, asset_group.id, asset_group.name, asset_group.status, "
+            "metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value "
+            f"FROM asset_group WHERE {date_filter} ORDER BY metrics.cost_micros DESC LIMIT {safe_limit}"
+        ),
+        "search_terms_search": (
+            "SELECT campaign.id, campaign.name, ad_group.id, ad_group.name, search_term_view.search_term, "
+            "metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value "
+            f"FROM search_term_view WHERE {date_filter} ORDER BY metrics.cost_micros DESC LIMIT {safe_limit}"
+        ),
+        "search_terms_pmax": (
+            "SELECT campaign.id, campaign.name, campaign_search_term_view.search_term, metrics.impressions, "
+            "metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value "
+            f"FROM campaign_search_term_view WHERE {date_filter} ORDER BY metrics.cost_micros DESC LIMIT {safe_limit}"
+        ),
+        "keywords": (
+            "SELECT campaign.id, campaign.name, ad_group.id, ad_group.name, ad_group_criterion.criterion_id, "
+            "ad_group_criterion.status, ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, "
+            "metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value "
+            f"FROM keyword_view WHERE {date_filter} ORDER BY metrics.cost_micros DESC LIMIT {safe_limit}"
+        ),
+        "negatives_account": (
+            "SELECT customer_negative_criterion.keyword.text, customer_negative_criterion.keyword.match_type "
+            "FROM customer_negative_criterion WHERE customer_negative_criterion.type = KEYWORD"
+        ),
+        "negatives_shared": (
+            "SELECT shared_set.id, shared_set.name, shared_criterion.keyword.text, shared_criterion.keyword.match_type "
+            "FROM shared_criterion WHERE shared_set.type = NEGATIVE_KEYWORDS"
+        ),
+        "negatives_campaign": (
+            "SELECT campaign.id, campaign.name, campaign_criterion.keyword.text, campaign_criterion.keyword.match_type "
+            "FROM campaign_criterion WHERE campaign_criterion.negative = TRUE AND campaign_criterion.type = KEYWORD"
+        ),
+        "negatives_adgroup": (
+            "SELECT campaign.id, campaign.name, ad_group.id, ad_group.name, ad_group_criterion.keyword.text, "
+            "ad_group_criterion.keyword.match_type FROM ad_group_criterion "
+            "WHERE ad_group_criterion.negative = TRUE AND ad_group_criterion.type = KEYWORD"
+        ),
+        "conversion_actions": (
+            "SELECT conversion_action.id, conversion_action.name, conversion_action.type, conversion_action.category, "
+            "conversion_action.status, conversion_action.primary_for_goal FROM conversion_action ORDER BY conversion_action.name"
+        ),
+        "user_lists": (
+            "SELECT user_list.id, user_list.name, user_list.type, user_list.membership_status, user_list.size_for_search, "
+            "user_list.size_range_for_search, user_list.size_for_display, user_list.size_range_for_display, "
+            "user_list.eligible_for_search, user_list.eligible_for_display, user_list.read_only "
+            "FROM user_list ORDER BY user_list.name"
+        ),
+        "audience_perf_30d": (
+            "SELECT campaign.id, campaign.name, ad_group.id, ad_group.name, user_list.id, user_list.name, segments.ad_network_type, "
+            "metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value "
+            f"FROM ad_group_audience_view WHERE {date_filter} ORDER BY metrics.cost_micros DESC LIMIT {safe_limit}"
+        ),
+        "auction_insights_search_30d": (
+            "SELECT campaign.id, campaign.name, segments.auction_insight_domain, "
+            "metrics.auction_insight_search_impression_share, metrics.auction_insight_search_overlap_rate, "
+            "metrics.auction_insight_search_position_above_rate, metrics.auction_insight_search_top_impression_percentage, "
+            "metrics.auction_insight_search_absolute_top_impression_percentage, metrics.auction_insight_search_outranking_share "
+            f"FROM campaign WHERE {date_filter} AND campaign.advertising_channel_type = SEARCH "
+            f"ORDER BY metrics.auction_insight_search_impression_share DESC LIMIT {safe_limit}"
+        ),
+    }
+    return static.get(str(report_name or "").strip().lower(), "")
 
 
 def _render_app_home():
@@ -3159,6 +6328,8 @@ def _render_app_home():
 @app.route('/')
 def home():
     host = str(request.host or "").strip().lower()
+    if _is_vacante_host():
+        return render_template("mwr.html", vacante_page_type="home", **_vacante_context())
     if host.startswith("api.camarad.ai"):
         return jsonify({
             "service": "camarad-api",
@@ -3171,6 +6342,8 @@ def home():
                 "signup": "/signup",
             },
         }), 200
+    if host.startswith("mcc.camarad.ai") or host.startswith("dashboard.camarad.ai"):
+        return redirect(url_for("mcc_dashboard_page"))
 
     force_landing = str(request.args.get("landing") or "").strip().lower()
     if force_landing in ("1", "true", "yes", "on"):
@@ -3226,8 +6399,6 @@ def agent_landing_page(agent_id):
             inbound_attr=inbound_attr,
         )
     )
-    # UTM-aware landing pages should never be shared from intermediary caches.
-    response.headers["Cache-Control"] = "no-store, private"
     attr_cookie = dict(inbound_attr)
     attr_cookie["entrypoint"] = "agent_landing"
     attr_cookie["agent"] = str(cfg.get("id") or key)
@@ -3779,12 +6950,465 @@ def about_page():
     )
 
 
+@app.route('/integrations')
+def integrations_status_page():
+    model_data = _public_model_provider_rows()
+    return render_template(
+        "integrations_status.html",
+        connectors=_public_connector_status_rows(),
+        model_providers=model_data.get("items") or [],
+        model_provider_meta={
+            "ct_value_usd": model_data.get("ct_value_usd"),
+            "blended_assumption": model_data.get("blended_assumption"),
+        },
+        public_demo_limitations=list(PUBLIC_DEMO_LIMITATIONS or []),
+        status_badges=dict(PUBLIC_STATUS_BADGES),
+        last_verified=PUBLIC_PROOF_LAST_VERIFIED,
+    )
+
+
+@app.route('/api/status/connectors.json')
+def api_status_connectors():
+    return jsonify({
+        "ok": True,
+        "last_updated": PUBLIC_PROOF_LAST_VERIFIED,
+        "category": "data_connectors",
+        "items": _public_connector_status_rows(),
+    })
+
+
+@app.route('/api/status/models.json')
+def api_status_models():
+    model_data = _public_model_provider_rows()
+    return jsonify({
+        "ok": True,
+        "last_updated": PUBLIC_PROOF_LAST_VERIFIED,
+        "category": "model_providers",
+        "cbt_reference": {
+            "ct_value_usd": model_data.get("ct_value_usd"),
+            "assumption": model_data.get("blended_assumption"),
+        },
+        "items": model_data.get("items") or [],
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Admin API — Provider Accounts & Usage Ledger
+# Owner-only (user_id == 1).  No secrets, no env_var_name leaked.
+# ══════════════════════════════════════════════════════════════════════
+
+def _is_admin_user(uid):
+    """Check if user has platform_owner role (is_owner=1 in users table)."""
+    if int(uid or 0) <= 0:
+        return False
+    try:
+        conn = get_db()
+        row = conn.execute(
+            "SELECT COALESCE(is_owner, 0) FROM users WHERE id = ? LIMIT 1",
+            (int(uid),),
+        ).fetchone()
+        conn.close()
+        if row and int(row[0]):
+            return True
+    except Exception:
+        pass
+    # Fallback: uid 1 is always owner (bootstrap safety).
+    return int(uid) == 1
+
+
+@app.route('/api/admin/provider-accounts', methods=["GET"])
+def api_admin_provider_accounts():
+    """List all managed provider accounts (no secrets exposed)."""
+    uid = int(get_current_user_id() or 0)
+    if not _is_admin_user(uid):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        conn = get_db()
+        _ensure_client_tables(conn)
+        rows = conn.execute(
+            """
+            SELECT id, provider_slug, account_label, owner_label,
+                   credential_mode, auth_type, is_active, priority,
+                   rate_limit_rpm, monthly_budget_usd, notes,
+                   env_var_name, created_at, updated_at
+            FROM managed_provider_accounts
+            ORDER BY priority ASC, provider_slug ASC
+            """
+        ).fetchall()
+        conn.close()
+        accounts = []
+        for r in rows:
+            env_name = str(r[11] or "").strip()
+            has_key = bool(env_name and os.getenv(env_name, "").strip()) if env_name else False
+            accounts.append({
+                "id": int(r[0]),
+                "provider_slug": str(r[1]),
+                "account_label": str(r[2]),
+                "owner_label": str(r[3]),
+                "credential_mode": str(r[4]),
+                "auth_type": str(r[5]),
+                "is_active": bool(r[6]),
+                "priority": int(r[7]),
+                "rate_limit_rpm": r[8],
+                "monthly_budget_usd": r[9],
+                "notes": str(r[10] or ""),
+                "has_key_configured": has_key or str(r[5]) == "gateway",
+                "created_at": str(r[12] or ""),
+                "updated_at": str(r[13] or ""),
+            })
+        return jsonify({"ok": True, "accounts": accounts})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/admin/provider-accounts', methods=["POST"])
+def api_admin_provider_accounts_create():
+    """Create or update a managed provider account."""
+    uid = int(get_current_user_id() or 0)
+    if not _is_admin_user(uid):
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json(force=True, silent=True) or {}
+    provider_slug = _normalize_llm_provider_slug(data.get("provider_slug"))
+    account_label = str(data.get("account_label") or "").strip()
+    if not provider_slug or not account_label:
+        return jsonify({"error": "provider_slug and account_label required"}), 400
+    try:
+        conn = get_db()
+        _ensure_client_tables(conn)
+        existing = conn.execute(
+            "SELECT id FROM managed_provider_accounts WHERE provider_slug = ? AND account_label = ? LIMIT 1",
+            (provider_slug, account_label),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE managed_provider_accounts
+                SET owner_label = ?, credential_mode = ?, auth_type = ?,
+                    env_var_name = ?, is_active = ?, priority = ?,
+                    rate_limit_rpm = ?, monthly_budget_usd = ?, notes = ?,
+                    updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (
+                    str(data.get("owner_label") or "COOL BITS / Camarad")[:128],
+                    str(data.get("credential_mode") or "managed")[:24],
+                    str(data.get("auth_type") or "api_key")[:24],
+                    str(data.get("env_var_name") or "")[:64] or None,
+                    1 if data.get("is_active", True) else 0,
+                    int(data.get("priority", 10)),
+                    data.get("rate_limit_rpm"),
+                    data.get("monthly_budget_usd"),
+                    str(data.get("notes") or "")[:500],
+                    int(existing[0]),
+                ),
+            )
+            conn.commit()
+            conn.close()
+            return jsonify({"ok": True, "id": int(existing[0]), "action": "updated"})
+        else:
+            conn.execute(
+                """
+                INSERT INTO managed_provider_accounts
+                    (provider_slug, account_label, owner_label, credential_mode,
+                     auth_type, env_var_name, is_active, priority,
+                     rate_limit_rpm, monthly_budget_usd, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    provider_slug,
+                    account_label,
+                    str(data.get("owner_label") or "COOL BITS / Camarad")[:128],
+                    str(data.get("credential_mode") or "managed")[:24],
+                    str(data.get("auth_type") or "api_key")[:24],
+                    str(data.get("env_var_name") or "")[:64] or None,
+                    1 if data.get("is_active", True) else 0,
+                    int(data.get("priority", 10)),
+                    data.get("rate_limit_rpm"),
+                    data.get("monthly_budget_usd"),
+                    str(data.get("notes") or "")[:500],
+                ),
+            )
+            conn.commit()
+            new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.close()
+            return jsonify({"ok": True, "id": int(new_id), "action": "created"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/admin/usage/summary', methods=["GET"])
+def api_admin_usage_summary():
+    """Aggregated usage by provider, model, credential_mode. Owner-only."""
+    uid = int(get_current_user_id() or 0)
+    if not _is_admin_user(uid):
+        return jsonify({"error": "forbidden"}), 403
+    days = min(90, max(1, int(request.args.get("days", 30))))
+    event_type_filter = str(request.args.get("event_type") or "").strip().lower()
+    try:
+        conn = get_db()
+        _ensure_usage_ledger_table(conn)
+        where_parts = ["created_at >= datetime('now', ?)"]
+        params = [f"-{days} day"]
+        if event_type_filter:
+            where_parts.append("LOWER(event_type) = ?")
+            params.append(event_type_filter)
+        where_sql = " AND ".join(where_parts)
+        rows = conn.execute(
+            f"""
+            SELECT
+                COALESCE(provider, 'unknown') AS provider,
+                COALESCE(model, 'unknown') AS model,
+                COALESCE(credential_mode, 'unknown') AS credential_mode,
+                COALESCE(billing_owner, 'unknown') AS billing_owner,
+                COUNT(*) AS total_runs,
+                SUM(COALESCE(input_tokens, 0)) AS total_input_tokens,
+                SUM(COALESCE(output_tokens, 0)) AS total_output_tokens,
+                SUM(COALESCE(cost_final_usd, 0)) AS total_cost_usd,
+                SUM(COALESCE(sell_price_usd, 0)) AS total_sell_usd,
+                SUM(COALESCE(margin_usd, 0)) AS total_margin_usd,
+                SUM(CASE WHEN fallback_used = 1 THEN 1 ELSE 0 END) AS fallback_count
+            FROM usage_ledger
+            WHERE {where_sql}
+            GROUP BY provider, model, credential_mode, billing_owner
+            ORDER BY total_cost_usd DESC
+            """,
+            tuple(params),
+        ).fetchall()
+        conn.close()
+        summary = []
+        for r in rows:
+            summary.append({
+                "provider": str(r[0]),
+                "model": str(r[1]),
+                "credential_mode": str(r[2]),
+                "billing_owner": str(r[3]),
+                "total_runs": int(r[4]),
+                "total_input_tokens": int(r[5]),
+                "total_output_tokens": int(r[6]),
+                "total_cost_usd": round(float(r[7]), 6),
+                "total_sell_usd": round(float(r[8]), 6),
+                "total_margin_usd": round(float(r[9]), 6),
+                "fallback_count": int(r[10]),
+            })
+        return jsonify({"ok": True, "days": days, "summary": summary})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/admin/usage/ledger', methods=["GET"])
+def api_admin_usage_ledger():
+    """Raw usage rows with pagination. Owner-only."""
+    uid = int(get_current_user_id() or 0)
+    if not _is_admin_user(uid):
+        return jsonify({"error": "forbidden"}), 403
+    limit = min(200, max(1, int(request.args.get("limit", 50))))
+    offset = max(0, int(request.args.get("offset", 0)))
+    provider_filter = str(request.args.get("provider") or "").strip().lower()
+    mode_filter = str(request.args.get("credential_mode") or "").strip().lower()
+    event_type_filter = str(request.args.get("event_type") or "").strip().lower()
+    cost_source_filter = str(request.args.get("cost_source") or "").strip().lower()
+    try:
+        conn = get_db()
+        _ensure_usage_ledger_table(conn)
+        where_clauses = ["1=1"]
+        params = []
+        if provider_filter:
+            where_clauses.append("LOWER(provider) = ?")
+            params.append(provider_filter)
+        if mode_filter:
+            where_clauses.append("LOWER(credential_mode) = ?")
+            params.append(mode_filter)
+        if event_type_filter:
+            where_clauses.append("LOWER(event_type) = ?")
+            params.append(event_type_filter)
+        if cost_source_filter:
+            where_clauses.append("LOWER(COALESCE(cost_source, 'missing')) = ?")
+            params.append(cost_source_filter)
+        where_sql = " AND ".join(where_clauses)
+        count_row = conn.execute(f"SELECT COUNT(*) FROM usage_ledger WHERE {where_sql}", params).fetchone()
+        total = int(count_row[0]) if count_row else 0
+        rows = conn.execute(
+            f"""
+            SELECT id, request_id, user_id, client_id, workspace_id, agent_id,
+                   provider, model, credential_mode, billing_owner,
+                   execution_path, fallback_used, fallback_reason,
+                   input_tokens, output_tokens, latency_ms,
+                   cost_final_usd, sell_price_usd, margin_usd,
+                   status, created_at, cost_source,
+                   event_type, is_billable_event
+            FROM usage_ledger
+            WHERE {where_sql}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            params + [limit, offset],
+        ).fetchall()
+        conn.close()
+        items = []
+        for r in rows:
+            items.append({
+                "id": int(r[0]),
+                "request_id": str(r[1] or ""),
+                "user_id": int(r[2] or 0),
+                "client_id": r[3],
+                "workspace_id": str(r[4] or ""),
+                "agent_id": str(r[5] or ""),
+                "provider": str(r[6] or ""),
+                "model": str(r[7] or ""),
+                "credential_mode": str(r[8] or ""),
+                "billing_owner": str(r[9] or ""),
+                "execution_path": str(r[10] or ""),
+                "fallback_used": bool(r[11]),
+                "fallback_reason": str(r[12] or ""),
+                "input_tokens": int(r[13] or 0),
+                "output_tokens": int(r[14] or 0),
+                "latency_ms": int(r[15] or 0),
+                "cost_final_usd": round(float(r[16] or 0), 6),
+                "sell_price_usd": round(float(r[17] or 0), 6),
+                "margin_usd": round(float(r[18] or 0), 6),
+                "status": str(r[19] or ""),
+                "created_at": str(r[20] or ""),
+                "cost_source": str(r[21] or "missing"),
+                "event_type": str(r[22] or "unknown"),
+                "is_billable_event": bool(int(r[23] or 1)),
+            })
+        return jsonify({"ok": True, "total": total, "limit": limit, "offset": offset, "items": items})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Admin Panel — Owner-only HTML page
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route('/admin/providers')
+def admin_providers_page():
+    """Owner-only admin panel for managed provider accounts + usage."""
+    uid = int(get_current_user_id() or 0)
+    if not _is_admin_user(uid):
+        return "Forbidden", 403
+    return render_template("admin_providers.html")
+
+
+@app.route('/api/llm/catalog', methods=["GET"])
+def api_llm_catalog():
+    return jsonify(_llm_catalog_payload())
+
+
+@app.route('/api/llm/availability', methods=["GET"])
+def api_llm_availability():
+    uid = int(get_current_user_id() or 0)
+    if uid <= 0:
+        return jsonify({"error": "unauthorized"}), 401
+
+    agent_slug = str(request.args.get("agent_slug") or "").strip()
+    requested_provider = _normalize_llm_provider_slug(request.args.get("provider"))
+    requested_client_id = request.args.get("client_id", type=int)
+    effective_client_id = requested_client_id if requested_client_id is not None else get_current_client_id()
+
+    record = {"llm_provider": "", "llm_model": ""}
+    if agent_slug:
+        try:
+            record = _lookup_agent_llm_record(uid, agent_slug, effective_client_id)
+        except Exception:
+            record = {"llm_provider": "", "llm_model": ""}
+
+    inferred_provider = _normalize_llm_provider_slug(record.get("llm_provider")) or _infer_llm_provider_from_model(
+        record.get("llm_model")
+    )
+    provider_slug = requested_provider or inferred_provider
+    if not provider_slug:
+        return jsonify({"error": "provider_required"}), 400
+
+    provider_meta = _find_llm_provider(provider_slug)
+    runtime = _resolve_llm_runtime_credentials(uid, provider_slug, agent_slug=agent_slug, client_id=effective_client_id)
+    gateway_runtime = _resolve_coolbits_managed_provider(
+        provider_slug,
+        agent_slug=agent_slug,
+        model_id=record.get("llm_model"),
+    )
+    if gateway_runtime and runtime.get("source") != "byok":
+        live_models = [
+            str(model_id or "").strip()
+            for model_id in (gateway_runtime.get("live_models") or [])
+            if str(model_id or "").strip()
+        ]
+        merged_models = _merge_llm_availability_models(provider_slug, live_models)
+        default_model = str(record.get("llm_model") or "").strip() or next((m for m in live_models if m), "")
+        if not default_model and provider_meta:
+            default_model = str((provider_meta or {}).get("default_model") or "").strip()
+        gateway_status = str(gateway_runtime.get("status") or "validated").strip().lower()
+        gateway_reason = gateway_runtime.get("reason")
+        return jsonify({
+            "ok": True,
+            "provider": provider_slug,
+            "provider_label": str((provider_meta or {}).get("label") or provider_slug.title()),
+            "provider_status": str((provider_meta or {}).get("status") or ""),
+            "agent_slug": agent_slug or None,
+            "client_id": effective_client_id,
+            "status": gateway_status or "validated",
+            "credential_mode": "managed",
+            "credential_source": "managed_gateway",
+            "validated_at": gateway_runtime.get("validated_at"),
+            "default_model": default_model,
+            "catalog_models": _curated_provider_model_ids(provider_slug),
+            "live_models": live_models,
+            "models": merged_models,
+            "supports_live_listing": False,
+            "error": None if gateway_status == "validated" else {"message": gateway_reason or "coolbits_gateway_unavailable"},
+            "reason": gateway_reason,
+        })
+    validation = _validate_provider_availability(provider_slug, runtime.get("api_key"))
+    live_models = [
+        str(model_id or "").strip()
+        for model_id in (validation.get("live_models") or [])
+        if str(model_id or "").strip()
+    ]
+    merged_models = _merge_llm_availability_models(provider_slug, live_models)
+
+    default_model = ""
+    if provider_meta:
+        default_model = str(provider_meta.get("default_model") or "").strip()
+    if default_model and live_models and default_model not in live_models:
+        default_model = next((model_id for model_id in live_models if model_id), default_model)
+    elif not default_model:
+        default_model = next((model_id for model_id in live_models if model_id), "")
+    if not default_model and provider_meta:
+        curated_models = _curated_provider_model_ids(provider_slug)
+        default_model = next((model_id for model_id in curated_models if model_id), "")
+
+    status = str(validation.get("status") or "catalog_only").strip()
+    validated_at = _utc_now_iso() if status in ("active", "validated", "validation_failed", "catalog_only") else None
+    error_payload = validation.get("error")
+
+    return jsonify({
+        "ok": True,
+        "provider": provider_slug,
+        "provider_label": str((provider_meta or {}).get("label") or provider_slug.title()),
+        "provider_status": str((provider_meta or {}).get("status") or ""),
+        "agent_slug": agent_slug or None,
+        "client_id": effective_client_id,
+        "status": status,
+        "credential_mode": str(runtime.get("credential_mode") or "none"),
+        "credential_source": str(runtime.get("source") or "none"),
+        "validated_at": validated_at,
+        "default_model": default_model,
+        "catalog_models": _curated_provider_model_ids(provider_slug),
+        "live_models": live_models,
+        "models": merged_models,
+        "supports_live_listing": bool(provider_slug in ("openai", "anthropic", "xai", "vertex")),
+        "error": error_payload,
+    })
+
+
 @app.route("/robots.txt")
 def robots_txt():
     host = (request.host_url or "https://camarad.ai").rstrip("/")
     body = (
         "User-agent: *\n"
         "Allow: /\n\n"
+        "Disallow: /mcc\n"
+        "Disallow: /api/mcc/\n\n"
         f"Sitemap: {host}/sitemap.xml\n"
     )
     resp = make_response(body, 200)
@@ -3797,15 +7421,29 @@ def robots_txt():
 def sitemap_xml():
     base = (request.host_url or "https://camarad.ai").rstrip("/")
     today = time.strftime("%Y-%m-%d")
-    urls = [
-        ("/", "daily", "1.0"),
-        ("/pricing", "weekly", "0.9"),
-        ("/signup", "weekly", "0.8"),
-        ("/about", "monthly", "0.6"),
-        ("/legal", "monthly", "0.5"),
-        ("/privacy", "monthly", "0.5"),
-        ("/terms", "monthly", "0.5"),
-    ]
+    if _is_vacante_host():
+        urls = [
+            ("/", "daily", "1.0"),
+            ("/mwr", "weekly", "0.9"),
+            ("/afla-mai-mult", "weekly", "0.9"),
+            ("/intrebari-frecvente", "weekly", "0.8"),
+            ("/privacy", "monthly", "0.4"),
+            ("/terms", "monthly", "0.4"),
+        ]
+    else:
+        urls = [
+            ("/", "daily", "1.0"),
+            ("/pricing", "weekly", "0.9"),
+            ("/integrations", "weekly", "0.8"),
+            ("/signup", "weekly", "0.8"),
+            ("/mwr", "weekly", "0.7"),
+            ("/mwr/privacy", "monthly", "0.3"),
+            ("/mwr/terms", "monthly", "0.3"),
+            ("/about", "monthly", "0.6"),
+            ("/legal", "monthly", "0.5"),
+            ("/privacy", "monthly", "0.5"),
+            ("/terms", "monthly", "0.5"),
+        ]
     items = []
     for path, changefreq, priority in urls:
         items.append(
@@ -3830,12 +7468,12 @@ def sitemap_xml():
 
 @app.route('/pricing')
 def pricing_page():
-    return render_template("pricing.html", plans=PRICING_PLAN_CATALOG)
+    return render_template("pricing.html", plans=_public_pricing_plans())
 
 
 @app.route('/api/pricing/plans', methods=["GET"])
 def api_pricing_plans():
-    return jsonify({"success": True, "plans": PRICING_PLAN_CATALOG})
+    return jsonify({"success": True, "plans": _public_pricing_plans()})
 
 
 @app.route('/legal')
@@ -3845,12 +7483,465 @@ def legal_page():
 
 @app.route('/privacy')
 def privacy_page():
+    if _is_vacante_host():
+        return render_template("mwr_privacy.html", vacante_page_type="privacy", **_vacante_context())
     return render_template("privacy.html")
 
 
 @app.route('/terms')
 def terms_page():
+    if _is_vacante_host():
+        return render_template("mwr_terms.html", vacante_page_type="terms", **_vacante_context())
     return render_template("terms.html")
+
+
+def _vacante_whatsapp_url():
+    """Return the WhatsApp URL only if it's a real number, else empty string.
+    Prevents the floating button / links from rendering with placeholder 'XXXXXXXX'."""
+    url = (MWR_WHATSAPP_URL or "").strip()
+    if not url:
+        return ""
+    if "XXXX" in url.upper() or "X" * 4 in url:
+        return ""
+    return url
+
+
+def _vacante_contact_form_endpoint():
+    url = (MWR_CONTACT_FORM_ENDPOINT or "").strip()
+    if url:
+        return url
+    return url_for("vacante_contact_api")
+
+
+def _vacante_database_path():
+    raw = str(app.config.get("DATABASE") or getattr(Config, "DATABASE", "camarad.db")).strip() or "camarad.db"
+    db_path = Path(raw)
+    if not db_path.is_absolute():
+        db_path = Path(app.root_path) / db_path
+    return db_path
+
+
+def _vacante_db_connect():
+    conn = sqlite3.connect(str(_vacante_database_path()), timeout=30)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+    except Exception:
+        pass
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _ensure_vacante_contact_schema(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vacante_contact_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at INTEGER NOT NULL,
+            created_at_iso TEXT NOT NULL,
+            ip TEXT NOT NULL,
+            user_agent TEXT,
+            referer TEXT,
+            source_path TEXT,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            phone TEXT,
+            message TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'new'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_vacante_contact_ip_created
+        ON vacante_contact_messages(ip, created_at)
+        """
+    )
+
+
+def _vacante_client_ip():
+    for header_name in ("CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP"):
+        raw = str(request.headers.get(header_name, "") or "").strip()
+        if not raw:
+            continue
+        if header_name == "X-Forwarded-For":
+            raw = raw.split(",")[0].strip()
+        if raw:
+            return raw[:128]
+    if request.access_route:
+        route_ip = str(request.access_route[0] or "").strip()
+        if route_ip:
+            return route_ip[:128]
+    return str(request.remote_addr or "").strip()[:128] or "unknown"
+
+
+def _vacante_normalize_name(value):
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _vacante_normalize_message(value):
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _vacante_valid_email(value):
+    email = str(value or "").strip()
+    if not email or len(email) > 254:
+        return False
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email))
+
+
+def _vacante_site_url():
+    return str(request.url_root or "").rstrip("/")
+
+
+def _vacante_og_image_url():
+    return url_for("static", filename="images/mwr/vacante-social-og.jpg", _external=True)
+
+
+def _vacante_faq_items():
+    return [
+        {
+            "question": "Este aceasta pagina un site de vanzare?",
+            "answer": "Este o prezentare transparenta pentru un membership extern. Linkul te duce mai departe catre platforma partenera.",
+        },
+        {
+            "question": "Ce se intampla dupa ce accesez platforma?",
+            "answer": "Vezi conditiile membershipului si alegi daca te inscrii. Nimic nu se intampla automat — trebuie sa confirmi tu totul pe MWR.",
+        },
+        {
+            "question": "Primesti comision daca ma inscriu?",
+            "answer": "Da, folosim un link de recomandare MWR. Pretul pentru tine ramane exact acelasi ca accesul direct pe platforma.",
+        },
+        {
+            "question": "Platesc ceva pe acest site?",
+            "answer": "Nu. Orice plata catre MWR se face direct pe platforma oficiala, cu datele tale.",
+        },
+        {
+            "question": "Pot cere mai multe informatii inainte?",
+            "answer": "Da. Foloseste emailul, WhatsApp-ul sau formularul din sectiunea de contact. Raspundem de obicei in cateva ore, cel tarziu in 24h lucratoare.",
+        },
+        {
+            "question": "Ma pot razgandi dupa?",
+            "answer": "Atat timp cat nu creezi cont si nu accepti conditiile MWR, nu se intampla nimic. Daca deja ai cont, conditiile de anulare sunt stabilite si afisate de MWR Life.",
+        },
+    ]
+
+
+def _vacante_org_schema():
+    schema = {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "Vacante Inteligente",
+        "url": _vacante_site_url(),
+        "logo": url_for("static", filename="brand/apple-touch-icon.png", _external=True),
+        "description": "Pagina independenta in limba romana pentru prezentarea membershipului de calatorie MWR Life.",
+        "email": MWR_CONTACT_EMAIL,
+        "contactPoint": [
+            {
+                "@type": "ContactPoint",
+                "contactType": "customer support",
+                "email": MWR_CONTACT_EMAIL,
+                "availableLanguage": ["ro", "en"],
+            }
+        ],
+    }
+    whatsapp_url = _vacante_whatsapp_url()
+    if whatsapp_url:
+        schema["sameAs"] = [whatsapp_url]
+    return schema
+
+
+def _vacante_faq_schema():
+    return {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+            {
+                "@type": "Question",
+                "name": item["question"],
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": item["answer"],
+                },
+            }
+            for item in _vacante_faq_items()
+        ],
+    }
+
+
+def _vacante_contact_error_response(message, status_code=400):
+    payload = {"ok": False, "error": str(message or "Cererea nu a putut fi procesata.")}
+    wants_json = request.is_json or ("application/json" in str(request.headers.get("Accept", "")).lower())
+    if wants_json:
+        resp = jsonify(payload)
+        resp.status_code = status_code
+        return resp
+    return make_response(payload["error"], status_code)
+
+
+def _vacante_contact_success_response():
+    redirect_url = url_for("vacante_thank_you_page", contact="1")
+    payload = {"ok": True, "redirect": redirect_url}
+    wants_json = request.is_json or ("application/json" in str(request.headers.get("Accept", "")).lower())
+    if wants_json:
+        return jsonify(payload)
+    return redirect(redirect_url, code=303)
+
+
+def _vacante_notification_recipient():
+    return MWR_CONTACT_EMAIL if _vacante_valid_email(MWR_CONTACT_EMAIL) else ""
+
+
+def _vacante_notification_subject(name, source_path):
+    who = _vacante_normalize_name(name) or "Contact nou"
+    source = str(source_path or "/afla-mai-mult").strip() or "/afla-mai-mult"
+    return f"[Vacante Inteligente] Mesaj nou de la {who} ({source})"
+
+
+def _vacante_notification_text(message_id, created_at_iso, name, email, phone, message, source_path, ip_address):
+    lines = [
+        "Mesaj nou din formularul Vacante Inteligente",
+        "",
+        f"ID: {message_id}",
+        f"Data: {created_at_iso}",
+        f"Nume: {name}",
+        f"Email: {email}",
+        f"Telefon: {phone or '-'}",
+        f"Sursa: {source_path}",
+        f"IP: {ip_address}",
+        "",
+        "Mesaj:",
+        message,
+    ]
+    return "\n".join(lines)
+
+
+def _vacante_notify_via_sendgrid(to_email, subject, text_body, reply_to_email=""):
+    payload = {
+        "personalizations": [{"to": [{"email": to_email}], "subject": subject}],
+        "from": {"email": SMTP_FROM_EMAIL, "name": SMTP_FROM_NAME},
+        "content": [{"type": "text/plain", "value": text_body}],
+    }
+    if _vacante_valid_email(reply_to_email):
+        payload["reply_to"] = {"email": reply_to_email}
+    response = requests.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        headers={
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=10,
+    )
+    response.raise_for_status()
+
+
+def _vacante_notify_via_smtp(to_email, subject, text_body, reply_to_email=""):
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>" if SMTP_FROM_NAME else SMTP_FROM_EMAIL
+    msg["To"] = to_email
+    if _vacante_valid_email(reply_to_email):
+        msg["Reply-To"] = reply_to_email
+    msg.set_content(text_body)
+
+    if SMTP_SSL:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+            if SMTP_USERNAME:
+                server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(msg)
+        return
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+        try:
+            server.ehlo()
+        except Exception:
+            pass
+        if SMTP_TLS:
+            server.starttls()
+            try:
+                server.ehlo()
+            except Exception:
+                pass
+        if SMTP_USERNAME:
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+
+
+def _vacante_send_contact_notification(message_id, created_at_iso, name, email, phone, message, source_path, ip_address):
+    to_email = _vacante_notification_recipient()
+    if not to_email:
+        return {"status": "stored", "provider": "none", "reason": "missing_recipient"}
+
+    subject = _vacante_notification_subject(name, source_path)
+    text_body = _vacante_notification_text(message_id, created_at_iso, name, email, phone, message, source_path, ip_address)
+
+    if SENDGRID_API_KEY:
+        _vacante_notify_via_sendgrid(to_email, subject, text_body, reply_to_email=email)
+        return {"status": "notified", "provider": "sendgrid"}
+
+    if SMTP_HOST:
+        _vacante_notify_via_smtp(to_email, subject, text_body, reply_to_email=email)
+        return {"status": "notified", "provider": "smtp"}
+
+    return {"status": "stored", "provider": "none", "reason": "missing_transport"}
+
+
+def _vacante_context():
+    return dict(
+        canonical_url=request.base_url,
+        mwr_external_url=MWR_EXTERNAL_URL,
+        mwr_referral_url=MWR_REFERRAL_URL,
+        mwr_contact_email=MWR_CONTACT_EMAIL,
+        mwr_whatsapp_url=_vacante_whatsapp_url(),
+        mwr_live_chat_snippet=MWR_LIVE_CHAT_SNIPPET,
+        mwr_contact_form_endpoint=_vacante_contact_form_endpoint(),
+        vacante_site_url=_vacante_site_url(),
+        vacante_og_image_url=_vacante_og_image_url(),
+        vacante_org_schema=_vacante_org_schema(),
+        vacante_faq_items=_vacante_faq_items(),
+        vacante_faq_schema=_vacante_faq_schema(),
+    )
+
+
+@app.route("/mwr")
+def mwr_page():
+    return render_template("mwr.html", vacante_page_type="home", **_vacante_context())
+
+
+@app.route("/mwr/privacy")
+def mwr_privacy_page():
+    return render_template("mwr_privacy.html", vacante_page_type="privacy", **_vacante_context())
+
+
+@app.route("/mwr/terms")
+def mwr_terms_page():
+    return render_template("mwr_terms.html", vacante_page_type="terms", **_vacante_context())
+
+
+# Aliases so footer/nav links resolve (previously returned 404).
+@app.route("/privacy")
+def vacante_privacy_alias():
+    return render_template("mwr_privacy.html", vacante_page_type="privacy", **_vacante_context())
+
+
+@app.route("/terms")
+def vacante_terms_alias():
+    return render_template("mwr_terms.html", vacante_page_type="terms", **_vacante_context())
+
+
+@app.route("/contact")
+def vacante_contact_redirect():
+    # High-intent traffic lands on the contact section of /afla-mai-mult.
+    return redirect("/afla-mai-mult#contact", code=302)
+
+
+@app.route("/afla-mai-mult")
+def afla_mai_mult_page():
+    return render_template("afla-mai-mult.html", vacante_page_type="explainer", **_vacante_context())
+
+
+@app.route("/intrebari-frecvente")
+def vacante_faq_page():
+    return render_template("intrebari-frecvente.html", vacante_page_type="faq", **_vacante_context())
+
+
+@app.route("/multumesc")
+def vacante_thank_you_page():
+    contact_event = str(request.args.get("contact") or "").strip() == "1"
+    return render_template(
+        "multumesc.html",
+        vacante_page_type="thank_you",
+        vacante_contact_event=contact_event,
+        **_vacante_context(),
+    )
+
+
+@app.route("/api/contact", methods=["POST"])
+def vacante_contact_api():
+    if str(request.form.get("website") or "").strip():
+        return _vacante_contact_success_response()
+
+    name = _vacante_normalize_name(request.form.get("name"))
+    email = str(request.form.get("email") or "").strip().lower()
+    phone = re.sub(r"\s+", " ", str(request.form.get("phone") or "").strip())
+    message = _vacante_normalize_message(request.form.get("message"))
+    source_path = str(request.form.get("source_path") or request.referrer or "/afla-mai-mult").strip()[:255]
+    if not source_path.startswith("/"):
+        source_path = "/afla-mai-mult"
+
+    if len(name) < 2 or len(name) > 80:
+        return _vacante_contact_error_response("Te rugam sa completezi un nume valid.")
+    if not _vacante_valid_email(email):
+        return _vacante_contact_error_response("Te rugam sa completezi o adresa de email valida.")
+    if phone and len(phone) > 40:
+        return _vacante_contact_error_response("Numarul de telefon pare prea lung.")
+    if len(message) < 10 or len(message) > 4000:
+        return _vacante_contact_error_response("Mesajul trebuie sa aiba intre 10 si 4000 de caractere.")
+
+    ip_address = _vacante_client_ip()
+    created_at = int(time.time())
+    created_at_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    user_agent = str(request.headers.get("User-Agent", "") or "").strip()[:512]
+    referer = str(request.headers.get("Referer", "") or "").strip()[:512]
+
+    conn = _vacante_db_connect()
+    try:
+        _ensure_vacante_contact_schema(conn)
+        recent_count = conn.execute(
+            """
+            SELECT COUNT(1)
+            FROM vacante_contact_messages
+            WHERE ip = ? AND created_at >= ?
+            """,
+            (ip_address, created_at - 3600),
+        ).fetchone()[0]
+        if int(recent_count or 0) >= MWR_CONTACT_RATE_LIMIT_PER_HOUR:
+            return _vacante_contact_error_response(
+                "Ai trimis deja cateva mesaje recent. Incearca din nou peste aproximativ o ora sau foloseste emailul direct.",
+                status_code=429,
+            )
+        conn.execute(
+            """
+            INSERT INTO vacante_contact_messages (
+                created_at, created_at_iso, ip, user_agent, referer, source_path,
+                name, email, phone, message, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new')
+            """,
+            (created_at, created_at_iso, ip_address, user_agent, referer, source_path, name, email, phone, message),
+        )
+        message_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        conn.commit()
+        notification = None
+        try:
+            notification = _vacante_send_contact_notification(
+                message_id=message_id,
+                created_at_iso=created_at_iso,
+                name=name,
+                email=email,
+                phone=phone,
+                message=message,
+                source_path=source_path,
+                ip_address=ip_address,
+            )
+        except Exception as exc:
+            notification = {"status": "notify_failed", "provider": "error", "error": str(exc)}
+            app.logger.warning("vacante_contact_notification_error id=%s err=%s", message_id, exc)
+        if isinstance(notification, dict):
+            status_value = str(notification.get("status") or "").strip() or "stored"
+            conn.execute(
+                "UPDATE vacante_contact_messages SET status = ? WHERE id = ?",
+                (status_value, message_id),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+    return _vacante_contact_success_response()
 
 
 @app.route('/settings')
@@ -3860,7 +7951,7 @@ def settings_page():
     uid = get_current_user_id()
     if uid > 0 and _must_complete_onboarding(uid):
         return redirect(url_for("onboarding_page"))
-    return render_template('settings.html')
+    return render_template('settings.html', settings_agents_catalog=_all_workspace_agents())
 
 
 @app.route('/workspace/<ws_slug>')
@@ -3942,6 +8033,1507 @@ def chat_home():
     )
 
 
+def _sse_event(event_name, data):
+    payload = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
+    return f"event: {event_name}\ndata: {payload}\n\n"
+
+
+def _iter_text_chunks(text, chunk_size=24):
+    value = str(text or "")
+    size = max(1, int(chunk_size or 24))
+    for i in range(0, len(value), size):
+        yield value[i:i + size]
+
+
+def _kb_search_rows_legacy(query, limit=3):
+    text = str(query or "").strip().lower()
+    top_n = max(1, min(int(limit or 3), 10))
+    if not text:
+        return []
+    words = [w for w in text.split() if w]
+    if not words:
+        return []
+    like_conditions = " OR ".join(["LOWER(content) LIKE ? OR LOWER(title) LIKE ? OR LOWER(summary) LIKE ?"] * len(words))
+    params = []
+    for word in words:
+        pattern = f"%{word}%"
+        params.extend([pattern, pattern, pattern])
+    params.append(top_n)
+    conn = get_db()
+    cursor = conn.cursor()
+    sql = f"""
+        SELECT title, summary, content, source
+        FROM chunks
+        WHERE {like_conditions}
+        ORDER BY LENGTH(content) DESC
+        LIMIT ?
+    """
+    rows = cursor.execute(sql, params).fetchall()
+    conn.close()
+    return [
+        {"title": r[0], "summary": r[1], "content": r[2], "source": r[3]}
+        for r in rows
+    ]
+
+
+def _kb_search_rows(query, limit=3):
+    text = str(query or "").strip().lower()
+    top_n = max(1, min(int(limit or 3), 10))
+    if not text:
+        return []
+    live_rows = _rag_search_rows_live(text, limit=top_n, agent_slug=request.args.get("agent_slug") if has_request_context() else None)
+    if live_rows:
+        return live_rows
+    return _kb_search_rows_legacy(text, limit=top_n)
+
+
+def _should_run_kb_search_for_chat(user_message):
+    text = str(user_message or "").strip().lower()
+    if len(text) < 18:
+        return False
+    keywords = (
+        "knowledge", "report", "research", "study", "docs", "documentation",
+        "best practice", "benchmark", "strategy", "framework", "how", "why",
+    )
+    return ("?" in text) or any(k in text for k in keywords)
+
+
+TOOL_REGISTRY_MVP = [
+    {
+        "name": "kb.search",
+        "description": "Search Camarad knowledge chunks using semantic retrieval with SQLite keyword fallback.",
+        "risk": "read",
+        "scopes_required": ["kb.read"],
+        "enabled": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 1},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 3},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        "output_schema": {
+            "type": "object",
+            "properties": {
+                "results": {"type": "array"},
+                "summary": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "ga4.properties.read",
+        "description": "List connected GA4 properties.",
+        "risk": "read",
+        "scopes_required": ["ga4.read"],
+        "enabled": True,
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "output_schema": {"type": "object", "properties": {"properties": {"type": "array"}}},
+    },
+    {
+        "name": "ga4.overview.read",
+        "description": "Fetch GA4 overview metrics for the selected property.",
+        "risk": "read",
+        "scopes_required": ["ga4.read"],
+        "enabled": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {"property_id": {"type": "string"}},
+            "additionalProperties": True,
+        },
+        "output_schema": {"type": "object"},
+    },
+    {
+        "name": "ga4.timeseries.read",
+        "description": "Fetch GA4 timeseries metrics.",
+        "risk": "read",
+        "scopes_required": ["ga4.read"],
+        "enabled": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {"property_id": {"type": "string"}, "range": {"type": "string"}},
+            "additionalProperties": True,
+        },
+        "output_schema": {"type": "array"},
+    },
+    {
+        "name": "google_ads.accounts.read",
+        "description": "List available Google Ads accounts.",
+        "risk": "read",
+        "scopes_required": ["google_ads.read"],
+        "enabled": True,
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "output_schema": {"type": "array"},
+    },
+    {
+        "name": "google_ads.campaigns.read",
+        "description": "List Google Ads campaigns for account.",
+        "risk": "read",
+        "scopes_required": ["google_ads.read"],
+        "enabled": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {"account_id": {"type": "string"}},
+            "additionalProperties": True,
+        },
+        "output_schema": {"type": "array"},
+    },
+    {
+        "name": "google_ads.metrics.read",
+        "description": "Fetch Google Ads metrics and KPIs.",
+        "risk": "read",
+        "scopes_required": ["google_ads.read"],
+        "enabled": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {"account_id": {"type": "string"}, "date_range": {"type": "string"}},
+            "additionalProperties": True,
+        },
+        "output_schema": {"type": "object"},
+    },
+    {
+        "name": "agent.send_message",
+        "description": "Send an internal message between agents.",
+        "risk": "write",
+        "scopes_required": ["agent.message.write"],
+        "enabled": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to_agent": {"type": "string"},
+                "thread_id": {"type": "string"},
+                "payload": {"type": "object"},
+                "priority": {"type": "string", "enum": ["normal", "high"]},
+            },
+            "required": ["to_agent", "payload"],
+            "additionalProperties": False,
+        },
+        "output_schema": {"type": "object"},
+    },
+    {
+        "name": "flow.propose_patch",
+        "description": "Propose a patch for an orchestrator flow without applying it.",
+        "risk": "write",
+        "scopes_required": ["flow.write"],
+        "enabled": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "flow_id": {"type": ["string", "integer"]},
+                "patch": {"type": ["array", "string"]},
+                "base_version": {"type": ["string", "integer"]},
+            },
+            "required": ["flow_id", "patch"],
+            "additionalProperties": False,
+        },
+        "output_schema": {"type": "object"},
+    },
+    {
+        "name": "flow.apply_patch",
+        "description": "Apply an approved patch to a flow version.",
+        "risk": "write",
+        "scopes_required": ["flow.write"],
+        "enabled": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "flow_id": {"type": ["string", "integer"]},
+                "patch_id": {"type": ["string", "integer"]},
+            },
+            "required": ["flow_id"],
+            "additionalProperties": True,
+        },
+        "output_schema": {"type": "object"},
+    },
+]
+
+
+def _tool_registry_scope_catalog():
+    scopes = set()
+    for tool in TOOL_REGISTRY_MVP:
+        req = tool.get("scopes_required") if isinstance(tool, dict) else []
+        if isinstance(req, list):
+            for s in req:
+                v = str(s or "").strip().lower()
+                if v:
+                    scopes.add(v)
+    return sorted(scopes)
+
+
+def _tool_registry_entries(workspace_slug=None):
+    _ = workspace_slug
+    return copy.deepcopy(TOOL_REGISTRY_MVP)
+
+
+def _tool_registry_by_name(workspace_slug=None):
+    out = {}
+    for t in _tool_registry_entries(workspace_slug):
+        out[str(t.get("name") or "").strip()] = t
+    return out
+
+
+def _policy_check(tool_obj, *, user_id, agent_slug, workspace_slug, user_role=None, agent_role=None, user_scopes=None):
+    _ = (user_id, agent_slug, workspace_slug, user_role, agent_role)
+    risk = str((tool_obj or {}).get("risk") or "").strip().lower()
+    scopes_required = [str(s).strip().lower() for s in ((tool_obj or {}).get("scopes_required") or []) if str(s).strip()]
+    scopes = set(str(s).strip().lower() for s in (user_scopes or []) if str(s).strip())
+    has_scopes = len(scopes) > 0
+    missing_scopes = [req for req in scopes_required if req not in scopes]
+    suggested_scopes = list(scopes_required)
+
+    if risk == "admin":
+        return {
+            "decision": "deny",
+            "reason": "admin tools are disabled in current policy",
+            "suggested_scopes": suggested_scopes,
+            "missing_scopes": missing_scopes,
+        }
+    if risk == "write":
+        if missing_scopes:
+            return {
+                "decision": "deny",
+                "reason": "missing required scope",
+                "suggested_scopes": suggested_scopes,
+                "missing_scopes": missing_scopes,
+            }
+        return {
+            "decision": "require_approval",
+            "reason": "write tools require approval",
+            "suggested_scopes": suggested_scopes,
+            "missing_scopes": missing_scopes,
+        }
+    if risk == "read":
+        # If scopes are configured for user, enforce them. Otherwise keep legacy allow.
+        if has_scopes and missing_scopes:
+            return {
+                "decision": "deny",
+                "reason": "missing required scope",
+                "suggested_scopes": suggested_scopes,
+                "missing_scopes": missing_scopes,
+            }
+        return {
+            "decision": "allow",
+            "reason": "read tool allowed",
+            "suggested_scopes": suggested_scopes,
+            "missing_scopes": missing_scopes,
+        }
+    return {
+        "decision": "deny",
+        "reason": "unknown tool risk",
+        "suggested_scopes": suggested_scopes,
+        "missing_scopes": missing_scopes,
+    }
+
+
+def _sanitize_tool_args_for_event(args):
+    if not isinstance(args, dict):
+        return {}
+    out = {}
+    for k, v in args.items():
+        key = str(k)
+        if key.lower() in ("api_key", "token", "secret", "password"):
+            out[key] = "***"
+            continue
+        if isinstance(v, str) and len(v) > 240:
+            out[key] = v[:240] + "…"
+        else:
+            out[key] = v
+    return out
+
+
+def _approval_args_fingerprint(args_json):
+    raw = "{}"
+    if isinstance(args_json, str):
+        raw = args_json
+    elif isinstance(args_json, dict):
+        try:
+            raw = json.dumps(args_json, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            raw = "{}"
+    try:
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    except Exception:
+        return ""
+
+
+def _resolve_user_policy_context(user_id):
+    role = "member"
+    scopes = []
+    try:
+        settings_obj = _get_user_settings(user_id)
+    except Exception:
+        settings_obj = {}
+    settings_obj = settings_obj if isinstance(settings_obj, dict) else {}
+    permissions = settings_obj.get("permissions") if isinstance(settings_obj.get("permissions"), dict) else {}
+    profile = settings_obj.get("profile") if isinstance(settings_obj.get("profile"), dict) else {}
+
+    candidate_role = str(
+        permissions.get("workspace_role")
+        or permissions.get("role")
+        or profile.get("role")
+        or "member"
+    ).strip().lower()
+    if candidate_role in ("owner", "admin", "member", "guest"):
+        role = candidate_role
+    elif candidate_role in ("superadmin", "super_admin"):
+        role = "owner"
+
+    raw_scopes = permissions.get("scopes")
+    if isinstance(raw_scopes, list):
+        scopes = [str(s).strip().lower() for s in raw_scopes if str(s or "").strip()][:200]
+
+    return {"role": role, "scopes": scopes}
+
+
+def _approval_user_role(user_id):
+    return str((_resolve_user_policy_context(user_id) or {}).get("role") or "member")
+
+
+def _approval_user_scopes(user_id):
+    out = (_resolve_user_policy_context(user_id) or {}).get("scopes") or []
+    return out if isinstance(out, list) else []
+
+
+def _approval_force_restore_allowed(user_id):
+    return _approval_user_role(user_id) in ("owner", "admin")
+
+
+def _ensure_pending_tool_calls_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pending_tool_calls (
+            call_id TEXT PRIMARY KEY,
+            user_id INTEGER,
+            client_id INTEGER,
+            ws_slug TEXT,
+            conv_id INTEGER,
+            tool_name TEXT NOT NULL,
+            args_json TEXT,
+            risk TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            status TEXT DEFAULT 'pending',
+            result_json TEXT,
+            error_text TEXT,
+            retry_count INTEGER DEFAULT 0,
+            force_restored INTEGER DEFAULT 0,
+            resolved_by TEXT,
+            resolved_at TEXT
+        )
+        """
+    )
+    for stmt in (
+        "ALTER TABLE pending_tool_calls ADD COLUMN result_json TEXT",
+        "ALTER TABLE pending_tool_calls ADD COLUMN error_text TEXT",
+        "ALTER TABLE pending_tool_calls ADD COLUMN retry_count INTEGER DEFAULT 0",
+        "ALTER TABLE pending_tool_calls ADD COLUMN force_restored INTEGER DEFAULT 0",
+    ):
+        try:
+            conn.execute(stmt)
+        except Exception:
+            pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_tool_calls_user_status ON pending_tool_calls(user_id, status)")
+    except Exception:
+        pass
+
+
+def _ensure_approval_audit_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS approval_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            call_id TEXT NOT NULL,
+            user_id INTEGER,
+            client_id INTEGER,
+            ws_slug TEXT,
+            conv_id INTEGER,
+            tool_name TEXT,
+            action TEXT NOT NULL,
+            status TEXT,
+            reason TEXT,
+            payload_json TEXT,
+            actor TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_approval_audit_call_id ON approval_audit_log(call_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_approval_audit_user_id ON approval_audit_log(user_id)")
+    except Exception:
+        pass
+
+
+def _ensure_approval_idempotency_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS approval_idempotency_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            client_id INTEGER,
+            call_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            response_json TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    try:
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_idempotency_unique
+            ON approval_idempotency_keys(user_id, call_id, action, idempotency_key)
+            """
+        )
+    except Exception:
+        pass
+
+
+def _resolve_idempotency_key(raw_json):
+    payload = raw_json if isinstance(raw_json, dict) else {}
+    body_key = str(payload.get("idempotency_key") or "").strip()
+    hdr_key = str(request.headers.get("Idempotency-Key") or "").strip() if has_request_context() else ""
+    key = body_key or hdr_key
+    return key[:160] if key else ""
+
+
+def _idempotency_replay_lookup(conn, *, user_id, call_id, action, idempotency_key):
+    if not idempotency_key:
+        return None
+    row = conn.execute(
+        """
+        SELECT response_json
+        FROM approval_idempotency_keys
+        WHERE user_id = ? AND call_id = ? AND action = ? AND idempotency_key = ?
+        LIMIT 1
+        """,
+        (int(user_id), str(call_id), str(action), str(idempotency_key)),
+    ).fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        payload = json.loads(row[0])
+        if isinstance(payload, dict):
+            payload["idempotent_replay"] = True
+            return payload
+    except Exception:
+        return None
+    return None
+
+
+def _idempotency_store_response(conn, *, user_id, client_id, call_id, action, idempotency_key, response_obj):
+    if not idempotency_key:
+        return
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO approval_idempotency_keys
+            (user_id, client_id, call_id, action, idempotency_key, response_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_id),
+                int(client_id) if client_id is not None else None,
+                str(call_id),
+                str(action),
+                str(idempotency_key),
+                json.dumps(response_obj or {}, ensure_ascii=False),
+            ),
+        )
+    except Exception:
+        pass
+
+
+def _log_approval_audit(conn, *, call_id, user_id, client_id, ws_slug, conv_id, tool_name, action, status="", reason="", payload=None, actor="system"):
+    conn.execute(
+        """
+        INSERT INTO approval_audit_log
+        (call_id, user_id, client_id, ws_slug, conv_id, tool_name, action, status, reason, payload_json, actor)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(call_id or ""),
+            int(user_id or 0),
+            int(client_id) if client_id is not None else None,
+            str(ws_slug or ""),
+            int(conv_id) if conv_id is not None else None,
+            str(tool_name or ""),
+            str(action or ""),
+            str(status or ""),
+            str(reason or ""),
+            json.dumps(payload or {}, ensure_ascii=False),
+            str(actor or "system"),
+        ),
+    )
+
+
+def _approval_resolved_event_payload(*, response_obj, source="api"):
+    obj = response_obj if isinstance(response_obj, dict) else {}
+    return {
+        "event": "approval.resolved",
+        "source": str(source or "api"),
+        "call_id": str(obj.get("call_id") or ""),
+        "status": str(obj.get("status") or ""),
+        "tool_name": str(obj.get("tool_name") or ""),
+        "conv_id": obj.get("conv_id"),
+        "ws_slug": str(obj.get("ws_slug") or ""),
+        "summary": str(obj.get("summary") or ""),
+    }
+
+
+def _approval_stream_event_from_row(row):
+    if not row:
+        return None
+    audit_id = int(row[0] or 0)
+    call_id = str(row[1] or "")
+    action = str(row[2] or "").strip().lower()
+    audit_status = str(row[3] or "").strip().lower()
+    reason = str(row[4] or "")
+    created_at = row[5]
+    tool_name = str(row[6] or "")
+    conv_id = row[7]
+    ws_slug = str(row[8] or "")
+    call_status = str(row[9] or "").strip().lower()
+    error_text = str(row[10] or "")
+    result_json_raw = row[11]
+    summary = reason or error_text or call_status
+    if result_json_raw:
+        try:
+            parsed = json.loads(result_json_raw)
+            if isinstance(parsed, dict):
+                summary = str(parsed.get("summary") or summary)
+        except Exception:
+            pass
+    status = call_status or audit_status or "updated"
+    return {
+        "event": "approval.resolved",
+        "source": "approvals.stream",
+        "call_id": call_id,
+        "status": status,
+        "tool_name": tool_name,
+        "conv_id": conv_id,
+        "ws_slug": ws_slug,
+        "summary": summary,
+        "cursor_id": audit_id,
+        "audit_action": action,
+        "created_at": created_at,
+    }
+
+
+def _create_pending_tool_call(*, call_id, user_id, client_id, ws_slug, conv_id, tool_name, args_obj, risk):
+    conn = get_db()
+    _ensure_client_tables(conn)
+    _ensure_pending_tool_calls_table(conn)
+    _ensure_approval_audit_table(conn)
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO pending_tool_calls
+        (call_id, user_id, client_id, ws_slug, conv_id, tool_name, args_json, risk, status, result_json, error_text, retry_count, force_restored, resolved_by, resolved_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, 0, 0, NULL, NULL)
+        """,
+        (
+            str(call_id),
+            int(user_id or 0),
+            int(client_id) if client_id is not None else None,
+            str(ws_slug or ""),
+            int(conv_id) if conv_id is not None else None,
+            str(tool_name or ""),
+            json.dumps(args_obj or {}, ensure_ascii=False),
+            str(risk or ""),
+        ),
+    )
+    _log_approval_audit(
+        conn,
+        call_id=call_id,
+        user_id=user_id,
+        client_id=client_id,
+        ws_slug=ws_slug,
+        conv_id=conv_id,
+        tool_name=tool_name,
+        action="requested",
+        status="pending",
+        reason="policy_require_approval",
+        payload={"args": _sanitize_tool_args_for_event(args_obj or {}), "risk": str(risk or "")},
+        actor="runtime",
+    )
+    conn.commit()
+    conn.close()
+
+
+def _execute_write_intent_tool(tool_name, args_obj, *, user_id, ws_slug, conv_id):
+    name = str(tool_name or "").strip().lower()
+    args = args_obj if isinstance(args_obj, dict) else {}
+    client_id = get_current_client_id()
+
+    def _json_canon(value):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    def _hash_text(value):
+        try:
+            return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+        except Exception:
+            return ""
+
+    def _parse_flow_id(flow_ref):
+        if isinstance(flow_ref, int):
+            return int(flow_ref) if int(flow_ref) > 0 else None
+        text = str(flow_ref or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = int(text)
+            return parsed if parsed > 0 else None
+        except Exception:
+            return None
+
+    def _load_flow_row(conn, flow_ref):
+        _migrate_flows_table(conn)
+        _ensure_client_tables(conn)
+        flow_id = _parse_flow_id(flow_ref)
+        if flow_id is not None:
+            sql = """
+                SELECT id, name, flow_json, updated_at
+                FROM flows
+                WHERE id = ? AND user_id = ?
+            """
+            params = [int(flow_id), int(user_id)]
+            if client_id is not None:
+                sql += " AND COALESCE(client_id, 0) = ?"
+                params.append(int(client_id))
+            row = conn.execute(sql, tuple(params)).fetchone()
+            if row:
+                return row
+
+        ref_txt = str(flow_ref or "").strip().lower()
+        if not ref_txt:
+            return None
+        sql = """
+            SELECT id, name, flow_json, updated_at
+            FROM flows
+            WHERE user_id = ? AND LOWER(COALESCE(name, '')) = ?
+        """
+        params = [int(user_id), ref_txt]
+        if client_id is not None:
+            sql += " AND COALESCE(client_id, 0) = ?"
+            params.append(int(client_id))
+        sql += " ORDER BY updated_at DESC LIMIT 1"
+        row = conn.execute(sql, tuple(params)).fetchone()
+        if row:
+            return row
+        return None
+
+    def _json_pointer_tokens(path):
+        text = str(path or "").strip()
+        if text == "":
+            return []
+        if not text.startswith("/"):
+            raise ValueError("patch path must start with '/'")
+        parts = text.split("/")[1:]
+        out = []
+        for p in parts:
+            out.append(p.replace("~1", "/").replace("~0", "~"))
+        return out
+
+    def _patch_allowed(patch_ops):
+        if not isinstance(patch_ops, list) or not patch_ops:
+            return False, "patch must be a non-empty list of JSON Patch operations"
+        if len(patch_ops) > 100:
+            return False, "patch too large"
+        allowed_prefixes = (
+            "/nodes", "/connections", "/meta", "/config", "/triggers", "/steps", "/outputs", "/name", "/description", "/category"
+        )
+        forbidden_tokens = {"user_id", "client_id", "is_template", "risk", "scopes_required", "permissions", "admin"}
+        for op in patch_ops:
+            if not isinstance(op, dict):
+                return False, "patch operation must be an object"
+            op_name = str(op.get("op") or "").strip().lower()
+            if op_name not in ("add", "replace", "remove"):
+                return False, f"unsupported patch op: {op_name}"
+            path = str(op.get("path") or "").strip()
+            if not path.startswith(allowed_prefixes):
+                return False, f"patch path not allowed: {path}"
+            for token in _json_pointer_tokens(path):
+                if str(token or "").strip().lower() in forbidden_tokens:
+                    return False, f"patch token not allowed: {token}"
+            if op_name != "remove":
+                try:
+                    if len(_json_canon(op.get("value"))) > 80_000:
+                        return False, "patch value too large"
+                except Exception:
+                    return False, "invalid patch value"
+        return True, ""
+
+    def _resolve_parent(container, tokens):
+        if not tokens:
+            return None, None
+        cur = container
+        for token in tokens[:-1]:
+            if isinstance(cur, dict):
+                if token not in cur:
+                    raise ValueError(f"path segment not found: {token}")
+                cur = cur[token]
+            elif isinstance(cur, list):
+                if token == "-":
+                    raise ValueError("'-' is only allowed as final list token")
+                try:
+                    idx = int(token)
+                except Exception:
+                    raise ValueError(f"invalid list index: {token}")
+                if idx < 0 or idx >= len(cur):
+                    raise ValueError(f"list index out of range: {idx}")
+                cur = cur[idx]
+            else:
+                raise ValueError(f"invalid path traversal at token: {token}")
+        return cur, tokens[-1]
+
+    def _apply_patch(document, patch_ops):
+        data = copy.deepcopy(document)
+        for op in patch_ops:
+            op_name = str(op.get("op") or "").strip().lower()
+            path = str(op.get("path") or "").strip()
+            tokens = _json_pointer_tokens(path)
+            if not tokens:
+                raise ValueError("root path is not supported")
+            parent, tail = _resolve_parent(data, tokens)
+            if isinstance(parent, dict):
+                if op_name == "remove":
+                    if tail not in parent:
+                        raise ValueError(f"key not found for remove: {tail}")
+                    del parent[tail]
+                elif op_name == "replace":
+                    if tail not in parent:
+                        raise ValueError(f"key not found for replace: {tail}")
+                    parent[tail] = op.get("value")
+                elif op_name == "add":
+                    parent[tail] = op.get("value")
+            elif isinstance(parent, list):
+                if tail == "-":
+                    if op_name != "add":
+                        raise ValueError("'-' index supports only add")
+                    parent.append(op.get("value"))
+                else:
+                    try:
+                        idx = int(tail)
+                    except Exception:
+                        raise ValueError(f"invalid list index: {tail}")
+                    if op_name == "remove":
+                        if idx < 0 or idx >= len(parent):
+                            raise ValueError(f"list index out of range: {idx}")
+                        parent.pop(idx)
+                    elif op_name == "replace":
+                        if idx < 0 or idx >= len(parent):
+                            raise ValueError(f"list index out of range: {idx}")
+                        parent[idx] = op.get("value")
+                    elif op_name == "add":
+                        if idx < 0 or idx > len(parent):
+                            raise ValueError(f"list index out of range: {idx}")
+                        parent.insert(idx, op.get("value"))
+            else:
+                raise ValueError("invalid patch target parent type")
+        return data
+
+    def _normalize_patch_from_args(flow_data):
+        patch_obj = args.get("patch")
+        if isinstance(patch_obj, list):
+            return patch_obj
+        if isinstance(patch_obj, str):
+            txt = patch_obj.strip()
+            if txt.startswith("["):
+                try:
+                    parsed = json.loads(txt)
+                    if isinstance(parsed, list):
+                        return parsed
+                except Exception:
+                    pass
+        note = str(args.get("patch_preview") or "").strip()
+        if not note:
+            note = "AI-generated patch proposal"
+        meta = flow_data.get("meta") if isinstance(flow_data.get("meta"), dict) else {}
+        base_notes = meta.get("notes") if isinstance(meta.get("notes"), list) else []
+        new_note = {
+            "source": "ai.propose_patch",
+            "text": note[:240],
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        return [
+            {"op": "add", "path": "/meta", "value": meta} if "meta" not in flow_data else {"op": "replace", "path": "/meta", "value": meta},
+            {"op": "add", "path": "/meta/notes", "value": (base_notes + [new_note])[-20:]},
+            {"op": "add", "path": "/meta/last_patch_preview", "value": note[:240]},
+        ]
+
+    if name == "flow.propose_patch":
+        flow_ref = args.get("flow_id") or args.get("flow_ref") or "unknown"
+        conn = get_db()
+        try:
+            _ensure_flow_patch_proposals_table(conn)
+            flow_row = _load_flow_row(conn, flow_ref)
+            if not flow_row:
+                return {
+                    "ok": False,
+                    "summary": f"Flow not found for propose_patch: {flow_ref}",
+                    "artifact_refs": [],
+                }
+            flow_id = int(flow_row[0])
+            flow_name = str(flow_row[1] or f"flow-{flow_id}")
+            try:
+                flow_data = json.loads(flow_row[2]) if flow_row[2] else {}
+                if not isinstance(flow_data, dict):
+                    flow_data = {}
+            except Exception:
+                flow_data = {}
+
+            patch_ops = _normalize_patch_from_args(flow_data)
+            allowed, reason = _patch_allowed(patch_ops)
+            if not allowed:
+                return {"ok": False, "summary": f"Patch rejected: {reason}", "artifact_refs": []}
+
+            try:
+                preview_data = _apply_patch(flow_data, patch_ops)
+            except Exception as patch_err:
+                return {
+                    "ok": False,
+                    "summary": f"Patch could not be applied in preview: {patch_err}",
+                    "artifact_refs": [],
+                }
+
+            before_text = json.dumps(flow_data, ensure_ascii=False, indent=2, sort_keys=True)
+            after_text = json.dumps(preview_data, ensure_ascii=False, indent=2, sort_keys=True)
+            diff_text = "".join(
+                difflib.unified_diff(
+                    before_text.splitlines(keepends=True),
+                    after_text.splitlines(keepends=True),
+                    fromfile=f"flow:{flow_id}:before",
+                    tofile=f"flow:{flow_id}:preview",
+                    n=2,
+                )
+            )
+            summary = f"Patch proposal prepared for flow {flow_id} ({flow_name})."
+            cur = conn.execute(
+                """
+                INSERT INTO flow_patch_proposals
+                (flow_id, user_id, client_id, ws_slug, conv_id, patch_json, patch_digest, base_flow_hash, base_flow_json, preview_flow_json, diff_text, summary, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed')
+                """,
+                (
+                    int(flow_id),
+                    int(user_id or 0),
+                    int(client_id) if client_id is not None else None,
+                    str(ws_slug or ""),
+                    int(conv_id) if conv_id is not None else None,
+                    json.dumps(patch_ops, ensure_ascii=False),
+                    _hash_text(_json_canon(patch_ops)),
+                    _hash_text(before_text),
+                    before_text,
+                    after_text,
+                    diff_text,
+                    summary,
+                ),
+            )
+            proposal_id = int(cur.lastrowid or 0)
+            conn.commit()
+            return {
+                "ok": True,
+                "summary": summary,
+                "artifact_refs": [f"flow_patch_proposal:{proposal_id}"],
+                "proposal": {
+                    "patch_id": proposal_id,
+                    "flow_id": flow_id,
+                    "flow_name": flow_name,
+                    "status": "proposed",
+                    "patch_ops": patch_ops[:20],
+                    "diff_preview": diff_text[:4000],
+                },
+            }
+        finally:
+            conn.close()
+    if name == "flow.apply_patch":
+        flow_ref = args.get("flow_id") or args.get("flow_ref") or "unknown"
+        patch_id = args.get("patch_id")
+        conn = get_db()
+        try:
+            _ensure_flow_patch_proposals_table(conn)
+            flow_row = _load_flow_row(conn, flow_ref)
+            if not flow_row:
+                return {"ok": False, "summary": f"Flow not found for apply_patch: {flow_ref}", "artifact_refs": []}
+            flow_id = int(flow_row[0])
+            flow_name = str(flow_row[1] or f"flow-{flow_id}")
+            if patch_id is not None:
+                try:
+                    patch_id = int(patch_id)
+                except Exception:
+                    patch_id = None
+            if patch_id is not None:
+                proposal_row = conn.execute(
+                    """
+                    SELECT id, patch_json, status
+                    FROM flow_patch_proposals
+                    WHERE id = ? AND flow_id = ? AND user_id = ?
+                    LIMIT 1
+                    """,
+                    (int(patch_id), int(flow_id), int(user_id or 0)),
+                ).fetchone()
+            else:
+                proposal_row = conn.execute(
+                    """
+                    SELECT id, patch_json, status
+                    FROM flow_patch_proposals
+                    WHERE flow_id = ? AND user_id = ? AND LOWER(COALESCE(status, '')) = 'proposed'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (int(flow_id), int(user_id or 0)),
+                ).fetchone()
+            if not proposal_row:
+                return {
+                    "ok": False,
+                    "summary": f"No proposed patch found for flow {flow_id}.",
+                    "artifact_refs": [],
+                }
+            proposal_id = int(proposal_row[0])
+            proposal_status = str(proposal_row[2] or "").strip().lower()
+            if proposal_status != "proposed":
+                return {
+                    "ok": False,
+                    "summary": f"Patch {proposal_id} cannot be applied from status '{proposal_status}'.",
+                    "artifact_refs": [],
+                }
+            try:
+                patch_ops = json.loads(proposal_row[1]) if proposal_row[1] else []
+            except Exception:
+                patch_ops = []
+            allowed, reason = _patch_allowed(patch_ops)
+            if not allowed:
+                return {"ok": False, "summary": f"Patch rejected at apply time: {reason}", "artifact_refs": []}
+            try:
+                flow_data = json.loads(flow_row[2]) if flow_row[2] else {}
+                if not isinstance(flow_data, dict):
+                    flow_data = {}
+            except Exception:
+                flow_data = {}
+            try:
+                applied_flow = _apply_patch(flow_data, patch_ops)
+            except Exception as patch_err:
+                return {"ok": False, "summary": f"Patch apply failed: {patch_err}", "artifact_refs": []}
+            conn.execute(
+                "UPDATE flows SET flow_json = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?",
+                (json.dumps(applied_flow, ensure_ascii=False), int(flow_id), int(user_id or 0)),
+            )
+            conn.execute(
+                """
+                UPDATE flow_patch_proposals
+                SET status = 'applied', approved_at = COALESCE(approved_at, datetime('now')), applied_at = datetime('now')
+                WHERE id = ? AND user_id = ?
+                """,
+                (int(proposal_id), int(user_id or 0)),
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "summary": f"Applied patch {proposal_id} to flow {flow_id} ({flow_name}).",
+                "artifact_refs": [f"flow_patch_proposal:{proposal_id}", f"flow:{flow_id}"],
+                "applied": {
+                    "patch_id": proposal_id,
+                    "flow_id": flow_id,
+                    "flow_name": flow_name,
+                    "status": "applied",
+                },
+            }
+        finally:
+            conn.close()
+    if name == "agent.send_message":
+        to_agent = args.get("to_agent") or "unknown-agent"
+        payload_preview = str(args.get("payload_preview") or "").strip()
+        return {
+            "ok": True,
+            "summary": f"Message routed to agent {to_agent}.",
+            "artifact_refs": [f"message:{ws_slug}:{conv_id}:{to_agent}:{uuid.uuid4().hex[:8]}"],
+            "delivery": {
+                "to_agent": str(to_agent),
+                "priority": str(args.get("priority") or "normal"),
+                "payload_preview": payload_preview[:240],
+                "status": "queued",
+            },
+        }
+    return {
+        "ok": False,
+        "summary": f"Tool {tool_name} is not executable in current resume runtime.",
+        "artifact_refs": [],
+    }
+
+
+def _maybe_detect_write_intent_tool(user_message):
+    text = str(user_message or "").strip().lower()
+    if not text:
+        return None
+
+    def _extract_flow_id(raw_text):
+        m = re.search(r"\bflow[\s:_-]*([a-z0-9][a-z0-9._-]{0,80})\b", raw_text, re.IGNORECASE)
+        return str(m.group(1) if m else "unknown")
+
+    def _extract_agent_slug(raw_text):
+        known = sorted(list(_ALL_WORKSPACE_AGENT_SLUGS or []), key=len, reverse=True)
+        for slug in known:
+            if slug and re.search(rf"\b{re.escape(slug)}\b", raw_text):
+                return slug
+        m = re.search(r"\bto[\s:_-]*agent[\s:_-]*([a-z0-9][a-z0-9._-]{1,80})\b", raw_text)
+        if m:
+            return str(m.group(1))
+        m2 = re.search(r"\bto[\s:_-]*([a-z0-9][a-z0-9._-]{1,80})\b", raw_text)
+        if m2:
+            return str(m2.group(1))
+        return "unknown"
+
+    if ("apply" in text and "patch" in text and "flow" in text) or "flow.apply_patch" in text:
+        patch_id = None
+        m_pid = re.search(r"\bpatch[\s:_-]*([0-9]{1,12})\b", text)
+        if m_pid:
+            try:
+                patch_id = int(m_pid.group(1))
+            except Exception:
+                patch_id = None
+        args = {"flow_id": _extract_flow_id(text), "patch_preview": text[:180]}
+        if patch_id is not None:
+            args["patch_id"] = patch_id
+        return ("flow.apply_patch", args)
+    if ("propose" in text and "patch" in text and "flow" in text) or "flow.propose_patch" in text:
+        return ("flow.propose_patch", {"flow_id": _extract_flow_id(text), "patch_preview": text[:180]})
+    if ("send message" in text) or "agent.send_message" in text:
+        payload_preview = text
+        for token in (":", "message", "payload"):
+            if token in payload_preview:
+                idx = payload_preview.find(token)
+                payload_preview = payload_preview[idx + len(token):].strip()
+                if payload_preview:
+                    break
+        return ("agent.send_message", {"to_agent": _extract_agent_slug(text), "payload_preview": payload_preview[:180], "priority": "normal"})
+    return None
+
+
+def _chat_process_message(uid, ws_slug, agent_slug, user_message, conv_id, request_id, emit=None):
+    def _emit(event_name, payload):
+        if callable(emit):
+            try:
+                emit(event_name, payload)
+            except Exception:
+                pass
+
+    agent_name = get_agent_name(ws_slug, agent_slug)
+
+    if conv_id:
+        conv_id = int(conv_id)
+    else:
+        conv_id = get_or_create_conversation(uid, ws_slug, agent_slug)
+
+    # Auto-title: use first message if conversation has no title.
+    try:
+        conn_t = get_db()
+        row_t = conn_t.execute('SELECT title FROM conversations WHERE id = ?', (conv_id,)).fetchone()
+        if row_t and (not row_t[0] or row_t[0] == agent_slug):
+            title = user_message[:50] + ('…' if len(user_message) > 50 else '')
+            conn_t.execute('UPDATE conversations SET title = ? WHERE id = ?', (title, conv_id))
+            conn_t.commit()
+        conn_t.close()
+    except Exception:
+        pass
+
+    save_message(conv_id, 'user', user_message)
+    t0 = time.time()
+    llm_provider = "mock"
+    llm_model = "simulate_response"
+    llm_status = "ok"
+    llm_error = None
+
+    # ── Execution truth tracking ──────────────────────────────────────
+    # Track the intended path vs what actually executed, so the UI can
+    # show green (intended path worked), yellow (fallback), red (error).
+    _is_real_agent = agent_slug in REAL_AGENT_SLUGS
+    _intended_provider = "vertex" if _is_real_agent else "mock"
+    _intended_model = COOLBITS_VERTEX_PROFILE if _is_real_agent else "simulate_response"
+    _intended_execution_path = "managed_gateway" if _is_real_agent else "local_mock"
+    _execution_path = "none"   # will be set by whichever stage succeeds
+    _fallback_used = False
+    _fallback_reason = None
+
+    # ── Credential resolution ─────────────────────────────────────────
+    # Resolve how this run will be billed: byok, managed, or fallback.
+    _credential_mode = "none"
+    _billing_owner = "unknown"
+    _managed_account_id = None
+    try:
+        _cred = _resolve_llm_runtime_credentials(
+            user_id=uid,
+            provider_slug=_intended_provider,
+            agent_slug=agent_slug,
+            client_id=get_current_client_id(),
+        )
+        _credential_mode = str(_cred.get("credential_mode") or "none")
+        _billing_owner = str(_cred.get("billing_owner") or "unknown")
+        _managed_account_id = _cred.get("managed_account_id")
+    except Exception:
+        pass
+
+    try:
+        response_text = None
+        if _is_real_agent:
+            try:
+                recent_history = get_messages(conv_id) or []
+            except Exception:
+                recent_history = []
+            response_text = _generate_real_agent_response(
+                agent_slug=agent_slug,
+                ws_slug=ws_slug,
+                user_message=user_message,
+                recent_history=recent_history,
+            )
+            if response_text:
+                llm_provider = "vertex"
+                llm_model = COOLBITS_VERTEX_PROFILE
+                _execution_path = "managed_gateway"
+        if not response_text and _is_real_agent:
+            # Gateway failed or returned nothing — track the reason
+            _fallback_used = True
+            _fallback_reason = "coolbits_gateway_returned_empty"
+            response_text = _fallback_real_agent_reply(
+                agent_slug=agent_slug,
+                ws_slug=ws_slug,
+                user_message=user_message,
+                runtime_ctx=_get_chat_runtime_context(uid, get_current_client_id()),
+            )
+            if response_text:
+                llm_provider = "camarad-fallback"
+                llm_model = f"{agent_slug}-fallback"
+                _execution_path = "fallback"
+        if not response_text:
+            if _is_real_agent and not _fallback_used:
+                _fallback_used = True
+                _fallback_reason = "all_real_paths_exhausted"
+            elif _is_real_agent and _fallback_used:
+                _fallback_reason = "fallback_also_empty"
+            response_text = simulate_response(agent_slug, user_message)
+            if response_text:
+                llm_provider = "mock"
+                llm_model = "simulate_response"
+                _execution_path = "local_mock"
+        if not response_text:
+            response_text = get_llm_response(user_message)
+            llm_provider = "grok"
+            llm_model = "grok-1"
+            _execution_path = "grok_fallback"
+            if not _fallback_used:
+                _fallback_used = True
+                _fallback_reason = "all_prior_paths_exhausted"
+        response_text = _sanitize_real_agent_output(agent_slug, ws_slug, user_message, response_text)
+    except Exception as llm_err:
+        print(f"Response generation error: {llm_err}")
+        llm_status = "error"
+        llm_error = str(llm_err)
+        _execution_path = "error"
+        _fallback_reason = str(llm_err)
+        response_text = f"{agent_name}: Received '{user_message}'. (Mock response - generation failed)"
+
+    policy_ctx = _resolve_user_policy_context(uid)
+    user_role = str((policy_ctx or {}).get("role") or "member").strip().lower()
+    user_scopes = (policy_ctx or {}).get("scopes") or []
+    current_client_id = get_current_client_id()
+    tool_index = _tool_registry_by_name(ws_slug)
+
+    # Write-intent tools are policy-gated and emit approval.requested on require_approval.
+    write_intent = _maybe_detect_write_intent_tool(user_message)
+    if write_intent:
+        tool_name, tool_args = write_intent
+        call_id = f"call_{uuid.uuid4().hex[:10]}"
+        tool_obj = tool_index.get(tool_name, {"name": tool_name, "risk": "write", "scopes_required": []})
+        policy = _policy_check(
+            tool_obj,
+            user_id=uid,
+            agent_slug=agent_slug,
+            workspace_slug=ws_slug,
+            user_role=user_role,
+            agent_role=agent_slug,
+            user_scopes=user_scopes,
+        )
+        risk = str(tool_obj.get("risk") or "write")
+        _emit("tool.call", {
+            "call_id": call_id,
+            "tool_name": tool_name,
+            "args": _sanitize_tool_args_for_event(tool_args),
+            "risk": risk,
+            "requires_approval": policy.get("decision") == "require_approval",
+            "suggested_scopes": policy.get("suggested_scopes") or [],
+        })
+        if policy.get("decision") == "deny":
+            _emit("tool.result", {
+                "call_id": call_id,
+                "ok": False,
+                "summary": f"Blocked by policy: {policy.get('reason') or 'denied'}",
+                "suggested_scopes": policy.get("suggested_scopes") or [],
+                "missing_scopes": policy.get("missing_scopes") or [],
+            })
+        elif policy.get("decision") == "require_approval":
+            _create_pending_tool_call(
+                call_id=call_id,
+                user_id=uid,
+                client_id=current_client_id,
+                ws_slug=ws_slug,
+                conv_id=conv_id,
+                tool_name=tool_name,
+                args_obj=tool_args,
+                risk=risk,
+            )
+            _emit("approval.requested", {
+                "call_id": call_id,
+                "tool_name": tool_name,
+                "args_preview": _sanitize_tool_args_for_event(tool_args),
+                "reason": policy.get("reason") or "approval required",
+                "suggested_scopes": policy.get("suggested_scopes") or [],
+                "ui_actions": ["approve", "reject"],
+            })
+
+    # Read-only KB tool: emits tool events in SSE mode and enriches response when results exist.
+    kb_call_id = None
+    try:
+        if _should_run_kb_search_for_chat(user_message):
+            kb_call_id = f"call_{uuid.uuid4().hex[:10]}"
+            tool_args = {"query": user_message[:240], "limit": 3}
+            kb_tool = tool_index.get("kb.search", {"name": "kb.search", "risk": "read", "scopes_required": ["kb.read"]})
+            kb_policy = _policy_check(
+                kb_tool,
+                user_id=uid,
+                agent_slug=agent_slug,
+                workspace_slug=ws_slug,
+                user_role=user_role,
+                agent_role=agent_slug,
+                user_scopes=user_scopes,
+            )
+            _emit("tool.call", {
+                "call_id": kb_call_id,
+                "tool_name": "kb.search",
+                "args": _sanitize_tool_args_for_event(tool_args),
+                "risk": "read",
+                "requires_approval": kb_policy.get("decision") == "require_approval",
+                "suggested_scopes": kb_policy.get("suggested_scopes") or [],
+            })
+            if kb_policy.get("decision") == "deny":
+                _emit("tool.result", {
+                    "call_id": kb_call_id,
+                    "ok": False,
+                    "summary": f"Blocked by policy: {kb_policy.get('reason') or 'denied'}",
+                    "suggested_scopes": kb_policy.get("suggested_scopes") or [],
+                    "missing_scopes": kb_policy.get("missing_scopes") or [],
+                })
+                kb_rows = []
+            elif kb_policy.get("decision") == "require_approval":
+                _create_pending_tool_call(
+                    call_id=kb_call_id,
+                    user_id=uid,
+                    client_id=current_client_id,
+                    ws_slug=ws_slug,
+                    conv_id=conv_id,
+                    tool_name="kb.search",
+                    args_obj=tool_args,
+                    risk="read",
+                )
+                _emit("approval.requested", {
+                    "call_id": kb_call_id,
+                    "tool_name": "kb.search",
+                    "args_preview": _sanitize_tool_args_for_event(tool_args),
+                    "reason": kb_policy.get("reason") or "approval required",
+                    "suggested_scopes": kb_policy.get("suggested_scopes") or [],
+                    "ui_actions": ["approve", "reject"],
+                })
+                kb_rows = []
+            else:
+                kb_rows = _kb_search_rows(user_message, limit=3)
+            if kb_rows:
+                summary = f"Found {len(kb_rows)} relevant knowledge entries."
+                citation_lines = []
+                for row in kb_rows[:3]:
+                    title = str(row.get("title") or "Untitled").strip()
+                    src = str(row.get("source") or "").strip()
+                    page_start = row.get("page_start")
+                    page_end = row.get("page_end")
+                    page_txt = ""
+                    if page_start and page_end and page_start != page_end:
+                        page_txt = f", pp. {page_start}-{page_end}"
+                    elif page_start:
+                        page_txt = f", p. {page_start}"
+                    line = f"- {title}"
+                    if src or page_txt:
+                        line += " (" + ", ".join([part for part in [src, page_txt.lstrip(", ")] if part]) + ")"
+                    citation_lines.append(line)
+                response_text += "\n\n---\n\n📚 **Knowledge Sources Used:**\n" + "\n".join(citation_lines)
+                _emit("tool.result", {
+                    "call_id": kb_call_id,
+                    "ok": True,
+                    "summary": summary,
+                })
+            else:
+                _emit("tool.result", {
+                    "call_id": kb_call_id,
+                    "ok": True,
+                    "summary": "No relevant knowledge entries found.",
+                })
+    except Exception as kb_err:
+        _emit("tool.result", {
+            "call_id": kb_call_id or f"call_{uuid.uuid4().hex[:10]}",
+            "ok": False,
+            "summary": f"kb.search failed: {str(kb_err)}",
+        })
+
+    # Append connector-specific API docs context with citations.
+    try:
+        relevant_connectors = AGENT_CONNECTOR_MAP.get(agent_slug, [])
+        if relevant_connectors and _should_attach_docs_context(agent_slug, user_message):
+            docs_context = get_api_docs_context(user_message, relevant_connectors, top_k=3)
+            if docs_context:
+                response_text += "\n\n---\n\n📚 **Relevant API Documentation:**\n\n" + docs_context
+    except Exception as docs_err:
+        print(f"API docs enrichment error: {docs_err}")
+
+    save_message(conv_id, 'agent', response_text)
+
+    # Shadow usage telemetry (no CT debit changes).
+    try:
+        conn_shadow = get_db()
+        _ensure_usage_ledger_table(conn_shadow)
+        client_id = get_current_client_id()
+        in_tok = _estimate_tokens(user_message)
+        out_tok = _estimate_tokens(response_text)
+        latency_ms = int(max(0, round((time.time() - t0) * 1000)))
+        _shadow_usage_preflight(
+            conn_shadow,
+            request_id=request_id,
+            user_id=uid,
+            client_id=client_id,
+            workspace_id=ws_slug or _current_workspace_slug(),
+            event_type="chat_message",
+            amount=0,
+            description=f"Chat message ({agent_slug})",
+            provider=llm_provider,
+            model=llm_model,
+            region="unknown",
+            model_class="auto",
+            agent_id=agent_slug,
+            cost_estimate_usd=0.0,
+            credential_mode=_credential_mode,
+            billing_owner=_billing_owner,
+            execution_path=_execution_path,
+            fallback_used=_fallback_used,
+            fallback_reason=_fallback_reason,
+            managed_account_id=_managed_account_id,
+            meta={"shadow_mode": True, "source": "chat"},
+        )
+        _shadow_usage_finalize(
+            conn_shadow,
+            request_id=request_id,
+            status=llm_status,
+            error_code=llm_error,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            tool_calls=0,
+            connector_calls=0,
+            latency_ms=latency_ms,
+            cost_final_usd=0.0,
+            meta={"shadow_mode": True, "source": "chat", "agent_slug": agent_slug},
+        )
+        conn_shadow.commit()
+        conn_shadow.close()
+    except Exception as shadow_err:
+        print(f"chat_shadow_usage_error: {shadow_err}")
+
+    try:
+        response_html = Markup(markdown.markdown(response_text))
+    except Exception:
+        response_html = response_text
+
+    return {
+        "response": response_text,
+        "response_html": str(response_html),
+        "conv_id": conv_id,
+        "request_id": request_id,
+        "effective_provider": llm_provider,
+        "effective_model": llm_model,
+        "effective_execution_path": _execution_path,
+        "execution_status": llm_status,
+        "intended_provider": _intended_provider,
+        "intended_execution_path": _intended_execution_path,
+        "fallback_used": _fallback_used,
+        "fallback_reason": _fallback_reason,
+        "credential_mode": _credential_mode,
+        "billing_owner": _billing_owner,
+    }
+
+
+def _empty_conversation_brief():
+    return {
+        "objective": "",
+        "current_status": "",
+        "next_step": "",
+        "blocked_by": "",
+        "updated_at": None,
+    }
+
+
+def _conversation_brief_from_row(row):
+    if not row:
+        return _empty_conversation_brief()
+    return {
+        "objective": str(row["brief_objective"] or "").strip(),
+        "current_status": str(row["brief_current_status"] or "").strip(),
+        "next_step": str(row["brief_next_step"] or "").strip(),
+        "blocked_by": str(row["brief_blocked_by"] or "").strip(),
+        "updated_at": row["brief_updated_at"],
+    }
+
+
+def _truncate_brief_text(value, limit=96):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= int(limit):
+        return text
+    return text[: max(int(limit) - 1, 0)].rstrip() + "..."
+
+
+def _build_conversation_brief_signal(brief):
+    brief = brief or {}
+    signal_order = (
+        ("blocked_by", "Blocked", "blocked", "bi-exclamation-triangle"),
+        ("next_step", "Next", "next", "bi-arrow-right-circle"),
+        ("objective", "Objective", "objective", "bi-bullseye"),
+        ("current_status", "Status", "status", "bi-journal-text"),
+    )
+    for field_name, label, tone, icon in signal_order:
+        value = _truncate_brief_text(brief.get(field_name), 84)
+        if value:
+            return {
+                "field": field_name,
+                "label": label,
+                "tone": tone,
+                "icon": icon,
+                "text": value,
+            }
+    return None
+
+
+def _get_owned_conversation_row(conn, uid, conv_id, client_id=None):
+    sql = """
+        SELECT id, user_id, client_id, workspace_slug, agent_slug, title,
+               brief_objective, brief_current_status, brief_next_step,
+               brief_blocked_by, brief_updated_at
+        FROM conversations
+        WHERE id = ? AND user_id = ?
+        LIMIT 1
+    """
+    params = [int(conv_id), int(uid)]
+    if client_id is not None:
+        sql = sql.replace("LIMIT 1", "AND COALESCE(client_id, 0) = ? LIMIT 1")
+        params.append(int(client_id))
+    return conn.execute(sql, tuple(params)).fetchone()
+
+
 @app.route('/chat/<ws_slug>/<agent_slug>', methods=['GET', 'POST'])
 def chat(ws_slug, agent_slug):
     if AUTH_REQUIRED and not is_user_authenticated():
@@ -3949,6 +9541,9 @@ def chat(ws_slug, agent_slug):
     uid = get_current_user_id()
     if uid > 0 and _must_complete_onboarding(uid):
         return redirect(url_for("onboarding_page"))
+    schema_conn = get_db()
+    _ensure_client_tables(schema_conn)
+    schema_conn.close()
 
     if request.method == 'POST':
         try:
@@ -3960,150 +9555,85 @@ def chat(ws_slug, agent_slug):
             user_message = data.get('message', '').strip()
             request_id = _shadow_request_id(data.get("request_id") or request.headers.get("X-Request-ID"))
             conv_id = data.get('conv_id')
+            accept_header = str(request.headers.get("Accept") or "").lower()
+            stream_param = str(request.args.get("stream") or "").strip().lower()
+            wants_stream = stream_param in ("1", "true", "yes", "on") or ("text/event-stream" in accept_header)
             if not user_message:
                 user_message = request.form.get('message', '').strip()
             if not user_message:
                 return jsonify({"error": "No message provided"}), 400
 
-            agent_name = get_agent_name(ws_slug, agent_slug)
-
-            # Get or create conversation
-            if conv_id:
-                conv_id = int(conv_id)
-            else:
-                conv_id = get_or_create_conversation(uid, ws_slug, agent_slug)
-
-            # Auto-title: use first message if conversation has no title
-            try:
-                conn_t = get_db()
-                row_t = conn_t.execute('SELECT title FROM conversations WHERE id = ?', (conv_id,)).fetchone()
-                if row_t and (not row_t[0] or row_t[0] == agent_slug):
-                    title = user_message[:50] + ('…' if len(user_message) > 50 else '')
-                    conn_t.execute('UPDATE conversations SET title = ? WHERE id = ?', (title, conv_id))
-                    conn_t.commit()
-                conn_t.close()
-            except Exception:
-                pass
-
-            # Save user message to DB
-            save_message(conv_id, 'user', user_message)
-            t0 = time.time()
-            llm_provider = "mock"
-            llm_model = "simulate_response"
-            llm_status = "ok"
-            llm_error = None
-
-            # Try real Vertex via Coolbits for selected agents, fallback to existing mock flow
-            try:
-                response_text = None
-                if agent_slug in REAL_AGENT_SLUGS:
+            if wants_stream:
+                @stream_with_context
+                def _gen():
+                    run_id = request_id or f"run_{int(time.time() * 1000)}"
+                    yield _sse_event("run.start", {
+                        "run_id": run_id,
+                        "thread_id": conv_id,
+                        "agent_id": agent_slug,
+                        "workspace_id": ws_slug,
+                    })
+                    yield _sse_event("status", {"phase": "composing"})
                     try:
-                        recent_history = get_messages(conv_id) or []
-                    except Exception:
-                        recent_history = []
-                    response_text = _generate_real_agent_response(
-                        agent_slug=agent_slug,
-                        ws_slug=ws_slug,
-                        user_message=user_message,
-                        recent_history=recent_history,
-                    )
-                    if response_text:
-                        llm_provider = "vertex"
-                        llm_model = COOLBITS_VERTEX_PROFILE
-                if not response_text and agent_slug in REAL_AGENT_SLUGS:
-                    response_text = _fallback_real_agent_reply(
-                        agent_slug=agent_slug,
-                        ws_slug=ws_slug,
-                        user_message=user_message,
-                        runtime_ctx=_get_chat_runtime_context(uid, get_current_client_id()),
-                    )
-                    if response_text:
-                        llm_provider = "camarad-fallback"
-                        llm_model = f"{agent_slug}-fallback"
-                if not response_text:
-                    response_text = simulate_response(agent_slug, user_message)
-                    if response_text:
-                        llm_provider = "mock"
-                        llm_model = "simulate_response"
-                if not response_text:
-                    response_text = get_llm_response(user_message)
-                    llm_provider = "grok"
-                    llm_model = "grok-1"
-                response_text = _sanitize_real_agent_output(agent_slug, ws_slug, user_message, response_text)
-            except Exception as llm_err:
-                print(f"Response generation error: {llm_err}")
-                llm_status = "error"
-                llm_error = str(llm_err)
-                response_text = f"{agent_name}: Received '{user_message}'. (Mock response - generation failed)"
+                        tool_events = []
+                        def _emit_tool_event(event_name, payload):
+                            tool_events.append((event_name, payload))
+                        result = _chat_process_message(
+                            uid=uid,
+                            ws_slug=ws_slug,
+                            agent_slug=agent_slug,
+                            user_message=user_message,
+                            conv_id=conv_id,
+                            request_id=request_id,
+                            emit=_emit_tool_event,
+                        )
+                        if tool_events:
+                            yield _sse_event("status", {"phase": "tooling"})
+                            for ev_name, ev_payload in tool_events:
+                                yield _sse_event(ev_name, ev_payload)
+                            yield _sse_event("status", {"phase": "composing"})
+                        text = str(result.get("response") or "")
+                        for chunk in _iter_text_chunks(text, chunk_size=24):
+                            yield _sse_event("message.delta", {"text": chunk})
+                        yield _sse_event("message.done", {})
+                        yield _sse_event("run.done", {
+                            "ok": True,
+                            "conv_id": result.get("conv_id"),
+                            "request_id": result.get("request_id"),
+                            "response_html": result.get("response_html"),
+                            "effective_provider": result.get("effective_provider"),
+                            "effective_model": result.get("effective_model"),
+                            "effective_execution_path": result.get("effective_execution_path"),
+                            "execution_status": result.get("execution_status"),
+                            "intended_provider": result.get("intended_provider"),
+                            "intended_execution_path": result.get("intended_execution_path"),
+                            "fallback_used": result.get("fallback_used"),
+                            "fallback_reason": result.get("fallback_reason"),
+                            "credential_mode": result.get("credential_mode"),
+                            "billing_owner": result.get("billing_owner"),
+                        })
+                    except Exception as stream_err:
+                        yield _sse_event("run.done", {
+                            "ok": False,
+                            "error": str(stream_err),
+                            "request_id": request_id,
+                        })
 
-            # Append connector-specific API docs context with citations (only when query is tool/API oriented)
-            try:
-                relevant_connectors = AGENT_CONNECTOR_MAP.get(agent_slug, [])
-                if relevant_connectors and _should_attach_docs_context(agent_slug, user_message):
-                    docs_context = get_api_docs_context(user_message, relevant_connectors, top_k=3)
-                    if docs_context:
-                        response_text += "\n\n---\n\n📚 **Relevant API Documentation:**\n\n" + docs_context
-            except Exception as docs_err:
-                print(f"API docs enrichment error: {docs_err}")
+                resp = Response(_gen(), mimetype="text/event-stream")
+                resp.headers["Cache-Control"] = "no-cache, no-transform"
+                resp.headers["X-Accel-Buffering"] = "no"
+                return resp
 
-            # Save agent response to DB
-            save_message(conv_id, 'agent', response_text)
-
-            # Shadow usage telemetry (no CT debit changes).
-            try:
-                conn_shadow = get_db()
-                _ensure_usage_ledger_table(conn_shadow)
-                client_id = get_current_client_id()
-                in_tok = _estimate_tokens(user_message)
-                out_tok = _estimate_tokens(response_text)
-                latency_ms = int(max(0, round((time.time() - t0) * 1000)))
-                _shadow_usage_preflight(
-                    conn_shadow,
-                    request_id=request_id,
-                    user_id=uid,
-                    client_id=client_id,
-                    workspace_id=ws_slug or _current_workspace_slug(),
-                    event_type="chat_message",
-                    amount=0,
-                    description=f"Chat message ({agent_slug})",
-                    provider=llm_provider,
-                    model=llm_model,
-                    region="unknown",
-                    model_class="auto",
-                    agent_id=agent_slug,
-                    cost_estimate_usd=0.0,
-                    meta={"shadow_mode": True, "source": "chat"},
-                )
-                _shadow_usage_finalize(
-                    conn_shadow,
-                    request_id=request_id,
-                    status=llm_status,
-                    error_code=llm_error,
-                    input_tokens=in_tok,
-                    output_tokens=out_tok,
-                    tool_calls=0,
-                    connector_calls=0,
-                    latency_ms=latency_ms,
-                    cost_final_usd=0.0,
-                    meta={"shadow_mode": True, "source": "chat", "agent_slug": agent_slug},
-                )
-                conn_shadow.commit()
-                conn_shadow.close()
-            except Exception as shadow_err:
-                print(f"chat_shadow_usage_error: {shadow_err}")
-
-            # Convert markdown to HTML safely
-            try:
-                response_html = Markup(markdown.markdown(response_text))
-            except Exception:
-                response_html = response_text
-
-            return jsonify({
-                "response": response_text,
-                "response_html": str(response_html),
-                "conv_id": conv_id,
-                "request_id": request_id,
-            })
+            result = _chat_process_message(
+                uid=uid,
+                ws_slug=ws_slug,
+                agent_slug=agent_slug,
+                user_message=user_message,
+                conv_id=conv_id,
+                request_id=request_id,
+                emit=None,
+            )
+            return jsonify(result)
 
         except Exception as e:
             import traceback
@@ -4116,19 +9646,27 @@ def chat(ws_slug, agent_slug):
         agent_name = get_agent_name(ws_slug, agent_slug)
         conv_id = request.args.get('conv_id', type=int)
         history = []
+        conversation_brief = _empty_conversation_brief()
 
         if conv_id:
-            # Load existing conversation messages
+            conn_c = get_db()
+            owned_conv = _get_owned_conversation_row(conn_c, uid, conv_id, get_current_client_id())
+            conn_c.close()
+            if not owned_conv:
+                return "Conversation not found", 404
             history = get_messages(conv_id)
+            conversation_brief = _conversation_brief_from_row(owned_conv)
         else:
             # Get most recent conversation for this agent, or create new
-            conv_id = get_or_create_conversation(uid, ws_slug, agent_slug)
+            conv_id = get_or_create_conversation(uid, ws_slug, agent_slug, client_id=get_current_client_id())
             history = get_messages(conv_id)
+            conversation_brief = get_conversation_brief(conv_id)
 
         recent_convs = get_recent_conversations(uid, ws_slug, limit=10)
         return render_template('chat.html', ws_slug=ws_slug, agent_slug=agent_slug,
                                agent_name=agent_name, history=history,
-                               recent_convs=recent_convs, conv_id=conv_id)
+                               recent_convs=recent_convs, conv_id=conv_id,
+                               conversation_brief=conversation_brief)
     except Exception as e:
         print(f"CHAT GET error: {e}")
         return f"Error loading chat: {e}", 500
@@ -4200,6 +9738,777 @@ def chat_suggestions():
     })
 
 
+# ── Composer Context (runtime truth for chat dock) ─────────────────
+CONNECTOR_ICONS = {
+    "google-ads": "bi-google", "ga4": "bi-graph-up", "google-search-console": "bi-search",
+    "google-tag-manager": "bi-tags", "meta-ads": "bi-meta", "tiktok-ads": "bi-tiktok",
+    "linkedin-ads": "bi-linkedin", "stripe": "bi-stripe", "shopify": "bi-shop",
+    "hubspot": "bi-bullseye", "salesforce": "bi-cloud", "quickbooks": "bi-calculator",
+    "mailchimp": "bi-envelope", "paypal": "bi-paypal", "notion": "bi-journal-text",
+    "github": "bi-github", "todoist": "bi-check2-square", "telegram": "bi-telegram",
+    "aws": "bi-cloud-fill", "vercel": "bi-triangle",
+}
+STALE_AGENT_SECONDS = 300       # 5 min
+STALE_CONNECTOR_SECONDS = 300   # 5 min
+STALE_PROVIDER_SECONDS = 900    # 15 min
+
+def _connector_slug_to_name_map():
+    return {v: k for k, v in CONNECTOR_NAME_TO_SLUG.items()}
+
+def _parse_runtime_ts(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if "T" in raw:
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        return datetime.fromisoformat(raw.replace(" ", "T")).replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _runtime_ts_to_iso(value):
+    dt = _parse_runtime_ts(value)
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _is_runtime_stale(value, threshold_seconds):
+    dt = _parse_runtime_ts(value)
+    if dt is None:
+        return True
+    age = (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds()
+    return age > max(0, int(threshold_seconds or 0))
+
+
+def _select_owned_client_id(conn, user_id, requested_client_id):
+    if requested_client_id is None:
+        return get_current_client_id()
+    try:
+        cid = int(requested_client_id)
+    except Exception:
+        return get_current_client_id()
+    try:
+        return cid if _client_owned(conn, int(user_id), cid) else get_current_client_id()
+    except Exception:
+        return get_current_client_id()
+
+
+def _resolve_agent_runtime_status(agent_slug, ws_slug, user_id, db_agents, connected_slugs):
+    """Resolve a single agent's runtime status from DB + connector map."""
+    ws_data = workspaces.get(ws_slug) or {}
+    ws_agents = ws_data.get("agents") or {}
+    default_name = ws_agents.get(agent_slug) or _default_agent_custom_name(agent_slug)
+    db = db_agents.get(agent_slug) or {}
+    name = db.get("name") or default_name
+    reg = AGENT_REGISTRY_BY_SLUG.get(agent_slug)
+    role_label = reg["role_label"] if reg else default_name
+
+    # Determine status from runtime truth
+    status = "connected"
+    reason = None
+    record_status = str(db.get("status") or "").strip().lower()
+    last_verified_at = _runtime_ts_to_iso(db.get("updated_at"))
+
+    # Check if agent is in the current workspace
+    if agent_slug not in ws_agents:
+        status = "disabled"
+        reason = "Agent not available in this workspace"
+    elif record_status in ("disabled", "inactive", "archived", "off"):
+        status = "disabled"
+        reason = "Agent disabled for this workspace"
+    elif record_status in ("error", "failed"):
+        status = "error"
+        reason = "Last agent runtime check failed"
+    elif record_status in ("connecting", "pending", "booting"):
+        status = "connecting"
+        reason = "Agent runtime validation in progress"
+    # Check connector requirements
+    elif agent_slug in AGENT_CONNECTOR_MAP:
+        required_display_names = AGENT_CONNECTOR_MAP.get(agent_slug, [])
+        required_slugs = set()
+        for dn in required_display_names:
+            s = CONNECTOR_NAME_TO_SLUG.get(dn)
+            if s:
+                required_slugs.add(s)
+        if required_slugs and not required_slugs.intersection(connected_slugs):
+            status = "disconnected"
+            missing_names = [dn for dn in required_display_names if CONNECTOR_NAME_TO_SLUG.get(dn) in required_slugs - connected_slugs][:2]
+            reason = ", ".join(missing_names[:2]) + " not connected" if missing_names else "Required connectors not connected"
+    if status == "connected" and _is_runtime_stale(db.get("updated_at"), STALE_AGENT_SECONDS):
+        status = "stale"
+        reason = "Last health check >5 min ago"
+
+    return {
+        "id": agent_slug,
+        "name": name,
+        "role_label": role_label,
+        "status": status,
+        "reason": reason,
+        "last_verified_at": last_verified_at,
+        "capabilities": list(ROUTING_KEYWORDS_FLAT.get(agent_slug, []))[:5],
+        "default_connector_ids": [
+            CONNECTOR_NAME_TO_SLUG.get(dn, "") for dn in AGENT_CONNECTOR_MAP.get(agent_slug, [])
+            if CONNECTOR_NAME_TO_SLUG.get(dn)
+        ],
+    }
+
+def _resolve_connector_runtime_item(slug, connected_slugs, connector_details):
+    """Resolve a single connector's runtime status."""
+    slug_to_name = _connector_slug_to_name_map()
+    name = slug_to_name.get(slug) or _humanize_slug(slug)
+    icon = CONNECTOR_ICONS.get(slug, "bi-plug")
+    detail = connector_details.get(slug) or {}
+    raw_status = str(detail.get("status") or "").strip().lower()
+    last_verified_raw = detail.get("last_verified_at")
+    last_verified_at = _runtime_ts_to_iso(last_verified_raw)
+    is_connected = slug in connected_slugs or raw_status in ("connected", "active")
+
+    status = "connected" if is_connected else "disconnected"
+    reason = None
+    badge_text = None
+    scopes = []
+    selected_account_label = detail.get("account_name")
+    selected_property_label = detail.get("property_label")
+
+    if raw_status in ("pending", "connecting"):
+        status = "connecting"
+        reason = "Connector validation in progress"
+    elif raw_status in ("error", "failed"):
+        status = "error"
+        reason = detail.get("reason") or "Connector health check failed"
+    elif is_connected:
+        # Check for limited state (connected but missing scope/selection)
+        if slug == "ga4" and not selected_property_label:
+            status = "limited"
+            reason = "Property not selected"
+        elif slug == "google-ads":
+            badge_text = detail.get("badge_text") or None
+        scopes = detail.get("scopes") or ["read"]
+        if status == "connected" and _is_runtime_stale(last_verified_raw, STALE_CONNECTOR_SECONDS):
+            status = "stale"
+            reason = "Last verification >5 min ago"
+    else:
+        reason = detail.get("reason") or f"{name} not connected"
+
+    return {
+        "id": slug,
+        "name": name,
+        "icon": icon,
+        "status": status,
+        "reason": reason,
+        "last_verified_at": last_verified_at,
+        "scopes": scopes,
+        "selected_account_label": selected_account_label,
+        "selected_property_label": selected_property_label,
+        "badge_text": badge_text,
+        "refreshable": slug in CONNECTOR_NAME_TO_SLUG.values(),
+    }
+
+def _get_connector_details(user_id, client_id):
+    """Pull connector-specific details (account names, property labels, badge text) from DB."""
+    details = {}
+    conn = None
+    try:
+        conn = get_db()
+        _ensure_client_tables(conn)
+        cursor = conn.cursor()
+
+        scoped_client_id = None
+        try:
+            scoped_client_id = int(client_id) if client_id is not None else None
+        except Exception:
+            scoped_client_id = None
+
+        # Base config rows: prefer client-specific over global
+        try:
+            config_rows = cursor.execute(
+                """
+                SELECT connector_slug, status, config_json, last_connected, client_id
+                FROM connectors_config
+                WHERE user_id = ? AND COALESCE(client_id, 0) IN (?, 0)
+                ORDER BY CASE WHEN COALESCE(client_id, 0) = ? THEN 0 ELSE 1 END, id DESC
+                """,
+                (int(user_id), int(scoped_client_id or 0), int(scoped_client_id or 0)),
+            ).fetchall()
+            for row in config_rows:
+                slug = str(row[0] or "").strip()
+                if not slug or slug in details:
+                    continue
+                cfg = {}
+                try:
+                    cfg = json.loads(row[2]) if row[2] else {}
+                except Exception:
+                    cfg = {}
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                details[slug] = {
+                    "status": str(row[1] or "").strip().lower(),
+                    "last_verified_at": row[3],
+                    "config": cfg,
+                    "account_name": str(cfg.get("account_name") or cfg.get("accountName") or "").strip() or None,
+                }
+            # Client-specific linked account details
+            if scoped_client_id:
+                link_rows = cursor.execute(
+                    """
+                    SELECT connector_slug, account_id, account_name, status, config_json, last_synced
+                    FROM client_connectors
+                    WHERE client_id = ?
+                    ORDER BY updated_at DESC, id DESC
+                    """,
+                    (int(scoped_client_id),),
+                ).fetchall()
+                seen_links = set()
+                for row in link_rows:
+                    slug = str(row[0] or "").strip()
+                    if not slug or slug in seen_links:
+                        continue
+                    seen_links.add(slug)
+                    base = details.get(slug) or {}
+                    cfg = {}
+                    try:
+                        cfg = json.loads(row[4]) if row[4] else {}
+                    except Exception:
+                        cfg = {}
+                    if not isinstance(cfg, dict):
+                        cfg = {}
+                    merged = dict(base)
+                    merged.update({
+                        "status": str(row[3] or merged.get("status") or "").strip().lower(),
+                        "last_verified_at": row[5] or merged.get("last_verified_at"),
+                        "account_id": str(row[1] or "").strip() or None,
+                        "account_name": str(row[2] or "").strip() or merged.get("account_name"),
+                        "config": dict(base.get("config") or {}, **cfg),
+                    })
+                    details[slug] = merged
+        except Exception:
+            pass
+
+        # Google Ads MCC details
+        try:
+            mcc_rows = cursor.execute(
+                "SELECT customer_id, account_name, status FROM mcc_clients WHERE user_id = ? AND status = 'active' LIMIT 20",
+                (int(user_id),),
+            ).fetchall()
+            if mcc_rows:
+                base = details.get("google-ads") or {}
+                base.update({
+                    "badge_text": f"{len(mcc_rows)} client{'s' if len(mcc_rows) != 1 else ''}",
+                    "scopes": ["read_campaigns", "read_metrics", "mcc_child"],
+                    "account_name": base.get("account_name") or "MCC",
+                })
+                details["google-ads"] = base
+        except Exception:
+            pass
+
+        # GA4 details
+        try:
+            base = details.get("ga4") or {}
+            cfg = dict(base.get("config") or {})
+            prop_id = cfg.get("property_id") or cfg.get("propertyId") or cfg.get("ga4_property_id") or ""
+            prop_name = cfg.get("property_name") or cfg.get("propertyName") or ""
+            base.update({
+                "property_label": f"{prop_name} ({prop_id})" if prop_name else (str(prop_id) if prop_id else None),
+                "scopes": ["read_properties", "read_events"],
+            })
+            details["ga4"] = base
+        except Exception:
+            pass
+
+        # GSC details
+        try:
+            base = details.get("google-search-console") or {}
+            cfg = dict(base.get("config") or {})
+            site_url = cfg.get("site_url") or cfg.get("siteUrl") or ""
+            base.update({
+                "badge_text": site_url[:30] if site_url else None,
+                "scopes": ["read_performance", "read_index"],
+            })
+            details["google-search-console"] = base
+        except Exception:
+            pass
+
+    except Exception:
+        pass
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    for item in details.values():
+        if "config" in item:
+            item.pop("config", None)
+    return details
+
+
+def _resolve_provider_for_workspace(user_id, agent_slug, client_id=None):
+    """Resolve the active LLM provider/model for this workspace."""
+    record = {"llm_provider": "", "llm_model": ""}
+    try:
+        record = _lookup_agent_llm_record(user_id, agent_slug, client_id)
+    except Exception:
+        record = {"llm_provider": "", "llm_model": ""}
+
+    provider = _normalize_llm_provider_slug(record.get("llm_provider")) or _infer_llm_provider_from_model(record.get("llm_model"))
+    if not provider and str(COOLBITS_VERTEX_PROFILE or "").strip():
+        provider = _infer_llm_provider_from_model(COOLBITS_VERTEX_PROFILE) or "vertex"
+    model_id = str(record.get("llm_model") or "").strip()
+    if not model_id and provider == "vertex":
+        model_id = str(COOLBITS_VERTEX_PROFILE or "").strip()
+    creds = _resolve_llm_runtime_credentials(user_id, provider, agent_slug=agent_slug, client_id=client_id)
+    source_map = {
+        "byok": "workspace_byok",
+        "managed_gateway": "workspace_env",
+        "managed_key": "workspace_env",
+        "legacy_env": "workspace_env",
+    }
+    source = source_map.get(creds.get("source", ""), "agent_default")
+    if not model_id and provider:
+        # Fall back to catalog default
+        prov_data = _find_llm_provider(provider)
+        if prov_data:
+            model_id = str(prov_data.get("default_model") or "")
+
+    if not provider:
+        return {
+            "provider_id": None,
+            "model_id": None,
+            "status": None,
+            "source": None,
+            "validated_at": None,
+            "reason": None,
+        }
+
+    gateway_runtime = _resolve_coolbits_managed_provider(provider, agent_slug=agent_slug, model_id=model_id)
+    if gateway_runtime and creds.get("source") != "byok":
+        return {
+            "provider_id": gateway_runtime.get("provider_id") or provider or None,
+            "model_id": model_id or COOLBITS_VERTEX_PROFILE or None,
+            "status": gateway_runtime.get("status") or "validated",
+            "source": gateway_runtime.get("source") or "workspace_env",
+            "validated_at": gateway_runtime.get("validated_at") or _utc_now_iso(),
+            "reason": gateway_runtime.get("reason"),
+        }
+
+    validation = _validate_provider_availability(provider, creds.get("api_key"))
+    live_models = {
+        str(model_id or "").strip()
+        for model_id in (validation.get("live_models") or [])
+        if str(model_id or "").strip()
+    }
+    validation_status = str(validation.get("status") or "").strip().lower()
+    curated_models = set(_curated_provider_model_ids(provider))
+    status = "unavailable"
+    reason = None
+
+    if validation_status in ("active", "validated"):
+        if model_id and model_id not in curated_models and model_id not in live_models:
+            status = "custom"
+            reason = "Custom model id not present in current catalog"
+        else:
+            status = "validated"
+    elif validation_status == "catalog_only":
+        status = "fallback"
+        reason = "Provider validation not implemented; using curated runtime metadata"
+    elif validation_status == "validation_failed":
+        status = "invalid"
+        reason = str(((validation.get("error") or {}).get("message")) or "Provider validation failed")
+    elif validation_status == "missing_credentials":
+        status = "unavailable"
+        reason = "Model validation unavailable for this workspace"
+
+    return {
+        "provider_id": provider or None,
+        "model_id": model_id or None,
+        "status": status,
+        "source": source if provider else None,
+        "validated_at": _utc_now_iso() if status in ("validated", "fallback", "invalid", "custom") else None,
+        "reason": reason,
+    }
+
+def _resolve_last_event_at(user_id, conv_id, agents, connectors, resolved_provider):
+    candidates = []
+    conn = None
+    try:
+        conn = get_db()
+        if conv_id:
+            row = conn.execute(
+                "SELECT MAX(timestamp) FROM messages WHERE conv_id = ?",
+                (int(conv_id),),
+            ).fetchone()
+            if row and row[0]:
+                candidates.append(row[0])
+        try:
+            _ensure_approval_audit_table(conn)
+            row = conn.execute(
+                "SELECT MAX(created_at) FROM approval_audit_log WHERE user_id = ?",
+                (int(user_id),),
+            ).fetchone()
+            if row and row[0]:
+                candidates.append(row[0])
+        except Exception:
+            pass
+    except Exception:
+        pass
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    for item in (agents or []):
+        if item.get("last_verified_at"):
+            candidates.append(item.get("last_verified_at"))
+    for item in (connectors or []):
+        if item.get("last_verified_at"):
+            candidates.append(item.get("last_verified_at"))
+    if resolved_provider.get("validated_at"):
+        candidates.append(resolved_provider.get("validated_at"))
+    parsed = [dt for dt in (_parse_runtime_ts(value) for value in candidates) if dt is not None]
+    if not parsed:
+        return None
+    latest = max(parsed)
+    return latest.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _build_chat_composer_context_payload(uid, ws_slug, agent_slug="", client_id=None, conv_id=None):
+    ws_slug = str(ws_slug or "").strip().lower() or "business"
+    if ws_slug not in VALID_WORKSPACES:
+        ws_slug = "business"
+
+    # ── Connected connectors ──
+    runtime_ctx = _get_chat_runtime_context(uid, client_id)
+    connected_names = runtime_ctx.get("connected_connectors") or []
+    name_to_slug = CONNECTOR_NAME_TO_SLUG
+    connected_slugs = set()
+    for cn in connected_names:
+        s = name_to_slug.get(cn)
+        if s:
+            connected_slugs.add(s)
+
+    # ── Connector details ──
+    connector_details = _get_connector_details(uid, client_id)
+
+    # ── DB agents config ──
+    db_agents = {}
+    conn = None
+    try:
+        conn = get_db()
+        _ensure_client_tables(conn)
+        rows = conn.execute(
+            """
+            SELECT agent_slug, custom_name, status, updated_at, client_id
+            FROM agents_config
+            WHERE user_id = ? AND COALESCE(client_id, 0) IN (?, 0)
+            ORDER BY CASE WHEN COALESCE(client_id, 0) = ? THEN 0 ELSE 1 END, updated_at DESC, id DESC
+            """,
+            (int(uid), int(client_id or 0), int(client_id or 0)),
+        ).fetchall()
+        for r in rows:
+            slug = str(r[0] or "").strip()
+            if slug and slug not in db_agents:
+                db_agents[slug] = {
+                    "name": r[1] or "",
+                    "status": r[2] or "Ready",
+                    "updated_at": r[3],
+                    "client_id": r[4],
+                }
+    except Exception:
+        pass
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # ── Agents runtime ──
+    ws_data = workspaces.get(ws_slug) or {}
+    ws_agent_slugs = list((ws_data.get("agents") or {}).keys())
+    agents = []
+    for a_slug in ws_agent_slugs:
+        agents.append(_resolve_agent_runtime_status(a_slug, ws_slug, uid, db_agents, connected_slugs))
+
+    # Sort: connected first, then stale, then connecting, then limited statuses, then disabled/error
+    status_order = {"connected": 0, "stale": 1, "connecting": 2, "disconnected": 3, "error": 4, "disabled": 5}
+    agents.sort(key=lambda a: (status_order.get(a.get("status", ""), 9), a.get("name", "")))
+    if not agent_slug:
+        agent_slug = next((item.get("id") for item in agents if item.get("status") in ("connected", "stale", "connecting")), "")
+    elif not any(item.get("id") == agent_slug for item in agents):
+        agent_slug = next((item.get("id") for item in agents if item.get("status") in ("connected", "stale", "connecting")), "")
+
+    # ── Connectors runtime ──
+    # Include agent's relevant connectors + all non-disabled runtime entries
+    # Track source: "agent_default" (from AGENT_CONNECTOR_MAP) vs "user_connected"
+    relevant_slugs = set()
+    agent_default_slugs = set()
+    if agent_slug:
+        for dn in AGENT_CONNECTOR_MAP.get(agent_slug, []):
+            s = CONNECTOR_NAME_TO_SLUG.get(dn)
+            if s:
+                relevant_slugs.add(s)
+                agent_default_slugs.add(s)
+    relevant_slugs.update(connected_slugs)
+    relevant_slugs.update(connector_details.keys())
+
+    connectors = []
+    for slug in sorted(relevant_slugs):
+        item = _resolve_connector_runtime_item(slug, connected_slugs, connector_details)
+        # Annotate source so frontend knows if this is an agent-default scope
+        # connector (used for doc enrichment) vs user-connected runtime
+        item["scope_source"] = "agent_default" if slug in agent_default_slugs else "user_connected"
+        item["used_for_enrichment"] = slug in agent_default_slugs
+        connectors.append(item)
+
+    # ── Provider runtime ──
+    resolved_provider = _resolve_provider_for_workspace(uid, agent_slug, client_id=client_id)
+
+    # ── Ops summary ──
+    approvals_count = 0
+    try:
+        aconn = get_db()
+        row = aconn.execute("SELECT COUNT(*) FROM approvals WHERE user_id = ? AND status = 'pending'", (int(uid),)).fetchone()
+        approvals_count = int(row[0]) if row else 0
+        aconn.close()
+    except Exception:
+        pass
+
+    connector_issues = sum(1 for c in connectors if c.get("status") in ("limited", "stale", "error", "disconnected"))
+    error_count = sum(1 for c in connectors if c.get("status") == "error")
+    error_count += sum(1 for a in agents if a.get("status") == "error")
+    if resolved_provider.get("status") == "invalid":
+        error_count += 1
+    runtime_health = "healthy"
+    if error_count > 0:
+        runtime_health = "error"
+    elif connector_issues > 0 or resolved_provider.get("status") in ("fallback", "unavailable", "custom"):
+        runtime_health = "degraded"
+
+    last_user_message = ""
+    last_agent_message = ""
+    if conv_id:
+        conn = None
+        try:
+            conn = get_db()
+            rows = conn.execute(
+                """
+                SELECT m.role, m.content
+                FROM messages m
+                JOIN conversations c ON c.id = m.conv_id
+                WHERE c.id = ? AND c.user_id = ?
+                ORDER BY m.id DESC
+                LIMIT 12
+                """,
+                (int(conv_id), int(uid)),
+            ).fetchall()
+            for r in rows:
+                role = str(r[0] or "").strip().lower()
+                content = str(r[1] or "").strip()
+                if role == "user" and (not last_user_message):
+                    last_user_message = content
+                elif role == "agent" and (not last_agent_message):
+                    last_agent_message = content
+                if last_user_message and last_agent_message:
+                    break
+        except Exception:
+            pass
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    # ── Suggestions ──
+    suggestions = _build_chat_suggestions(
+        agent_slug=agent_slug, ws_slug=ws_slug, runtime_ctx=runtime_ctx,
+        last_user_message=last_user_message, last_agent_message=last_agent_message,
+    )
+
+    return {
+        "ok": True,
+        "workspace_id": ws_slug,
+        "client_id": str(client_id) if client_id else None,
+        "conversation_id": conv_id,
+        "selected_agent_id": agent_slug or None,
+        "agents": agents,
+        "connectors": connectors,
+        "resolved_provider": resolved_provider,
+        "ops_summary": {
+            "approvals_count": approvals_count,
+            "runtime_health": runtime_health,
+            "connector_issues_count": connector_issues,
+            "error_count": error_count,
+            "last_event_at": _resolve_last_event_at(uid, conv_id, agents, connectors, resolved_provider),
+        },
+        "suggestions": [
+            {"id": s.get("prompt", "")[:30].replace(" ", "_").lower(), "label": s.get("label", ""), "prompt": s.get("prompt", ""), "enabled": True}
+            for s in (suggestions or [])[:4]
+        ],
+        "stale_thresholds": {
+            "agent_seconds": STALE_AGENT_SECONDS,
+            "connector_seconds": STALE_CONNECTOR_SECONDS,
+            "provider_seconds": STALE_PROVIDER_SECONDS,
+        },
+    }
+
+
+@app.route('/api/chat/composer-context', methods=['GET'])
+def api_chat_composer_context():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = int(get_current_user_id() or 0)
+    conn = get_db()
+    try:
+        effective_client_id = _select_owned_client_id(conn, uid, request.args.get("client_id", type=int))
+    finally:
+        conn.close()
+
+    payload = _build_chat_composer_context_payload(
+        uid=uid,
+        ws_slug=request.args.get("workspace_id") or request.args.get("ws_slug") or "business",
+        agent_slug=request.args.get("agent_slug") or "",
+        client_id=effective_client_id,
+        conv_id=request.args.get("conversation_id", type=int),
+    )
+    return jsonify(payload)
+
+
+@app.route('/api/chat/composer-context/refresh', methods=['POST'])
+def api_chat_composer_context_refresh():
+    """Refresh active context — same as GET but accepts POST body for explicit targets."""
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    uid = int(get_current_user_id() or 0)
+    conn = get_db()
+    try:
+        effective_client_id = _select_owned_client_id(conn, uid, body.get("client_id"))
+    finally:
+        conn.close()
+    agent = body.get("agent_slug") or ((body.get("agent_ids") or [""])[0] if body.get("agent_ids") else "")
+    payload = _build_chat_composer_context_payload(
+        uid=uid,
+        ws_slug=body.get("workspace_id") or body.get("ws_slug") or "business",
+        agent_slug=agent,
+        client_id=effective_client_id,
+        conv_id=body.get("conversation_id"),
+    )
+    payload["refresh_targets"] = {
+        "agent_ids": [str(v).strip() for v in (body.get("agent_ids") or []) if str(v).strip()],
+        "connector_ids": [str(v).strip() for v in (body.get("connector_ids") or []) if str(v).strip()],
+    }
+    return jsonify(payload)
+
+
+@app.route('/api/runtime/agents/<agent_id>/refresh', methods=['POST'])
+def api_runtime_agent_refresh(agent_id):
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+    uid = int(get_current_user_id() or 0)
+    body = request.get_json(silent=True) or {}
+    conn = get_db()
+    try:
+        effective_client_id = _select_owned_client_id(conn, uid, body.get("client_id"))
+    finally:
+        conn.close()
+    payload = _build_chat_composer_context_payload(
+        uid=uid,
+        ws_slug=body.get("workspace_id") or body.get("ws_slug") or "business",
+        agent_slug=agent_id,
+        client_id=effective_client_id,
+        conv_id=body.get("conversation_id"),
+    )
+    item = next((row for row in (payload.get("agents") or []) if str(row.get("id") or "") == str(agent_id)), None)
+    return jsonify({"ok": True, "item": item, "refreshed_at": _utc_now_iso()})
+
+
+@app.route('/api/runtime/connectors/<connector_id>/refresh', methods=['POST'])
+def api_runtime_connector_refresh(connector_id):
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+    uid = int(get_current_user_id() or 0)
+    body = request.get_json(silent=True) or {}
+    conn = get_db()
+    try:
+        effective_client_id = _select_owned_client_id(conn, uid, body.get("client_id"))
+    finally:
+        conn.close()
+    payload = _build_chat_composer_context_payload(
+        uid=uid,
+        ws_slug=body.get("workspace_id") or body.get("ws_slug") or "business",
+        agent_slug=body.get("agent_slug") or "",
+        client_id=effective_client_id,
+        conv_id=body.get("conversation_id"),
+    )
+    item = next((row for row in (payload.get("connectors") or []) if str(row.get("id") or "") == str(connector_id)), None)
+    return jsonify({"ok": True, "item": item, "refreshed_at": _utc_now_iso()})
+
+
+@app.route('/api/chat/ops-summary', methods=['GET'])
+def api_chat_ops_summary():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+    uid = int(get_current_user_id() or 0)
+    conn = get_db()
+    try:
+        effective_client_id = _select_owned_client_id(conn, uid, request.args.get("client_id", type=int))
+    finally:
+        conn.close()
+    payload = _build_chat_composer_context_payload(
+        uid=uid,
+        ws_slug=request.args.get("workspace_id") or request.args.get("ws_slug") or "business",
+        agent_slug=request.args.get("agent_slug") or "",
+        client_id=effective_client_id,
+        conv_id=request.args.get("conversation_id", type=int),
+    )
+    return jsonify({"ok": True, "ops_summary": payload.get("ops_summary") or {}})
+
+
+@app.route('/api/chat/ops-drawer', methods=['GET'])
+def api_chat_ops_drawer():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+    uid = int(get_current_user_id() or 0)
+    tab = str(request.args.get("tab") or "runtime").strip().lower()
+    conn = get_db()
+    try:
+        effective_client_id = _select_owned_client_id(conn, uid, request.args.get("client_id", type=int))
+    finally:
+        conn.close()
+    payload = _build_chat_composer_context_payload(
+        uid=uid,
+        ws_slug=request.args.get("workspace_id") or request.args.get("ws_slug") or "business",
+        agent_slug=request.args.get("agent_slug") or "",
+        client_id=effective_client_id,
+        conv_id=request.args.get("conversation_id", type=int),
+    )
+    out = {"ok": True, "tab": tab}
+    if tab == "runtime":
+        out["runtime"] = {
+            "agents": payload.get("agents") or [],
+            "connectors": payload.get("connectors") or [],
+            "resolved_provider": payload.get("resolved_provider") or {},
+            "stale_thresholds": payload.get("stale_thresholds") or {},
+        }
+    elif tab == "approvals":
+        out["approvals"] = {"summary": payload.get("ops_summary") or {}}
+    elif tab == "policy":
+        out["policy"] = {"role": "member", "scopes": []}
+    else:
+        out["debug"] = {"ops_summary": payload.get("ops_summary") or {}}
+    return jsonify(out)
+
+
 @app.route('/testchat', methods=['POST'])
 def testchat():
     data = request.get_json()
@@ -4241,6 +10550,38 @@ def _migrate_flows_table(conn):
     try:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_flows_user_template ON flows(user_id, is_template)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_flows_user_client_template ON flows(user_id, client_id, is_template)")
+    except Exception:
+        pass
+    conn.commit()
+
+
+def _ensure_flow_patch_proposals_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS flow_patch_proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            flow_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            client_id INTEGER,
+            ws_slug TEXT,
+            conv_id INTEGER,
+            patch_json TEXT NOT NULL,
+            patch_digest TEXT,
+            base_flow_hash TEXT,
+            base_flow_json TEXT,
+            preview_flow_json TEXT,
+            diff_text TEXT,
+            summary TEXT,
+            status TEXT DEFAULT 'proposed',
+            created_at TEXT DEFAULT (datetime('now')),
+            approved_at TEXT,
+            applied_at TEXT
+        )
+        """
+    )
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_flow_patch_proposals_user_flow ON flow_patch_proposals(user_id, flow_id, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_flow_patch_proposals_created ON flow_patch_proposals(created_at DESC)")
     except Exception:
         pass
     conn.commit()
@@ -4598,6 +10939,273 @@ def duplicate_flow(flow_id):
     })
 
 
+@app.route("/api/flows/<int:flow_id>/patches", methods=["GET"])
+def get_flow_patch_proposals(flow_id):
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    status_filter = str(request.args.get("status") or "").strip().lower()
+    try:
+        limit = max(1, min(int(request.args.get("limit", 50) or 50), 200))
+    except Exception:
+        limit = 50
+
+    conn = get_db()
+    _migrate_flows_table(conn)
+    _ensure_client_tables(conn)
+    _ensure_flow_patch_proposals_table(conn)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Flow not found"}), 404
+
+    flow_sql = "SELECT id, name FROM flows WHERE id = ? AND user_id = ?"
+    flow_params = [int(flow_id), int(uid)]
+    if cid is not None:
+        flow_sql += " AND COALESCE(client_id, 0) = ?"
+        flow_params.append(int(cid))
+    flow_row = conn.execute(flow_sql, tuple(flow_params)).fetchone()
+    if not flow_row:
+        conn.close()
+        return jsonify({"error": "Flow not found"}), 404
+
+    sql = """
+        SELECT id, status, summary, patch_json, diff_text, created_at, approved_at, applied_at
+        FROM flow_patch_proposals
+        WHERE flow_id = ? AND user_id = ?
+    """
+    params = [int(flow_id), int(uid)]
+    if cid is not None:
+        sql += " AND COALESCE(client_id, 0) = ?"
+        params.append(int(cid))
+    if status_filter:
+        sql += " AND LOWER(COALESCE(status, '')) = ?"
+        params.append(status_filter)
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(int(limit))
+    rows = conn.execute(sql, tuple(params)).fetchall()
+    conn.close()
+
+    items = []
+    for r in rows:
+        patch_ops = []
+        try:
+            parsed = json.loads(r[3]) if r[3] else []
+            if isinstance(parsed, list):
+                patch_ops = parsed[:20]
+        except Exception:
+            patch_ops = []
+        items.append(
+            {
+                "patch_id": int(r[0]),
+                "status": str(r[1] or ""),
+                "summary": str(r[2] or ""),
+                "patch_ops": patch_ops,
+                "diff_preview": str(r[4] or "")[:4000],
+                "created_at": r[5],
+                "approved_at": r[6],
+                "applied_at": r[7],
+            }
+        )
+
+    return jsonify({
+        "flow_id": int(flow_id),
+        "flow_name": str(flow_row[1] or ""),
+        "items": items,
+    })
+
+
+@app.route("/api/flows/<int:flow_id>/patches/<int:patch_id>", methods=["GET"])
+def get_flow_patch_proposal_detail(flow_id, patch_id):
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    conn = get_db()
+    _migrate_flows_table(conn)
+    _ensure_client_tables(conn)
+    _ensure_flow_patch_proposals_table(conn)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Flow patch not found"}), 404
+
+    sql = """
+        SELECT id, flow_id, status, summary, patch_json, diff_text, created_at, approved_at, applied_at, ws_slug, conv_id
+        FROM flow_patch_proposals
+        WHERE id = ? AND flow_id = ? AND user_id = ?
+    """
+    params = [int(patch_id), int(flow_id), int(uid)]
+    if cid is not None:
+        sql += " AND COALESCE(client_id, 0) = ?"
+        params.append(int(cid))
+    row = conn.execute(sql, tuple(params)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Flow patch not found"}), 404
+
+    try:
+        patch_ops = json.loads(row[4]) if row[4] else []
+    except Exception:
+        patch_ops = []
+    if not isinstance(patch_ops, list):
+        patch_ops = []
+
+    return jsonify(
+        {
+            "patch_id": int(row[0]),
+            "flow_id": int(row[1]),
+            "status": str(row[2] or ""),
+            "summary": str(row[3] or ""),
+            "patch_ops": patch_ops,
+            "diff": str(row[5] or ""),
+            "created_at": row[6],
+            "approved_at": row[7],
+            "applied_at": row[8],
+            "ws_slug": str(row[9] or ""),
+            "conv_id": row[10],
+        }
+    )
+
+
+@app.route("/api/flows/<int:flow_id>/patches/<int:patch_id>/request_apply", methods=["POST"])
+def request_flow_patch_apply(flow_id, patch_id):
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    raw = request.get_json(force=True, silent=True) or {}
+    conv_id = raw.get("conv_id")
+    conv_scope = None
+    try:
+        if conv_id is not None and str(conv_id).strip() != "":
+            conv_scope = int(conv_id)
+    except Exception:
+        conv_scope = None
+    ws_slug = str(raw.get("ws_slug") or _current_workspace_slug() or "agency").strip().lower()
+    if ws_slug not in VALID_WORKSPACES:
+        ws_slug = "agency"
+
+    conn = get_db()
+    _migrate_flows_table(conn)
+    _ensure_client_tables(conn)
+    _ensure_pending_tool_calls_table(conn)
+    _ensure_approval_audit_table(conn)
+    _ensure_flow_patch_proposals_table(conn)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Flow not found"}), 404
+
+    flow_sql = "SELECT id, name FROM flows WHERE id = ? AND user_id = ?"
+    flow_params = [int(flow_id), int(uid)]
+    if cid is not None:
+        flow_sql += " AND COALESCE(client_id, 0) = ?"
+        flow_params.append(int(cid))
+    flow_row = conn.execute(flow_sql, tuple(flow_params)).fetchone()
+    if not flow_row:
+        conn.close()
+        return jsonify({"error": "Flow not found"}), 404
+
+    proposal_sql = """
+        SELECT id, status
+        FROM flow_patch_proposals
+        WHERE id = ? AND flow_id = ? AND user_id = ?
+    """
+    proposal_params = [int(patch_id), int(flow_id), int(uid)]
+    if cid is not None:
+        proposal_sql += " AND COALESCE(client_id, 0) = ?"
+        proposal_params.append(int(cid))
+    proposal_row = conn.execute(proposal_sql, tuple(proposal_params)).fetchone()
+    if not proposal_row:
+        conn.close()
+        return jsonify({"error": "Flow patch not found"}), 404
+    proposal_status = str(proposal_row[1] or "").strip().lower()
+    if proposal_status != "proposed":
+        conn.close()
+        return jsonify({
+            "success": False,
+            "error": "patch_not_proposed",
+            "status": proposal_status,
+            "message": f"Patch {patch_id} is in status '{proposal_status}' and cannot be requested for apply.",
+        }), 409
+
+    tool_obj = (_tool_registry_by_name(ws_slug).get("flow.apply_patch") or {"name": "flow.apply_patch", "risk": "write", "scopes_required": ["flow.write"]})
+    policy_ctx = _resolve_user_policy_context(uid)
+    policy = _policy_check(
+        tool_obj,
+        user_id=uid,
+        agent_slug="flow-editor",
+        workspace_slug=ws_slug,
+        user_role=str((policy_ctx or {}).get("role") or "member"),
+        agent_role="flow-editor",
+        user_scopes=(policy_ctx or {}).get("scopes") or [],
+    )
+    if policy.get("decision") == "deny":
+        conn.close()
+        return jsonify({
+            "success": False,
+            "error": "policy_denied",
+            "reason": policy.get("reason") or "denied",
+            "suggested_scopes": policy.get("suggested_scopes") or [],
+            "missing_scopes": policy.get("missing_scopes") or [],
+        }), 403
+
+    args_obj = {"flow_id": int(flow_id), "patch_id": int(patch_id)}
+    args_json = json.dumps(args_obj, ensure_ascii=False, sort_keys=True)
+    existing = conn.execute(
+        """
+        SELECT call_id
+        FROM pending_tool_calls
+        WHERE user_id = ?
+          AND LOWER(COALESCE(status,'')) = 'pending'
+          AND LOWER(COALESCE(tool_name,'')) = 'flow.apply_patch'
+          AND COALESCE(args_json, '{}') = COALESCE(?, '{}')
+        ORDER BY datetime(created_at) DESC
+        LIMIT 1
+        """,
+        (int(uid), args_json),
+    ).fetchone()
+    if existing and existing[0]:
+        call_id = str(existing[0])
+        conn.close()
+        return jsonify({
+            "success": True,
+            "call_id": call_id,
+            "status": "pending",
+            "deduplicated": True,
+            "tool_name": "flow.apply_patch",
+            "flow_id": int(flow_id),
+            "patch_id": int(patch_id),
+        })
+
+    call_id = f"call_{uuid.uuid4().hex[:10]}"
+    conn.close()
+    _create_pending_tool_call(
+        call_id=call_id,
+        user_id=uid,
+        client_id=cid,
+        ws_slug=ws_slug,
+        conv_id=conv_scope,
+        tool_name="flow.apply_patch",
+        args_obj=args_obj,
+        risk="write",
+    )
+    return jsonify({
+        "success": True,
+        "call_id": call_id,
+        "status": "pending",
+        "deduplicated": False,
+        "tool_name": "flow.apply_patch",
+        "flow_id": int(flow_id),
+        "patch_id": int(patch_id),
+    })
+
+
 @app.route("/api/flows/templates", methods=["GET"])
 def get_flow_templates():
     """Return persistent flow templates (auto-seeded in DB if missing)."""
@@ -4669,32 +11277,79 @@ def connectors():
         return redirect(url_for("onboarding_page"))
     return render_template("connectors.html")
 
+
+def _mcc_recommended_templates():
+    return [
+        {
+            "id": "tpl-growth-war-room-live",
+            "name": "Growth War Room (Live Ads + GA4)",
+            "description": "Live Ads + GA4 orchestration for executive PPC review.",
+            "url": "/orchestrator?flow_id=tpl-growth-war-room-live",
+        },
+        {
+            "id": "tpl-marketing-report",
+            "name": "Marketing Performance Report",
+            "description": "Aggregated performance report across paid channels and analytics.",
+            "url": "/orchestrator?flow_id=tpl-marketing-report",
+        },
+        {
+            "id": "tpl-budget-reallocate",
+            "name": "Budget Reallocate Alert",
+            "description": "Budget shifts and pacing recommendations when drift appears.",
+            "url": "/orchestrator?flow_id=tpl-budget-reallocate",
+        },
+    ]
+
+
+def _render_mcc_page(next_path="/mcc", dashboard_mode=False):
+    ok, reason, email = _mcc_internal_authorized()
+    if not ok:
+        if reason in ("unauthenticated", "unauthorized"):
+            return _auth_redirect(next_path=next_path)
+        return "Forbidden", 403
+    uid = get_current_user_id()
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        connected = _mcc_connected_config(conn, uid)
+        preferred_login = _mcc_default_login_customer_id_for_slug("coolbits") or _mcc_default_login_customer_id_for_slug("hustlerr")
+    finally:
+        conn.close()
+    resp = make_response(render_template(
+        "mcc.html",
+        connected_mcc=connected or {},
+        preferred_mcc_login_customer_id=preferred_login or "",
+        dashboard_mode=bool(dashboard_mode),
+        dashboard_api_path="/api/mcc/dashboard",
+    ), 200)
+    if connected:
+        resp.set_cookie(
+            "camarad_mcc_login_customer_id",
+            _mcc_normalize_login_customer_id((connected or {}).get("login_customer_id")),
+            max_age=30 * 24 * 3600,
+            **_auth_cookie_opts(),
+        )
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    return resp
+
+
+@app.route("/mcc")
+def mcc_panel():
+    return _render_mcc_page(next_path="/mcc", dashboard_mode=False)
+
+
+@app.route("/dashboard")
+def mcc_dashboard_page():
+    return _render_mcc_page(next_path="/dashboard", dashboard_mode=True)
+
 @app.route("/agents")
 def agents():
     if AUTH_REQUIRED and not is_user_authenticated():
-        return _auth_redirect(next_path="/agents")
+        return _auth_redirect(next_path="/settings#settings-agents-models")
     uid = get_current_user_id()
     if uid > 0 and _must_complete_onboarding(uid):
         return redirect(url_for("onboarding_page"))
-    if FORCE_VERTEX_ALL_AGENTS and uid > 0:
-        _ensure_vertex_defaults_for_user(uid)
-
-    settings = _get_user_settings(uid)
-    client_id = get_current_client_id()
-    payload = _build_chat_home_payload(uid, client_id, settings)
-    if payload.get("forbidden_client"):
-        return "Client not found", 404
-
-    ws_filter = str(request.args.get("workspace") or request.args.get("ws") or "all").strip().lower()
-    if ws_filter not in (set(VALID_WORKSPACES) | {"all", "other"}):
-        ws_filter = "all"
-    q = str(request.args.get("q") or "").strip()
-    return render_template(
-        "agents.html",
-        agents_home=payload,
-        ws_filter=ws_filter,
-        q=q,
-    )
+    return redirect(url_for("settings_page") + "#settings-agents-models")
 
 @app.route("/agent/<slug>")
 def agent_detail(slug):
@@ -4795,7 +11450,7 @@ ORCHESTRATOR_TEMPLATES = [
             {"id": "node-4", "type": "agent", "x": 540, "y": 90, "slug": "ppc-specialist", "label": "PPC Specialist"},
             {"id": "node-5", "type": "agent", "x": 540, "y": 250, "slug": "seo-content", "label": "SEO Strategist"},
             {"id": "node-6", "type": "condition", "x": 790, "y": 170, "label": "ROAS >= 3.0?", "config": {"condition_metric": "roas", "condition_operator": ">=", "condition_value": 3, "condition_then_label": "Healthy", "condition_else_label": "Needs Action"}},
-            {"id": "node-7", "type": "agent", "x": 1010, "y": 170, "slug": "life-coach", "label": "Personal Assistant"},
+            {"id": "node-7", "type": "agent", "x": 1010, "y": 170, "slug": "life-coach", "label": "Life Coach"},
             {"id": "node-8", "type": "output", "x": 1240, "y": 170, "label": "Executive Brief", "config": {"output_destination": "chat", "output_template": "Growth War Room Summary: {{last_agent_response}}"}},
         ],
         "connections": [
@@ -4989,6 +11644,226 @@ ORCHESTRATOR_TEMPLATES = [
         ],
     },
 ]
+
+# ─── Orchestrator Flow Discovery (Runtime-Aware) ────────────────────────────
+
+def _extract_flow_required_connectors(flow_data):
+    """Extract unique connector slugs from flow node definitions."""
+    slugs = []
+    nodes = flow_data.get("nodes", []) if isinstance(flow_data, dict) else []
+    for node in nodes:
+        if node.get("type") == "connector":
+            slug = node.get("slug", "")
+            if slug and slug not in slugs:
+                slugs.append(slug)
+    return slugs
+
+
+def _get_connected_connector_slugs(conn, user_id, client_id):
+    """Return set of connector slugs with 'connected'/'active' status for user/client."""
+    connected = set()
+    try:
+        if client_id is not None:
+            rows = conn.execute("""
+                SELECT cc.connector_slug, COALESCE(c.status, cc.status)
+                FROM client_connectors cc
+                LEFT JOIN connectors_config c
+                  ON c.user_id = ? AND c.connector_slug = cc.connector_slug
+                 AND COALESCE(c.client_id, 0) IN (?, 0)
+                WHERE cc.client_id = ?
+            """, (user_id, client_id, client_id)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT connector_slug, status FROM connectors_config
+                WHERE user_id = ?
+            """, (user_id,)).fetchall()
+        for r in rows:
+            slug = str(r[0] or "").strip()
+            status = str(r[1] or "").strip().lower()
+            if slug and status in ("connected", "active"):
+                connected.add(slug)
+    except Exception:
+        pass
+    return connected
+
+
+def _resolve_flow_status(required_slugs, connected_slugs):
+    """Determine flow readiness: ready / needs_setup / limited.
+
+    Returns (status, reason, missing_slugs).
+    """
+    if not required_slugs:
+        return "ready", None, []
+    missing = [s for s in required_slugs if s not in connected_slugs]
+    if not missing:
+        return "ready", None, []
+    if len(missing) == len(required_slugs):
+        slug_to_display = {v: k for k, v in CONNECTOR_NAME_TO_SLUG.items()}
+        names = [slug_to_display.get(s, s) for s in missing[:3]]
+        suffix = f" +{len(missing)-3}" if len(missing) > 3 else ""
+        return "needs_setup", f"{', '.join(names)}{suffix} not connected", missing
+    slug_to_display = {v: k for k, v in CONNECTOR_NAME_TO_SLUG.items()}
+    names = [slug_to_display.get(s, s) for s in missing[:3]]
+    suffix = f" +{len(missing)-3}" if len(missing) > 3 else ""
+    return "limited", f"Missing: {', '.join(names)}{suffix}", missing
+
+
+def _get_last_flow_run(conn, user_id, client_id, flow_name):
+    """Get last execution for a flow by name. Returns dict or None."""
+    try:
+        sql = "SELECT id, status, elapsed_ms, created_at FROM flow_executions WHERE user_id = ? AND flow_name = ?"
+        params = [user_id, flow_name]
+        if client_id is not None:
+            sql += " AND COALESCE(client_id, 0) = ?"
+            params.append(client_id)
+        sql += " ORDER BY created_at DESC LIMIT 1"
+        row = conn.execute(sql, tuple(params)).fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "status": row[1],
+                "elapsed_ms": row[2],
+                "at": row[3],
+            }
+    except Exception:
+        pass
+    return None
+
+
+@app.route("/api/orchestrator/flows", methods=["GET"])
+def orchestrator_flow_discovery():
+    """Runtime-aware flow list: templates + saved flows with status, prerequisites, can_run, last_run."""
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+
+    conn = get_db()
+    _migrate_flows_table(conn)
+    _ensure_client_tables(conn)
+
+    # Ensure flow_executions table exists
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS flow_executions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, client_id INTEGER,
+            flow_name TEXT, nodes_count INTEGER, steps_count INTEGER, elapsed_ms REAL,
+            status TEXT, result_json TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        try:
+            conn.execute("ALTER TABLE flow_executions ADD COLUMN client_id INTEGER")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"flows": [], "summary": {"ready": 0, "running": 0, "needs_setup": 0, "failed": 0, "total": 0}})
+
+    # Seed templates if needed
+    _seed_flow_templates_if_missing(conn, uid, cid)
+
+    # Get connected connectors for this user/client
+    connected = _get_connected_connector_slugs(conn, uid, cid)
+
+    # Fetch all flows (both templates and saved)
+    sql = """
+        SELECT id, name, category, description, thumbnail, flow_json, is_template,
+               updated_at, client_id, is_active
+        FROM flows WHERE user_id = ?
+    """
+    params = [uid]
+    if cid is not None:
+        sql += " AND COALESCE(client_id, 0) IN (?, 0)"
+        params.append(cid)
+    sql += " ORDER BY updated_at DESC"
+    rows = conn.execute(sql, tuple(params)).fetchall()
+
+    flows = []
+    summary = {"ready": 0, "running": 0, "needs_setup": 0, "failed": 0, "limited": 0, "total": 0}
+
+    slug_to_display = {v: k for k, v in CONNECTOR_NAME_TO_SLUG.items()}
+
+    for r in rows:
+        flow_id = r[0]
+        name = r[1] or "Untitled Flow"
+        category = r[2] or "Uncategorized"
+        description = r[3] or ""
+        flow_json_raw = r[5]
+        is_template = bool(r[6])
+        updated_at = r[7]
+        is_active = r[9] if len(r) > 9 else 1
+
+        try:
+            flow_data = json.loads(flow_json_raw) if flow_json_raw else {}
+        except Exception:
+            flow_data = {}
+        if not isinstance(flow_data, dict):
+            flow_data = {}
+
+        # Extract required connectors from nodes
+        required = _extract_flow_required_connectors(flow_data)
+        required_display = []
+        for slug in required:
+            display = slug_to_display.get(slug, slug.replace("-", " ").title())
+            icon = CONNECTOR_ICONS.get(slug, "plug")
+            required_display.append({"slug": slug, "name": display, "icon": icon, "connected": slug in connected})
+
+        # Resolve status
+        status, reason, missing = _resolve_flow_status(required, connected)
+
+        # Get last run
+        last_run = _get_last_flow_run(conn, uid, cid, name)
+
+        # Override status if last run failed
+        if last_run and last_run.get("status") == "error" and status == "ready":
+            status = "failed"
+            reason = f"Last run failed at {last_run.get('at', 'unknown')}"
+
+        # Determine can_run
+        can_run = status in ("ready", "limited", "failed")
+
+        # Determine icon from ORCHESTRATOR_TEMPLATES
+        icon = "bi-diagram-3"
+        for t in ORCHESTRATOR_TEMPLATES:
+            if t.get("name", "").lower() == name.lower() or t.get("id", "").lower() == (flow_data.get("template_id") or "").lower():
+                icon = t.get("icon", "bi-diagram-3")
+                break
+
+        # Node/connection counts
+        nodes = flow_data.get("nodes", [])
+        connections = flow_data.get("connections", [])
+
+        flow_item = {
+            "id": flow_id,
+            "name": name,
+            "category": category,
+            "description": description,
+            "icon": icon,
+            "is_template": is_template,
+            "required_connectors": required_display,
+            "status": status,
+            "can_run": can_run,
+            "reason": reason,
+            "missing_connectors": missing,
+            "nodes_count": len(nodes),
+            "connections_count": len(connections),
+            "updated_at": updated_at,
+            "last_run": last_run,
+        }
+        flows.append(flow_item)
+
+        # Update summary
+        summary["total"] += 1
+        if status == "ready":
+            summary["ready"] += 1
+        elif status == "needs_setup":
+            summary["needs_setup"] += 1
+        elif status == "limited":
+            summary["limited"] += 1
+        elif status == "failed":
+            summary["failed"] += 1
+
+    conn.close()
+    return jsonify({"flows": flows, "summary": summary, "connected_connectors": list(connected)})
+
 
 @app.route("/api/orchestrator/templates", methods=["GET"])
 def orchestrator_templates():
@@ -5379,19 +12254,55 @@ def orchestrator_execute():
     from datetime import datetime, timezone
 
     payload = request.get_json(force=True, silent=True) or {}
+    request_id = _shadow_request_id(payload.get("request_id") or request.headers.get("X-Request-ID"))
     flow = payload.get("flow") or payload.get("flow_json")
-    if not flow or not flow.get("nodes"):
-        return jsonify({"error": "No flow data provided"}), 400
 
     uid = get_current_user_id()
     cid = get_current_client_id()
     flow_name = str(payload.get("name") or "Unnamed Flow").strip() or "Unnamed Flow"
 
+    def _execute_error(message, status_code, *, code=None):
+        response = {"error": str(message or "Execution failed")}
+        if code:
+            response["code"] = str(code)
+        if request_id:
+            refund_conn = get_db()
+            try:
+                _ensure_client_tables(refund_conn)
+                _ensure_usage_ledger_table(refund_conn)
+                refund = _refund_ct_spend(
+                    refund_conn,
+                    request_id=request_id,
+                    user_id=uid,
+                    reason=f"Refunded because orchestrator execution failed before it could start: {message}",
+                    error_code=code or "orchestrator_execute_failed",
+                    client_id=cid,
+                    workspace_id=_current_workspace_slug(),
+                )
+                refund_conn.commit()
+            except Exception as refund_err:
+                try:
+                    refund_conn.rollback()
+                except Exception:
+                    pass
+                print(f"orchestrator_execute_refund_error: {refund_err}")
+                refund = None
+            finally:
+                refund_conn.close()
+            if refund and refund.get("refunded"):
+                response["ct_refunded"] = True
+                response["refunded_amount"] = int(refund.get("amount") or 0)
+                response["refund_request_id"] = str(refund.get("refund_request_id") or "")
+        return jsonify(response), int(status_code)
+
+    if not flow or not flow.get("nodes"):
+        return _execute_error("No flow data provided", 400, code="NO_FLOW_DATA")
+
     scope_conn = get_db()
     _ensure_client_tables(scope_conn)
     if cid is not None and not _client_owned(scope_conn, uid, cid):
         scope_conn.close()
-        return jsonify({"error": "Client not found or not owned"}), 404
+        return _execute_error("Client not found or not owned", 404, code="CLIENT_NOT_OWNED")
 
     flow_id = None
     try:
@@ -5407,7 +12318,7 @@ def orchestrator_execute():
             ok = scope_conn.execute("SELECT id FROM flows WHERE id=? AND user_id=? AND COALESCE(client_id,0)=?", (flow_id, uid, cid)).fetchone()
         if not ok:
             scope_conn.close()
-            return jsonify({"error": "Flow not found in active client scope"}), 404
+            return _execute_error("Flow not found in active client scope", 404, code="FLOW_NOT_FOUND_IN_SCOPE")
     scope_conn.close()
 
     nodes = {n["id"]: n for n in flow.get("nodes", []) if isinstance(n, dict) and n.get("id")}
@@ -5682,14 +12593,15 @@ def orchestrator_execute():
                 out = " | ".join(bits[:4]) if bits else "Connector data fetched"
         elif ntype == "agent":
             conn_steps = [r for r in results if r.get("type") == "connector"]
-            roas_vals = [((r.get("data") or {}).get("metric_values") or {}).get("roas") for r in conn_steps]
-            roas_vals = [x for x in roas_vals if isinstance(x, (int, float))]
-            rec = "No blocking signals detected. Continue monitoring."
-            if roas_vals:
-                rec = "ROAS below target. Reallocate spend to best performers and pause weak segments." if (sum(roas_vals) / len(roas_vals)) < 3 else "ROAS healthy. Scale top ad groups gradually."
-            data = {"agent": slug or label, "analysis": rec, "recommendation": rec, "input_connectors": len(conn_steps)}
-            inp = f"Context from {len(conn_steps)} connector(s)"
-            out = rec
+            data, inp, out = _execute_orchestrator_agent_node(
+                uid=uid,
+                client_id=cid,
+                flow_name=flow_name,
+                agent_slug=slug or "",
+                node_label=label,
+                connector_steps=conn_steps,
+                prior_results=results,
+            )
         elif ntype == "condition":
             metric = str(cfg.get("condition_metric") or cfg.get("metric") or "ROAS")
             op = str(cfg.get("condition_operator") or cfg.get("operator") or ">")
@@ -5943,37 +12855,1527 @@ def orchestrator_history_detail(exec_id):
         return jsonify({"error": str(e)}), 500
 @app.route("/api/rag/search")
 def rag_search():
-    query = request.args.get('q', '').strip().lower()
+    query = request.args.get('q', '').strip()
     limit = request.args.get('limit', 3, type=int)
-    
-    if not query:
-        return jsonify([])
-    
-    # Split query into words for better matching
-    words = query.split()
-    like_conditions = " OR ".join(["LOWER(content) LIKE ? OR LOWER(title) LIKE ? OR LOWER(summary) LIKE ?"] * len(words))
-    params = []
-    for word in words:
-        params.extend([f"%{word}%", f"%{word}%", f"%{word}%"])
-    params.append(limit)
-    
+    agent_slug = str(request.args.get("agent_slug") or "").strip().lower() or None
+    ws_slug = str(
+        request.args.get("ws_slug")
+        or request.args.get("workspace_id")
+        or _current_workspace_slug()
+        or "business"
+    ).strip().lower()
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    client_slug = _current_client_slug_for_rag(uid, cid)
+    source = "legacy"
+    rows = []
+    if rag_runtime_enabled():
+        try:
+            ensure_rag_schema()
+            rows = rag_semantic_search(
+                query,
+                workspace_id=ws_slug,
+                agent_slug=agent_slug,
+                user_id=uid,
+                client_id=cid,
+                client_slug=client_slug,
+                top_k=limit,
+            )
+            source = "semantic"
+        except Exception:
+            rows = []
+    if source != "semantic":
+        rows = _kb_search_rows_legacy(query, limit=limit)
+    return jsonify(rows)
+
+
+@app.route("/api/rag/collections", methods=["GET", "POST"])
+def rag_collections():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+    if request.method == "GET":
+        ws_slug = str(
+            request.args.get("ws_slug")
+            or request.args.get("workspace_id")
+            or _current_workspace_slug()
+            or "business"
+        ).strip().lower()
+        items = rag_list_collections(workspace_id=ws_slug) if rag_runtime_enabled() else []
+        return jsonify({"success": True, "items": items, "config": rag_runtime_config()})
+
+    data = request.get_json(force=True, silent=True) or {}
+    ws_slug = str(
+        data.get("workspace_id")
+        or data.get("ws_slug")
+        or _current_workspace_slug()
+        or "business"
+    ).strip().lower()
+    kb_name = str(data.get("knowledge_base_name") or data.get("kb_name") or "").strip()
+    collection_name = str(data.get("collection_name") or data.get("name") or "").strip()
+    if not kb_name or not collection_name:
+        return jsonify({"success": False, "error": "knowledge_base_name_and_collection_name_required"}), 400
+    if not rag_runtime_enabled():
+        return jsonify({"success": False, "error": "rag_database_not_configured"}), 400
+    try:
+        ensure_rag_schema()
+        result = rag_create_collection(
+            workspace_id=ws_slug,
+            kb_name=kb_name,
+            collection_name=collection_name,
+            client_slug=str(data.get("client_slug") or "").strip().lower() or None,
+            description=str(data.get("description") or "").strip(),
+        )
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/rag/documents", methods=["GET"])
+def rag_documents():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+    if not rag_runtime_enabled():
+        return jsonify({"success": True, "items": [], "config": rag_runtime_config()})
+    ws_slug = str(
+        request.args.get("ws_slug")
+        or request.args.get("workspace_id")
+        or _current_workspace_slug()
+        or "business"
+    ).strip().lower()
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    client_slug = request.args.get("client_slug") or _current_client_slug_for_rag(uid, cid)
+    try:
+        ensure_rag_schema()
+        items = rag_list_documents(
+            workspace_id=ws_slug,
+            collection_id=request.args.get("collection_id"),
+            client_slug=str(client_slug or "").strip().lower() or None,
+        )
+        return jsonify({"success": True, "items": items})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/rag/ingest", methods=["POST"])
+def rag_ingest():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+    if not rag_runtime_enabled():
+        return jsonify({"success": False, "error": "rag_database_not_configured", "config": rag_runtime_config()}), 400
+    ws_slug = str(
+        request.form.get("workspace_id")
+        or request.form.get("ws_slug")
+        or request.args.get("workspace_id")
+        or request.args.get("ws_slug")
+        or _current_workspace_slug()
+        or "business"
+    ).strip().lower()
+    try:
+        ensure_rag_schema()
+        if "file" in request.files and request.files["file"]:
+            uploaded = request.files["file"]
+            filename = str(uploaded.filename or "").strip()
+            if not filename:
+                return jsonify({"success": False, "error": "filename_required"}), 400
+            payload = rag_ingest_bytes(
+                workspace_id=ws_slug,
+                filename=filename,
+                file_bytes=uploaded.read(),
+                mime_type=uploaded.mimetype,
+                collection_id=request.form.get("collection_id"),
+                knowledge_base_name=request.form.get("knowledge_base_name"),
+                collection_name=request.form.get("collection_name"),
+                client_slug=request.form.get("client_slug"),
+                source_type="upload",
+                source_uri=filename,
+            )
+            return jsonify({"success": True, **payload})
+
+        data = request.get_json(force=True, silent=True) or {}
+        source_path = str(data.get("source_path") or "").strip()
+        if source_path:
+            payload = rag_ingest_local_path(
+                source_path,
+                workspace_id=ws_slug,
+                knowledge_base_name=data.get("knowledge_base_name"),
+                collection_name=data.get("collection_name"),
+                client_slug=data.get("client_slug"),
+            )
+            return jsonify({"success": True, **payload})
+        return jsonify({"success": False, "error": "file_or_source_path_required"}), 400
+    except FileNotFoundError:
+        return jsonify({"success": False, "error": "source_path_not_found"}), 404
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/tools/registry", methods=["GET"])
+def api_tools_registry():
+    ws_slug = str(
+        request.args.get("ws_slug")
+        or request.args.get("workspace_id")
+        or request.args.get("ws")
+        or _current_workspace_slug()
+        or "agency"
+    ).strip().lower()
+    if ws_slug and ws_slug not in VALID_WORKSPACES:
+        ws_slug = "agency"
+    return jsonify({
+        "workspace": ws_slug,
+        "tools": _tool_registry_entries(ws_slug),
+    })
+
+
+@app.route("/api/approvals", methods=["GET"])
+def api_approvals_list():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    status_filter = str(request.args.get("status") or "").strip().lower()
+    conv_id = request.args.get("conv_id", type=int)
+    limit = request.args.get("limit", 20, type=int)
+    limit = max(1, min(int(limit or 20), 200))
+
     conn = get_db()
-    cursor = conn.cursor()
-    sql = f"""
-        SELECT title, summary, content, source
-        FROM chunks
-        WHERE {like_conditions}
-        ORDER BY LENGTH(content) DESC
-        LIMIT ?
+    _ensure_client_tables(conn)
+    _ensure_pending_tool_calls_table(conn)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"items": []})
+
+    sql = """
+        SELECT call_id, status, tool_name, risk, conv_id, ws_slug, args_json, result_json, error_text, retry_count, force_restored, created_at, resolved_by, resolved_at
+        FROM pending_tool_calls
+        WHERE user_id = ?
     """
-    rows = cursor.execute(sql, params).fetchall()
+    params = [int(uid)]
+    if cid is not None:
+        sql += " AND COALESCE(client_id, 0) = ?"
+        params.append(int(cid))
+    if status_filter:
+        sql += " AND LOWER(COALESCE(status, '')) = ?"
+        params.append(status_filter)
+    if conv_id is not None:
+        sql += " AND COALESCE(conv_id, 0) = ?"
+        params.append(int(conv_id))
+    sql += " ORDER BY datetime(created_at) DESC, call_id DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(sql, tuple(params)).fetchall()
     conn.close()
-    
-    results = [
-        {"title": r[0], "summary": r[1], "content": r[2], "source": r[3]}
-        for r in rows
-    ]
-    return jsonify(results)
+
+    items = []
+    for row in rows:
+        args_obj = {}
+        result_obj = {}
+        try:
+            args_obj = json.loads(row[6]) if row[6] else {}
+        except Exception:
+            args_obj = {}
+        try:
+            result_obj = json.loads(row[7]) if row[7] else {}
+        except Exception:
+            result_obj = {}
+        items.append({
+            "call_id": str(row[0] or ""),
+            "status": str(row[1] or ""),
+            "tool_name": str(row[2] or ""),
+            "risk": str(row[3] or ""),
+            "conv_id": row[4],
+            "ws_slug": str(row[5] or ""),
+            "args": _sanitize_tool_args_for_event(args_obj),
+            "execution": result_obj if isinstance(result_obj, dict) else {},
+            "error": str(row[8] or ""),
+            "retry_count": int(row[9] or 0),
+            "force_restored": bool(int(row[10] or 0)),
+            "created_at": row[11],
+            "resolved_by": str(row[12] or ""),
+            "resolved_at": row[13],
+        })
+
+    return jsonify({"items": items})
+
+
+@app.route("/api/approvals/stream", methods=["GET"])
+def api_approvals_stream():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    conv_id = request.args.get("conv_id", type=int)
+    try:
+        after_id = max(0, int(request.args.get("after_id", 0) or 0))
+    except Exception:
+        after_id = 0
+
+    @stream_with_context
+    def _gen():
+        cursor = int(after_id or 0)
+        # Initial handshake event so client can confirm stream is alive.
+        yield _sse_event("approval.stream.ready", {"cursor_id": cursor, "user_id": int(uid or 0)})
+        loops = 0
+        while loops < 1800:  # ~30 minutes at 1s polling
+            loops += 1
+            try:
+                conn = get_db()
+                _ensure_client_tables(conn)
+                _ensure_pending_tool_calls_table(conn)
+                _ensure_approval_audit_table(conn)
+
+                if cid is not None and not _client_owned(conn, uid, cid):
+                    conn.close()
+                    break
+
+                sql = """
+                    SELECT
+                        a.id,
+                        a.call_id,
+                        a.action,
+                        a.status,
+                        a.reason,
+                        a.created_at,
+                        p.tool_name,
+                        p.conv_id,
+                        p.ws_slug,
+                        p.status,
+                        p.error_text,
+                        p.result_json
+                    FROM approval_audit_log a
+                    LEFT JOIN pending_tool_calls p
+                      ON p.call_id = a.call_id
+                     AND p.user_id = a.user_id
+                    WHERE a.user_id = ?
+                      AND a.id > ?
+                      AND LOWER(COALESCE(a.action, '')) IN ('decision', 'execute', 'retry', 'restore_force', 'restore_apply')
+                """
+                params = [int(uid), int(cursor)]
+                if cid is not None:
+                    sql += " AND COALESCE(a.client_id, 0) = ?"
+                    params.append(int(cid))
+                if conv_id is not None:
+                    sql += " AND COALESCE(a.conv_id, 0) = ?"
+                    params.append(int(conv_id))
+                sql += " ORDER BY a.id ASC LIMIT 100"
+                rows = conn.execute(sql, tuple(params)).fetchall()
+                conn.close()
+
+                if rows:
+                    for row in rows:
+                        payload = _approval_stream_event_from_row(row)
+                        if not payload:
+                            continue
+                        cursor = max(cursor, int(payload.get("cursor_id") or 0))
+                        yield _sse_event("approval.resolved", payload)
+                else:
+                    # Heartbeat comment frame for idle periods.
+                    yield ": keepalive\n\n"
+            except GeneratorExit:
+                break
+            except Exception:
+                # Keep stream alive even on transient DB/read errors.
+                yield ": stream_error\n\n"
+            time.sleep(1.0)
+
+    resp = Response(_gen(), mimetype="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache, no-transform"
+    resp.headers["X-Accel-Buffering"] = "no"
+    return resp
+
+
+@app.route("/api/approvals/metrics", methods=["GET"])
+def api_approvals_metrics():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    window_days = request.args.get("window_days", 7, type=int)
+    window_days = max(1, min(int(window_days or 7), 90))
+
+    conn = get_db()
+    _ensure_client_tables(conn)
+    _ensure_pending_tool_calls_table(conn)
+    _ensure_approval_audit_table(conn)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"window_days": window_days, "metrics": {}})
+
+    base_where = "WHERE user_id = ?"
+    params = [int(uid)]
+    if cid is not None:
+        base_where += " AND COALESCE(client_id, 0) = ?"
+        params.append(int(cid))
+
+    counts = {}
+    for st in ("pending", "executed", "failed", "rejected"):
+        row = conn.execute(
+            f"SELECT COUNT(*) FROM pending_tool_calls {base_where} AND LOWER(COALESCE(status,'')) = ?",
+            tuple(params + [st]),
+        ).fetchone()
+        counts[st] = int((row[0] if row else 0) or 0)
+
+    window_expr = f"-{int(window_days)} days"
+    row_window = conn.execute(
+        f"""
+        SELECT
+            SUM(CASE WHEN LOWER(COALESCE(status,'')) = 'executed' THEN 1 ELSE 0 END) AS executed_count,
+            SUM(CASE WHEN LOWER(COALESCE(status,'')) = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+            SUM(CASE WHEN LOWER(COALESCE(status,'')) = 'rejected' THEN 1 ELSE 0 END) AS rejected_count
+        FROM pending_tool_calls
+        {base_where}
+          AND datetime(COALESCE(resolved_at, created_at)) >= datetime('now', ?)
+        """,
+        tuple(params + [window_expr]),
+    ).fetchone()
+
+    audit_where = "WHERE user_id = ? AND LOWER(COALESCE(action,'')) = 'retry' AND datetime(created_at) >= datetime('now', ?)"
+    audit_params = [int(uid), window_expr]
+    if cid is not None:
+        audit_where += " AND COALESCE(client_id, 0) = ?"
+        audit_params.append(int(cid))
+    row_retry = conn.execute(
+        f"SELECT COUNT(*) FROM approval_audit_log {audit_where}",
+        tuple(audit_params),
+    ).fetchone()
+
+    conn.close()
+
+    executed_window = int((row_window[0] if row_window and row_window[0] is not None else 0) or 0)
+    failed_window = int((row_window[1] if row_window and row_window[1] is not None else 0) or 0)
+    rejected_window = int((row_window[2] if row_window and row_window[2] is not None else 0) or 0)
+    retry_window = int((row_retry[0] if row_retry else 0) or 0)
+    total_decisions_window = executed_window + failed_window + rejected_window
+    success_rate = round((executed_window / total_decisions_window) * 100.0, 2) if total_decisions_window else 0.0
+
+    return jsonify({
+        "window_days": window_days,
+        "metrics": {
+            "pending_count": counts.get("pending", 0),
+            "executed_count": counts.get("executed", 0),
+            "failed_count": counts.get("failed", 0),
+            "rejected_count": counts.get("rejected", 0),
+            "window": {
+                "executed": executed_window,
+                "failed": failed_window,
+                "rejected": rejected_window,
+                "retry_actions": retry_window,
+                "success_rate_pct": success_rate,
+            },
+        },
+    })
+
+
+@app.route("/api/approvals/clear", methods=["POST"])
+def api_approvals_clear():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    raw = request.get_json(force=True, silent=True) or {}
+    statuses = raw.get("statuses")
+    conv_id = raw.get("conv_id")
+    include_pending = bool(raw.get("include_pending") is True)
+
+    allowed = {"executed", "failed", "rejected"}
+    if include_pending:
+        allowed.add("pending")
+    selected = []
+    if isinstance(statuses, list):
+        for st in statuses:
+            s = str(st or "").strip().lower()
+            if s in allowed:
+                selected.append(s)
+    if not selected:
+        selected = sorted(list(allowed))
+
+    conv_scope = None
+    try:
+        if conv_id is not None and str(conv_id).strip() != "":
+            conv_scope = int(conv_id)
+    except Exception:
+        conv_scope = None
+
+    conn = get_db()
+    _ensure_client_tables(conn)
+    _ensure_pending_tool_calls_table(conn)
+    _ensure_approval_audit_table(conn)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+
+    placeholders = ",".join(["?" for _ in selected])
+    sql = f"""
+        SELECT call_id, tool_name, conv_id, ws_slug, status
+        FROM pending_tool_calls
+        WHERE user_id = ?
+          AND LOWER(COALESCE(status,'')) IN ({placeholders})
+    """
+    params = [int(uid)] + selected
+    if cid is not None:
+        sql += " AND COALESCE(client_id, 0) = ?"
+        params.append(int(cid))
+    if conv_scope is not None:
+        sql += " AND COALESCE(conv_id, 0) = ?"
+        params.append(int(conv_scope))
+    rows = conn.execute(sql, tuple(params)).fetchall()
+
+    archived = 0
+    for row in rows:
+        call_id = str(row[0] or "")
+        tool_name = str(row[1] or "")
+        row_conv = row[2]
+        row_ws = str(row[3] or "").strip().lower()
+        prev_status = str(row[4] or "")
+        conn.execute(
+            """
+            UPDATE pending_tool_calls
+            SET status = 'archived', resolved_by = ?, resolved_at = datetime('now')
+            WHERE call_id = ? AND user_id = ?
+            """,
+            (str(uid), call_id, int(uid)),
+        )
+        _log_approval_audit(
+            conn,
+            call_id=call_id,
+            user_id=uid,
+            client_id=cid,
+            ws_slug=row_ws,
+            conv_id=row_conv,
+            tool_name=tool_name,
+            action="archive",
+            status="archived",
+            reason=f"clear_history_from_{prev_status.lower()}",
+            payload={"previous_status": prev_status.lower(), "scope_conv_id": conv_scope},
+            actor=f"user:{uid}",
+        )
+        archived += 1
+
+    conn.commit()
+    conn.close()
+    return jsonify({
+        "success": True,
+        "archived_count": archived,
+        "statuses": selected,
+        "conv_id": conv_scope,
+    })
+
+
+@app.route("/api/approvals/restore", methods=["POST"])
+def api_approvals_restore():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    raw = request.get_json(force=True, silent=True) or {}
+    conv_id = raw.get("conv_id")
+    call_ids = raw.get("call_ids")
+    limit = raw.get("limit", 100)
+    try:
+        limit = max(1, min(int(limit or 100), 500))
+    except Exception:
+        limit = 100
+
+    conv_scope = None
+    try:
+        if conv_id is not None and str(conv_id).strip() != "":
+            conv_scope = int(conv_id)
+    except Exception:
+        conv_scope = None
+
+    ids = []
+    if isinstance(call_ids, list):
+        for c in call_ids:
+            v = str(c or "").strip()
+            if v:
+                ids.append(v)
+    ids = ids[:500]
+
+    conn = get_db()
+    _ensure_client_tables(conn)
+    _ensure_pending_tool_calls_table(conn)
+    _ensure_approval_audit_table(conn)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+
+    sql = """
+        SELECT call_id, tool_name, conv_id, ws_slug, args_json
+        FROM pending_tool_calls
+        WHERE user_id = ?
+          AND LOWER(COALESCE(status,'')) = 'archived'
+    """
+    params = [int(uid)]
+    if cid is not None:
+        sql += " AND COALESCE(client_id, 0) = ?"
+        params.append(int(cid))
+    if conv_scope is not None:
+        sql += " AND COALESCE(conv_id, 0) = ?"
+        params.append(int(conv_scope))
+    if ids:
+        placeholders = ",".join(["?" for _ in ids])
+        sql += f" AND call_id IN ({placeholders})"
+        params.extend(ids)
+    sql += " ORDER BY datetime(created_at) DESC LIMIT ?"
+    params.append(limit)
+
+    rows = conn.execute(sql, tuple(params)).fetchall()
+    allowed_previous = {"pending", "executed", "failed", "rejected"}
+    restored = 0
+    skipped = 0
+    restored_items = []
+    for row in rows:
+        call_id = str(row[0] or "")
+        tool_name = str(row[1] or "")
+        row_conv = row[2]
+        row_ws = str(row[3] or "").strip().lower()
+        row_args_json = row[4] if row[4] is not None else "{}"
+
+        audit_row = conn.execute(
+            """
+            SELECT payload_json
+            FROM approval_audit_log
+            WHERE call_id = ? AND user_id = ? AND LOWER(COALESCE(action,'')) = 'archive'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (call_id, int(uid)),
+        ).fetchone()
+        previous_status = ""
+        if audit_row and audit_row[0]:
+            try:
+                payload = json.loads(audit_row[0]) if audit_row[0] else {}
+                previous_status = str((payload or {}).get("previous_status") or "").strip().lower()
+            except Exception:
+                previous_status = ""
+        if previous_status not in allowed_previous:
+            skipped += 1
+            continue
+
+        dup_row = conn.execute(
+            """
+            SELECT call_id
+            FROM pending_tool_calls
+            WHERE user_id = ?
+              AND call_id <> ?
+              AND COALESCE(conv_id, 0) = COALESCE(?, 0)
+              AND LOWER(COALESCE(ws_slug,'')) = LOWER(COALESCE(?, ''))
+              AND LOWER(COALESCE(tool_name,'')) = LOWER(COALESCE(?, ''))
+              AND COALESCE(args_json, '{}') = COALESCE(?, '{}')
+              AND LOWER(COALESCE(status,'')) IN ('pending','executed')
+            LIMIT 1
+            """,
+            (int(uid), call_id, row_conv, row_ws, tool_name, row_args_json),
+        ).fetchone()
+        if dup_row:
+            skipped += 1
+            continue
+
+        conn.execute(
+            """
+            UPDATE pending_tool_calls
+            SET status = ?, force_restored = 0, resolved_by = ?, resolved_at = datetime('now')
+            WHERE call_id = ? AND user_id = ?
+            """,
+            (previous_status, str(uid), call_id, int(uid)),
+        )
+        _log_approval_audit(
+            conn,
+            call_id=call_id,
+            user_id=uid,
+            client_id=cid,
+            ws_slug=row_ws,
+            conv_id=row_conv,
+            tool_name=tool_name,
+            action="restore_apply",
+            status=previous_status,
+            reason="manual_restore",
+            payload={"restored_from": "archived", "restored_to": previous_status, "force_restore": False},
+            actor=f"user:{uid}",
+        )
+        restored += 1
+        restored_items.append({
+            "call_id": call_id,
+            "status": previous_status,
+            "tool_name": tool_name,
+            "conv_id": row_conv,
+            "ws_slug": row_ws,
+        })
+
+    conn.commit()
+    conn.close()
+    return jsonify({
+        "success": True,
+        "restored_count": restored,
+        "skipped_count": skipped,
+        "conv_id": conv_scope,
+        "items": restored_items,
+    })
+
+
+@app.route("/api/approvals/restore/preview", methods=["POST"])
+def api_approvals_restore_preview():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    raw = request.get_json(force=True, silent=True) or {}
+    conv_id = raw.get("conv_id")
+    ws_scope_raw = str(raw.get("ws_slug") or "").strip().lower()
+    call_ids = raw.get("call_ids")
+    include_details = bool(raw.get("include_details") is True)
+    limit = raw.get("limit", 100)
+    try:
+        limit = max(1, min(int(limit or 100), 500))
+    except Exception:
+        limit = 100
+
+    conv_scope = None
+    try:
+        if conv_id is not None and str(conv_id).strip() != "":
+            conv_scope = int(conv_id)
+    except Exception:
+        conv_scope = None
+
+    ids = []
+    if isinstance(call_ids, list):
+        for c in call_ids:
+            v = str(c or "").strip()
+            if v:
+                ids.append(v)
+    ids = ids[:500]
+
+    conn = get_db()
+    _ensure_client_tables(conn)
+    _ensure_pending_tool_calls_table(conn)
+    _ensure_approval_audit_table(conn)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+
+    sql = """
+        SELECT call_id, tool_name, conv_id, ws_slug, args_json, status, created_at
+        FROM pending_tool_calls
+        WHERE user_id = ?
+    """
+    params = [int(uid)]
+    if cid is not None:
+        sql += " AND COALESCE(client_id, 0) = ?"
+        params.append(int(cid))
+    total_candidate_count = 0
+    if ids:
+        placeholders = ",".join(["?" for _ in ids])
+        sql += f" AND call_id IN ({placeholders})"
+        params.extend(ids)
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    else:
+        sql += " AND LOWER(COALESCE(status,'')) = 'archived'"
+        if ws_scope_raw:
+            sql += " AND LOWER(COALESCE(ws_slug,'')) = ?"
+            params.append(ws_scope_raw)
+        if conv_scope is not None:
+            sql += " AND COALESCE(conv_id, 0) = ?"
+            params.append(int(conv_scope))
+        count_sql = "SELECT COUNT(*) FROM (" + sql + ")"
+        c_row = conn.execute(count_sql, tuple(params)).fetchone()
+        total_candidate_count = int((c_row[0] if c_row else 0) or 0)
+        sql += " ORDER BY datetime(created_at) DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+    rows_by_id = {str(r[0] or ""): r for r in rows}
+    allowed_previous = {"pending", "executed", "failed", "rejected"}
+    restorable = []
+    skipped = []
+    reason_counts = {}
+    force_allowed = _approval_force_restore_allowed(uid)
+
+    def _push_skipped(item, code, reason):
+        out = dict(item)
+        out["skip_code"] = code
+        out["skip_reason"] = reason
+        skipped.append(out)
+        reason_counts[code] = int(reason_counts.get(code, 0) or 0) + 1
+
+    def _preview_row(row):
+        call_id = str(row[0] or "")
+        tool_name = str(row[1] or "")
+        row_conv = row[2]
+        row_ws = str(row[3] or "").strip().lower()
+        row_args_json = row[4] if row[4] is not None else "{}"
+        row_status = str(row[5] or "").strip().lower()
+        row_created_at = row[6]
+        base_item = {
+            "call_id": call_id,
+            "tool_name": tool_name,
+            "status": row_status,
+            "created_at": row_created_at,
+            "conv_id": row_conv,
+            "ws_slug": row_ws,
+            "args_fingerprint": _approval_args_fingerprint(row_args_json),
+        }
+
+        if ws_scope_raw and row_ws != ws_scope_raw:
+            _push_skipped(base_item, "WORKSPACE_MISMATCH", "Row workspace does not match selected workspace scope.")
+            return
+        if conv_scope is not None and int(row_conv or 0) != int(conv_scope):
+            _push_skipped(base_item, "CONV_MISMATCH", "Row conversation does not match selected conversation scope.")
+            return
+        if row_status != "archived":
+            _push_skipped(base_item, "INVALID_STATUS", "Only archived approvals can be restored.")
+            return
+
+        audit_row = conn.execute(
+            """
+            SELECT payload_json
+            FROM approval_audit_log
+            WHERE call_id = ? AND user_id = ? AND LOWER(COALESCE(action,'')) = 'archive'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (call_id, int(uid)),
+        ).fetchone()
+        previous_status = ""
+        if audit_row and audit_row[0]:
+            try:
+                payload = json.loads(audit_row[0]) if audit_row[0] else {}
+                previous_status = str((payload or {}).get("previous_status") or "").strip().lower()
+            except Exception:
+                previous_status = ""
+        if not previous_status:
+            _push_skipped(base_item, "MISSING", "Missing archive metadata: previous_status not found.")
+            return
+        if previous_status not in allowed_previous:
+            _push_skipped(base_item, "INVALID_STATUS", "Archive metadata has invalid previous_status.")
+            return
+
+        dup_row = conn.execute(
+            """
+            SELECT call_id, status
+            FROM pending_tool_calls
+            WHERE user_id = ?
+              AND call_id <> ?
+              AND COALESCE(conv_id, 0) = COALESCE(?, 0)
+              AND LOWER(COALESCE(ws_slug,'')) = LOWER(COALESCE(?, ''))
+              AND LOWER(COALESCE(tool_name,'')) = LOWER(COALESCE(?, ''))
+              AND COALESCE(args_json, '{}') = COALESCE(?, '{}')
+              AND LOWER(COALESCE(status,'')) IN ('pending','executed')
+            ORDER BY datetime(created_at) DESC
+            LIMIT 1
+            """,
+            (int(uid), call_id, row_conv, row_ws, tool_name, row_args_json),
+        ).fetchone()
+        if dup_row:
+            out = dict(base_item)
+            out["previous_status"] = previous_status
+            out["conflict_call_id"] = str(dup_row[0] or "")
+            out["conflict_status"] = str(dup_row[1] or "").strip().lower()
+            _push_skipped(out, "DUPLICATE_ACTIVE", "A duplicate active approval already exists (pending/executed).")
+            return
+
+        out = dict(base_item)
+        out["previous_status"] = previous_status
+        out["restored_to"] = previous_status
+        restorable.append(out)
+
+    if ids:
+        for call_id in ids:
+            row = rows_by_id.get(call_id)
+            if not row:
+                _push_skipped(
+                    {
+                        "call_id": call_id,
+                        "tool_name": "",
+                        "status": "",
+                        "created_at": "",
+                        "conv_id": None,
+                        "ws_slug": "",
+                        "args_fingerprint": "",
+                    },
+                    "MISSING",
+                    "Approval call was not found for current scope.",
+                )
+                continue
+            _preview_row(row)
+    else:
+        for row in rows:
+            _preview_row(row)
+        if total_candidate_count > len(rows):
+            _push_skipped(
+                {
+                    "call_id": "",
+                    "tool_name": "",
+                    "status": "archived",
+                    "created_at": "",
+                    "conv_id": conv_scope,
+                    "ws_slug": ws_scope_raw,
+                    "args_fingerprint": "",
+                },
+                "LIMIT_REACHED",
+                "Preview limit reached; increase limit to inspect all archived rows.",
+            )
+
+    if include_details:
+        for it in restorable:
+            _log_approval_audit(
+                conn,
+                call_id=it.get("call_id"),
+                user_id=uid,
+                client_id=cid,
+                ws_slug=it.get("ws_slug"),
+                conv_id=it.get("conv_id"),
+                tool_name=it.get("tool_name"),
+                action="restore_preview",
+                status="restorable",
+                reason="dry_run",
+                payload={"restored_to": it.get("restored_to"), "args_fingerprint": it.get("args_fingerprint")},
+                actor=f"user:{uid}",
+            )
+        for it in skipped:
+            call_id = str(it.get("call_id") or "")
+            if not call_id:
+                continue
+            _log_approval_audit(
+                conn,
+                call_id=call_id,
+                user_id=uid,
+                client_id=cid,
+                ws_slug=it.get("ws_slug"),
+                conv_id=it.get("conv_id"),
+                tool_name=it.get("tool_name"),
+                action="restore_preview",
+                status="skipped",
+                reason=str(it.get("skip_code") or "SKIPPED"),
+                payload={
+                    "skip_code": it.get("skip_code"),
+                    "skip_reason": it.get("skip_reason"),
+                    "conflict_call_id": it.get("conflict_call_id"),
+                    "conflict_status": it.get("conflict_status"),
+                    "args_fingerprint": it.get("args_fingerprint"),
+                },
+                actor=f"user:{uid}",
+            )
+    conn.commit()
+
+    conn.close()
+    return jsonify({
+        "success": True,
+        "conv_id": conv_scope,
+        "ws_slug": ws_scope_raw,
+        "requested_count": (len(ids) if ids else len(rows)),
+        "restorable": restorable,
+        "skipped": skipped,
+        "reasons": reason_counts,
+        "force_allowed": bool(force_allowed),
+        "would_change_counts": {
+            "restore": len(restorable),
+            "skip": len(skipped),
+        },
+    })
+
+
+@app.route("/api/approvals/restore/force", methods=["POST"])
+def api_approvals_restore_force():
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    if not _approval_force_restore_allowed(uid):
+        return jsonify({"error": "forbidden", "reason": "force restore requires owner/admin role"}), 403
+
+    raw = request.get_json(force=True, silent=True) or {}
+    call_id = str(raw.get("call_id") or "").strip()
+    reason = str(raw.get("reason") or "").strip()
+    if not call_id:
+        return jsonify({"error": "call_id required"}), 400
+    if not reason:
+        return jsonify({"error": "reason required"}), 400
+    reason = reason[:400]
+
+    conn = get_db()
+    _ensure_client_tables(conn)
+    _ensure_pending_tool_calls_table(conn)
+    _ensure_approval_audit_table(conn)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+
+    sql = """
+        SELECT call_id, tool_name, conv_id, ws_slug, args_json, status
+        FROM pending_tool_calls
+        WHERE call_id = ? AND user_id = ?
+    """
+    params = [call_id, int(uid)]
+    if cid is not None:
+        sql += " AND COALESCE(client_id, 0) = ?"
+        params.append(int(cid))
+    row = conn.execute(sql, tuple(params)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Approval call not found"}), 404
+
+    tool_name = str(row[1] or "")
+    row_conv = row[2]
+    row_ws = str(row[3] or "").strip().lower()
+    row_args_json = row[4] if row[4] is not None else "{}"
+    row_status = str(row[5] or "").strip().lower()
+    if row_status != "archived":
+        conn.close()
+        return jsonify({"error": "force restore allowed only for archived rows"}), 409
+
+    audit_row = conn.execute(
+        """
+        SELECT payload_json
+        FROM approval_audit_log
+        WHERE call_id = ? AND user_id = ? AND LOWER(COALESCE(action,'')) = 'archive'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (call_id, int(uid)),
+    ).fetchone()
+    previous_status = ""
+    if audit_row and audit_row[0]:
+        try:
+            payload = json.loads(audit_row[0]) if audit_row[0] else {}
+            previous_status = str((payload or {}).get("previous_status") or "").strip().lower()
+        except Exception:
+            previous_status = ""
+    if previous_status not in {"pending", "executed", "failed", "rejected"}:
+        conn.close()
+        return jsonify({"error": "invalid previous status for restore"}), 409
+
+    dup_row = conn.execute(
+        """
+        SELECT call_id, status
+        FROM pending_tool_calls
+        WHERE user_id = ?
+          AND call_id <> ?
+          AND COALESCE(conv_id, 0) = COALESCE(?, 0)
+          AND LOWER(COALESCE(ws_slug,'')) = LOWER(COALESCE(?, ''))
+          AND LOWER(COALESCE(tool_name,'')) = LOWER(COALESCE(?, ''))
+          AND COALESCE(args_json, '{}') = COALESCE(?, '{}')
+          AND LOWER(COALESCE(status,'')) IN ('pending','executed')
+        ORDER BY datetime(created_at) DESC
+        LIMIT 1
+        """,
+        (int(uid), call_id, row_conv, row_ws, tool_name, row_args_json),
+    ).fetchone()
+    if not dup_row:
+        conn.close()
+        return jsonify({"error": "force restore allowed only for DUPLICATE_ACTIVE skipped rows"}), 409
+
+    conflict_call_id = str(dup_row[0] or "")
+    conflict_status = str(dup_row[1] or "").strip().lower()
+    conn.execute(
+        """
+        UPDATE pending_tool_calls
+        SET status = ?, force_restored = 1, resolved_by = ?, resolved_at = datetime('now')
+        WHERE call_id = ? AND user_id = ?
+        """,
+        (previous_status, str(uid), call_id, int(uid)),
+    )
+    _log_approval_audit(
+        conn,
+        call_id=call_id,
+        user_id=uid,
+        client_id=cid,
+        ws_slug=row_ws,
+        conv_id=row_conv,
+        tool_name=tool_name,
+        action="restore_force",
+        status=previous_status,
+        reason="force_restore_duplicate_active",
+        payload={
+            "force_restore": True,
+            "forced_by": int(uid),
+            "force_reason": reason,
+            "conflict_call_id": conflict_call_id,
+            "conflict_status": conflict_status,
+            "restored_to": previous_status,
+        },
+        actor=f"user:{uid}",
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({
+        "success": True,
+        "call_id": call_id,
+        "status": previous_status,
+        "force_restored": True,
+        "conflict_call_id": conflict_call_id,
+        "conflict_status": conflict_status,
+    })
+
+
+@app.route("/api/approvals/<call_id>", methods=["GET"])
+def api_approval_get(call_id):
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    conn = get_db()
+    _ensure_client_tables(conn)
+    _ensure_pending_tool_calls_table(conn)
+    _ensure_approval_audit_table(conn)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+
+    sql = """
+        SELECT call_id, status, tool_name, risk, conv_id, ws_slug, args_json, result_json, error_text, retry_count, force_restored, created_at, resolved_by, resolved_at
+        FROM pending_tool_calls
+        WHERE call_id = ? AND user_id = ?
+    """
+    params = [str(call_id), int(uid)]
+    if cid is not None:
+        sql += " AND COALESCE(client_id, 0) = ?"
+        params.append(int(cid))
+    row = conn.execute(sql, tuple(params)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Approval call not found"}), 404
+
+    timeline_rows = conn.execute(
+        """
+        SELECT action, status, reason, payload_json, actor, created_at
+        FROM approval_audit_log
+        WHERE call_id = ? AND user_id = ?
+        ORDER BY id ASC
+        """,
+        (str(call_id), int(uid)),
+    ).fetchall()
+    conn.close()
+
+    args_obj = {}
+    result_obj = {}
+    try:
+        args_obj = json.loads(row[6]) if row[6] else {}
+    except Exception:
+        args_obj = {}
+    try:
+        result_obj = json.loads(row[7]) if row[7] else {}
+    except Exception:
+        result_obj = {}
+
+    timeline = []
+    for tr in timeline_rows:
+        payload_obj = {}
+        try:
+            payload_obj = json.loads(tr[3]) if tr[3] else {}
+        except Exception:
+            payload_obj = {}
+        timeline.append({
+            "action": str(tr[0] or ""),
+            "status": str(tr[1] or ""),
+            "reason": str(tr[2] or ""),
+            "payload": payload_obj,
+            "actor": str(tr[4] or ""),
+            "created_at": tr[5],
+        })
+
+    return jsonify({
+        "success": True,
+        "call_id": str(row[0] or ""),
+        "status": str(row[1] or ""),
+        "tool_name": str(row[2] or ""),
+        "risk": str(row[3] or ""),
+        "conv_id": row[4],
+        "ws_slug": str(row[5] or ""),
+        "args": _sanitize_tool_args_for_event(args_obj),
+        "execution": result_obj if isinstance(result_obj, dict) else {},
+        "error": str(row[8] or ""),
+        "retry_count": int(row[9] or 0),
+        "force_restored": bool(int(row[10] or 0)),
+        "created_at": row[11],
+        "resolved_by": str(row[12] or ""),
+        "resolved_at": row[13],
+        "timeline": timeline,
+    })
+
+
+@app.route("/api/approvals/<call_id>", methods=["POST"])
+def api_approval_resolve(call_id):
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    raw = request.get_json(force=True, silent=True) or {}
+    idempotency_key = _resolve_idempotency_key(raw)
+    approved_raw = raw.get("approved")
+    approved = False
+    if isinstance(approved_raw, bool):
+        approved = approved_raw
+    elif isinstance(approved_raw, (int, float)):
+        approved = bool(approved_raw)
+    elif isinstance(approved_raw, str):
+        approved = approved_raw.strip().lower() in ("1", "true", "yes", "on", "approve", "approved")
+
+    status = "approved" if approved else "rejected"
+    conn = get_db()
+    _ensure_client_tables(conn)
+    _ensure_pending_tool_calls_table(conn)
+    _ensure_approval_audit_table(conn)
+    _ensure_approval_idempotency_table(conn)
+
+    replay_payload = _idempotency_replay_lookup(
+        conn,
+        user_id=uid,
+        call_id=call_id,
+        action="resolve",
+        idempotency_key=idempotency_key,
+    )
+    if replay_payload is not None:
+        conn.close()
+        return jsonify(replay_payload)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+
+    sql = "SELECT call_id, status, tool_name, risk, conv_id, ws_slug, args_json, result_json, error_text FROM pending_tool_calls WHERE call_id = ? AND user_id = ?"
+    params = [str(call_id), int(uid)]
+    if cid is not None:
+        sql += " AND COALESCE(client_id, 0) = ?"
+        params.append(int(cid))
+    row = conn.execute(sql, tuple(params)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Approval call not found"}), 404
+
+    existing_status = str(row[1] or "").strip().lower()
+    if existing_status in ("executed", "failed", "rejected") and not approved:
+        existing_summary = ""
+        if row[7]:
+            try:
+                existing_summary = str((json.loads(row[7]) or {}).get("summary") or "")
+            except Exception:
+                existing_summary = str(row[8] or "")
+        elif row[8]:
+            existing_summary = str(row[8] or "")
+        response_obj = {
+            "success": True,
+            "call_id": str(call_id),
+            "status": existing_status,
+            "tool_name": str(row[2] or ""),
+            "risk": str(row[3] or ""),
+            "conv_id": row[4],
+            "ws_slug": str(row[5] or ""),
+            "summary": existing_summary,
+        }
+        response_obj["resolution_event"] = _approval_resolved_event_payload(response_obj=response_obj, source="api.resolve")
+        _idempotency_store_response(
+            conn,
+            user_id=uid,
+            client_id=cid,
+            call_id=call_id,
+            action="resolve",
+            idempotency_key=idempotency_key,
+            response_obj=response_obj,
+        )
+        conn.commit()
+        conn.close()
+        return jsonify(response_obj)
+
+    conn.execute(
+        """
+        UPDATE pending_tool_calls
+        SET status = ?, resolved_by = ?, resolved_at = datetime('now')
+        WHERE call_id = ? AND user_id = ?
+        """,
+        (status, str(uid), str(call_id), int(uid)),
+    )
+    _log_approval_audit(
+        conn,
+        call_id=call_id,
+        user_id=uid,
+        client_id=cid,
+        ws_slug=str(row[5] or ""),
+        conv_id=row[4],
+        tool_name=str(row[2] or ""),
+        action="decision",
+        status=status,
+        reason="user_approved" if approved else "user_rejected",
+        payload={"approved": bool(approved)},
+        actor=f"user:{uid}",
+    )
+    execution_payload = None
+    if approved:
+        # Release write lock before executing tool runtime, which may open its own DB connection.
+        conn.commit()
+        try:
+            args_obj = json.loads(row[6]) if row[6] else {}
+        except Exception:
+            args_obj = {}
+        execution_payload = _execute_write_intent_tool(
+            str(row[2] or ""),
+            args_obj,
+            user_id=uid,
+            ws_slug=str(row[5] or ""),
+            conv_id=row[4],
+        )
+        if execution_payload.get("ok"):
+            conn.execute(
+                """
+                UPDATE pending_tool_calls
+                SET status = 'executed', result_json = ?, error_text = NULL
+                WHERE call_id = ? AND user_id = ?
+                """,
+                (json.dumps(execution_payload, ensure_ascii=False), str(call_id), int(uid)),
+            )
+            _log_approval_audit(
+                conn,
+                call_id=call_id,
+                user_id=uid,
+                client_id=cid,
+                ws_slug=str(row[5] or ""),
+                conv_id=row[4],
+                tool_name=str(row[2] or ""),
+                action="execute",
+                status="executed",
+                reason="approval_resume_success",
+                payload=execution_payload,
+                actor="runtime",
+            )
+            status = "executed"
+        else:
+            conn.execute(
+                """
+                UPDATE pending_tool_calls
+                SET status = 'failed', result_json = ?, error_text = ?
+                WHERE call_id = ? AND user_id = ?
+                """,
+                (
+                    json.dumps(execution_payload, ensure_ascii=False),
+                    str(execution_payload.get("summary") or "execution failed"),
+                    str(call_id),
+                    int(uid),
+                ),
+            )
+            _log_approval_audit(
+                conn,
+                call_id=call_id,
+                user_id=uid,
+                client_id=cid,
+                ws_slug=str(row[5] or ""),
+                conv_id=row[4],
+                tool_name=str(row[2] or ""),
+                action="execute",
+                status="failed",
+                reason="approval_resume_failed",
+                payload=execution_payload,
+                actor="runtime",
+            )
+            status = "failed"
+    summary = ""
+    if execution_payload:
+        summary = str(execution_payload.get("summary") or "")
+    response_obj = {
+        "success": True,
+        "call_id": str(call_id),
+        "status": status,
+        "tool_name": str(row[2] or ""),
+        "risk": str(row[3] or ""),
+        "conv_id": row[4],
+        "ws_slug": str(row[5] or ""),
+        "execution": execution_payload,
+        "summary": summary,
+    }
+    response_obj["resolution_event"] = _approval_resolved_event_payload(response_obj=response_obj, source="api.resolve")
+    _idempotency_store_response(
+        conn,
+        user_id=uid,
+        client_id=cid,
+        call_id=call_id,
+        action="resolve",
+        idempotency_key=idempotency_key,
+        response_obj=response_obj,
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(response_obj)
+
+
+@app.route("/api/approvals/<call_id>/retry", methods=["POST"])
+def api_approval_retry(call_id):
+    if AUTH_REQUIRED and not is_user_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    raw = request.get_json(force=True, silent=True) or {}
+    idempotency_key = _resolve_idempotency_key(raw)
+    conn = get_db()
+    _ensure_client_tables(conn)
+    _ensure_pending_tool_calls_table(conn)
+    _ensure_approval_audit_table(conn)
+    _ensure_approval_idempotency_table(conn)
+
+    replay_payload = _idempotency_replay_lookup(
+        conn,
+        user_id=uid,
+        call_id=call_id,
+        action="retry",
+        idempotency_key=idempotency_key,
+    )
+    if replay_payload is not None:
+        conn.close()
+        return jsonify(replay_payload)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+
+    sql = """
+        SELECT call_id, status, tool_name, risk, conv_id, ws_slug, args_json, retry_count
+        FROM pending_tool_calls
+        WHERE call_id = ? AND user_id = ?
+    """
+    params = [str(call_id), int(uid)]
+    if cid is not None:
+        sql += " AND COALESCE(client_id, 0) = ?"
+        params.append(int(cid))
+    row = conn.execute(sql, tuple(params)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Approval call not found"}), 404
+
+    current_status = str(row[1] or "").strip().lower()
+    if current_status not in ("failed", "rejected"):
+        conn.close()
+        return jsonify({"error": "Retry allowed only for failed/rejected approvals", "status": current_status}), 400
+
+    try:
+        args_obj = json.loads(row[6]) if row[6] else {}
+    except Exception:
+        args_obj = {}
+
+    retry_count = int(row[7] or 0) + 1
+    _log_approval_audit(
+        conn,
+        call_id=call_id,
+        user_id=uid,
+        client_id=cid,
+        ws_slug=str(row[5] or ""),
+        conv_id=row[4],
+        tool_name=str(row[2] or ""),
+        action="retry",
+        status="retrying",
+        reason="manual_retry",
+        payload={"retry_count": retry_count},
+        actor=f"user:{uid}",
+    )
+
+    execution_payload = _execute_write_intent_tool(
+        str(row[2] or ""),
+        args_obj,
+        user_id=uid,
+        ws_slug=str(row[5] or ""),
+        conv_id=row[4],
+    )
+    if execution_payload.get("ok"):
+        status = "executed"
+        conn.execute(
+            """
+            UPDATE pending_tool_calls
+            SET status = 'executed', result_json = ?, error_text = NULL, retry_count = ?, resolved_by = ?, resolved_at = datetime('now')
+            WHERE call_id = ? AND user_id = ?
+            """,
+            (
+                json.dumps(execution_payload, ensure_ascii=False),
+                retry_count,
+                str(uid),
+                str(call_id),
+                int(uid),
+            ),
+        )
+        _log_approval_audit(
+            conn,
+            call_id=call_id,
+            user_id=uid,
+            client_id=cid,
+            ws_slug=str(row[5] or ""),
+            conv_id=row[4],
+            tool_name=str(row[2] or ""),
+            action="execute",
+            status="executed",
+            reason="retry_success",
+            payload=execution_payload,
+            actor="runtime",
+        )
+    else:
+        status = "failed"
+        conn.execute(
+            """
+            UPDATE pending_tool_calls
+            SET status = 'failed', result_json = ?, error_text = ?, retry_count = ?, resolved_by = ?, resolved_at = datetime('now')
+            WHERE call_id = ? AND user_id = ?
+            """,
+            (
+                json.dumps(execution_payload, ensure_ascii=False),
+                str(execution_payload.get("summary") or "retry execution failed"),
+                retry_count,
+                str(uid),
+                str(call_id),
+                int(uid),
+            ),
+        )
+        _log_approval_audit(
+            conn,
+            call_id=call_id,
+            user_id=uid,
+            client_id=cid,
+            ws_slug=str(row[5] or ""),
+            conv_id=row[4],
+            tool_name=str(row[2] or ""),
+            action="execute",
+            status="failed",
+            reason="retry_failed",
+            payload=execution_payload,
+            actor="runtime",
+        )
+
+    response_obj = {
+        "success": True,
+        "call_id": str(call_id),
+        "status": status,
+        "tool_name": str(row[2] or ""),
+        "risk": str(row[3] or ""),
+        "conv_id": row[4],
+        "ws_slug": str(row[5] or ""),
+        "retry_count": retry_count,
+        "execution": execution_payload,
+        "summary": str(execution_payload.get("summary") or ""),
+    }
+    response_obj["resolution_event"] = _approval_resolved_event_payload(response_obj=response_obj, source="api.retry")
+    _idempotency_store_response(
+        conn,
+        user_id=uid,
+        client_id=cid,
+        call_id=call_id,
+        action="retry",
+        idempotency_key=idempotency_key,
+        response_obj=response_obj,
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(response_obj)
 
 @app.route("/api/agents/<slug>", methods=["GET", "POST"])
 def agent_config(slug):
@@ -5988,14 +14390,14 @@ def agent_config(slug):
         row = None
         if client_id is not None:
             row = cursor.execute("""
-                SELECT custom_name, avatar_base64, llm_provider, llm_model, api_key, temperature, max_tokens, rag_enabled, status, avatar_colors, client_id
+                SELECT custom_name, avatar_base64, llm_provider, llm_model, temperature, max_tokens, rag_enabled, status, avatar_colors, client_id
                 FROM agents_config
                 WHERE user_id = ? AND agent_slug = ? AND COALESCE(client_id, 0) = ?
                 LIMIT 1
             """, (user_id, slug, client_id)).fetchone()
         if not row:
             row = cursor.execute("""
-                SELECT custom_name, avatar_base64, llm_provider, llm_model, api_key, temperature, max_tokens, rag_enabled, status, avatar_colors, client_id
+                SELECT custom_name, avatar_base64, llm_provider, llm_model, temperature, max_tokens, rag_enabled, status, avatar_colors, client_id
                 FROM agents_config
                 WHERE user_id = ? AND agent_slug = ? AND COALESCE(client_id, 0) = 0
                 LIMIT 1
@@ -6029,28 +14431,34 @@ def agent_config(slug):
         if row:
             avatar_colors = None
             try:
-                avatar_colors = json.loads(row[9]) if row[9] else None
+                avatar_colors = json.loads(row[8]) if row[8] else None
             except Exception:
                 pass
             custom_name = str(row[0] or "").strip()
             if not custom_name:
                 custom_name = _default_agent_custom_name(slug)
+            provider_slug = _normalize_llm_provider_slug(row[2]) or _infer_llm_provider_from_model(row[3])
+            provider_credential = _lookup_provider_credential(user_id, provider_slug, agent_slug=slug, client_id=client_id)
+            api_key_masked = _mask_provider_secret((provider_credential or {}).get("api_key"))
             conn.close()
             return jsonify({
                 "custom_name": custom_name,
                 "avatar_base64": row[1],
                 "llm_provider": row[2],
                 "llm_model": row[3],
-                "api_key": row[4],
-                "temperature": row[5],
-                "max_tokens": row[6],
-                "rag_enabled": bool(row[7]),
-                "status": row[8],
+                "has_api_key": bool((provider_credential or {}).get("api_key")),
+                "api_key_masked": api_key_masked,
+                "credential_mode": (provider_credential or {}).get("mode") or "none",
+                "credential_status": (provider_credential or {}).get("status") or None,
+                "temperature": row[4],
+                "max_tokens": row[5],
+                "rag_enabled": bool(row[6]),
+                "status": row[7],
                 "avatar_colors": avatar_colors,
                 "rag_chunks": rag_chunks,
                 "last_response_time": last_response_time,
                 "active_conversations": active_conversations,
-                "client_id": row[10],
+                "client_id": row[9],
             })
 
         conn.close()
@@ -6059,7 +14467,10 @@ def agent_config(slug):
             "avatar_base64": None,
             "llm_provider": "vertex",
             "llm_model": COOLBITS_VERTEX_PROFILE,
-            "api_key": "",
+            "has_api_key": False,
+            "api_key_masked": "",
+            "credential_mode": "none",
+            "credential_status": None,
             "temperature": 0.7,
             "max_tokens": 2048,
             "rag_enabled": True,
@@ -6076,10 +14487,15 @@ def agent_config(slug):
     if data.get('avatar_colors'):
         avatar_colors_json = json.dumps(data['avatar_colors'])
 
+    selected_provider = _normalize_llm_provider_slug(data.get('llm_provider')) or _infer_llm_provider_from_model(data.get('llm_model'))
+    workspace_slug = _workspace_slug_for_agent(slug)
+    clear_api_key = bool(data.get("clear_api_key"))
+    new_api_key = str(data.get("api_key") or "").strip()
+
     cursor.execute("""
         INSERT OR REPLACE INTO agents_config
-        (user_id, client_id, agent_slug, custom_name, avatar_base64, avatar_colors, llm_provider, llm_model, api_key, temperature, max_tokens, rag_enabled, status, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        (user_id, client_id, agent_slug, custom_name, avatar_base64, avatar_colors, llm_provider, llm_model, temperature, max_tokens, rag_enabled, status, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     """, (
         user_id,
         scoped_client_id,
@@ -6089,12 +14505,32 @@ def agent_config(slug):
         avatar_colors_json,
         data.get('llm_provider'),
         data.get('llm_model'),
-        data.get('api_key'),
         data.get('temperature', 0.7),
         data.get('max_tokens', 2048),
         1 if data.get('rag_enabled') else 0,
         data.get('status', 'Active')
     ))
+    if selected_provider:
+        if clear_api_key:
+            _delete_provider_credential(
+                conn,
+                user_id=user_id,
+                client_id=scoped_client_id,
+                workspace_slug=workspace_slug,
+                provider_slug=selected_provider,
+            )
+        elif new_api_key:
+            _upsert_provider_credential(
+                conn,
+                user_id=user_id,
+                client_id=scoped_client_id,
+                workspace_slug=workspace_slug,
+                provider_slug=selected_provider,
+                api_key=new_api_key,
+                mode="byok",
+                status="active",
+                metadata={"updated_from": "agent_config", "agent_slug": slug},
+            )
     conn.commit()
     conn.close()
     return jsonify({"success": True, "message": "Agent config saved", "client_id": scoped_client_id})
@@ -6251,12 +14687,15 @@ def list_agents():
         if slug in db_score and db_score[slug] >= score:
             continue
         db_score[slug] = score
+        name_source = "client_override" if client_id is not None and row_client_id_num == int(client_id) else ("global_override" if row_client_id_num == 0 else "db_override")
         db_agents[slug] = {
-            "name": r[1] or _default_agent_custom_name(slug),
+            "name": str(r[1] or "").strip() or _default_agent_custom_name(slug),
             "status": r[2] or "Ready",
             "has_photo": bool(r[3]),
             "avatar_colors": avatar_colors,
             "client_id": r[5],
+            "name_source": name_source,
+            "config_scope": "client" if name_source == "client_override" else "global",
         }
 
     agents = []
@@ -6266,29 +14705,41 @@ def list_agents():
         for agent_slug, default_name in ws_data.get("agents", {}).items():
             known_slugs.add(agent_slug)
             db = db_agents.get(agent_slug, {})
+            reg = AGENT_REGISTRY_BY_SLUG.get(agent_slug) or {}
             agents.append({
                 "slug": agent_slug,
-                "name": db.get("name") or default_name,
+                "name": db.get("name") or get_agent_display_name(agent_slug, fallback=default_name),
+                "display_name": get_agent_display_name(agent_slug, fallback=default_name),
+                "role_label": get_agent_role_label(agent_slug, fallback=default_name),
+                "category": get_agent_category(agent_slug, fallback=ws_slug),
                 "status": db.get("status") or "Ready",
                 "workspace": ws_name,
                 "workspace_slug": ws_slug,
                 "has_photo": db.get("has_photo", False),
                 "avatar_colors": db.get("avatar_colors"),
                 "client_id": db.get("client_id"),
+                "config_scope": db.get("config_scope") or "registry",
+                "name_source": db.get("name_source") or ("registry" if reg else "fallback"),
             })
 
     for agent_slug, db in db_agents.items():
         if agent_slug in known_slugs:
             continue
+        reg = AGENT_REGISTRY_BY_SLUG.get(agent_slug) or {}
         agents.append({
             "slug": agent_slug,
-            "name": db.get("name") or agent_slug.replace("-", " ").title(),
+            "name": db.get("name") or get_agent_display_name(agent_slug),
+            "display_name": get_agent_display_name(agent_slug),
+            "role_label": get_agent_role_label(agent_slug, fallback=db.get("name") or get_agent_display_name(agent_slug)),
+            "category": get_agent_category(agent_slug, fallback="other"),
             "status": db.get("status") or "Ready",
             "workspace": "Other",
             "workspace_slug": "other",
             "has_photo": db.get("has_photo", False),
             "avatar_colors": db.get("avatar_colors"),
             "client_id": db.get("client_id"),
+            "config_scope": db.get("config_scope") or "global",
+            "name_source": db.get("name_source") or ("registry" if reg else "db_override"),
         })
 
     agents.sort(key=lambda a: (a.get("workspace", "Other"), a.get("name", "")))
@@ -6412,6 +14863,2501 @@ def list_connectors():
 
     return jsonify(connectors)
 
+
+def _mcc_default_limit(report_name):
+    key = str(report_name or "").strip().lower()
+    if key in ("search_terms_search", "search_terms_pmax"):
+        return 200
+    if key == "keywords":
+        return 300
+    if key in ("campaigns", "asset_groups"):
+        return 500
+    if key == "auction_insights_search_30d":
+        return 300
+    if key == "audience_perf_30d":
+        return 400
+    return 200
+
+
+def _mcc_report_window(report_name, requested_window):
+    key = str(report_name or "").strip().lower()
+    if key in ("audience_perf_30d", "auction_insights_search_30d", "search_terms_search", "search_terms_pmax"):
+        return 30
+    try:
+        win = int(requested_window or 30)
+    except Exception:
+        win = 30
+    return 90 if win == 90 else 30
+
+
+def _mcc_report_to_rows(report_name, rows, base):
+    out = []
+    key = str(report_name or "").strip().lower()
+    for row in (rows or []):
+        if not isinstance(row, dict):
+            continue
+        item = dict(base or {})
+        if key == "campaigns":
+            cost = _mcc_cost_from_micros(_mcc_row_get(row, "metrics.cost_micros"))
+            conv_value = _mcc_num(_mcc_row_get(row, "metrics.conversions_value"), float)
+            item.update({
+                "campaign_id": str(_mcc_row_get(row, "campaign.id") or ""),
+                "campaign_name": str(_mcc_row_get(row, "campaign.name") or ""),
+                "channel": str(_mcc_row_get(row, "campaign.advertising_channel_type") or ""),
+                "status": str(_mcc_row_get(row, "campaign.status") or ""),
+                "bidding": str(_mcc_row_get(row, "campaign.bidding_strategy_type") or ""),
+                "start_date": str(_mcc_row_get(row, "campaign.start_date") or ""),
+                "end_date": str(_mcc_row_get(row, "campaign.end_date") or ""),
+                "impr": int(_mcc_num(_mcc_row_get(row, "metrics.impressions"), int)),
+                "clicks": int(_mcc_num(_mcc_row_get(row, "metrics.clicks"), int)),
+                "cost": cost,
+                "conversions": float(_mcc_num(_mcc_row_get(row, "metrics.conversions"), float)),
+                "conv_value": conv_value,
+                "roas": round((conv_value / cost), 6) if cost > 0 else 0.0,
+            })
+        elif key == "asset_groups":
+            cost = _mcc_cost_from_micros(_mcc_row_get(row, "metrics.cost_micros"))
+            conv_value = _mcc_num(_mcc_row_get(row, "metrics.conversions_value"), float)
+            item.update({
+                "campaign_id": str(_mcc_row_get(row, "campaign.id") or ""),
+                "campaign_name": str(_mcc_row_get(row, "campaign.name") or ""),
+                "asset_group_id": str(_mcc_row_get(row, "asset_group.id") or ""),
+                "asset_group_name": str(_mcc_row_get(row, "asset_group.name") or ""),
+                "status": str(_mcc_row_get(row, "asset_group.status") or ""),
+                "impr": int(_mcc_num(_mcc_row_get(row, "metrics.impressions"), int)),
+                "clicks": int(_mcc_num(_mcc_row_get(row, "metrics.clicks"), int)),
+                "cost": cost,
+                "conversions": float(_mcc_num(_mcc_row_get(row, "metrics.conversions"), float)),
+                "conv_value": conv_value,
+                "roas": round((conv_value / cost), 6) if cost > 0 else 0.0,
+            })
+        elif key in ("search_terms_search", "search_terms_pmax"):
+            item.update({
+                "source": "SEARCH" if key == "search_terms_search" else "PMAX",
+                "campaign_id": str(_mcc_row_get(row, "campaign.id") or ""),
+                "campaign_name": str(_mcc_row_get(row, "campaign.name") or ""),
+                "ad_group_id": str(_mcc_row_get(row, "ad_group.id") or ""),
+                "ad_group_name": str(_mcc_row_get(row, "ad_group.name") or ""),
+                "search_term": str(_mcc_row_get(row, "search_term_view.search_term") or _mcc_row_get(row, "campaign_search_term_view.search_term") or ""),
+                "impr": int(_mcc_num(_mcc_row_get(row, "metrics.impressions"), int)),
+                "clicks": int(_mcc_num(_mcc_row_get(row, "metrics.clicks"), int)),
+                "cost": _mcc_cost_from_micros(_mcc_row_get(row, "metrics.cost_micros")),
+                "conversions": float(_mcc_num(_mcc_row_get(row, "metrics.conversions"), float)),
+                "conv_value": float(_mcc_num(_mcc_row_get(row, "metrics.conversions_value"), float)),
+            })
+        elif key == "keywords":
+            item.update({
+                "campaign_id": str(_mcc_row_get(row, "campaign.id") or ""),
+                "campaign_name": str(_mcc_row_get(row, "campaign.name") or ""),
+                "ad_group_id": str(_mcc_row_get(row, "ad_group.id") or ""),
+                "ad_group_name": str(_mcc_row_get(row, "ad_group.name") or ""),
+                "criterion_id": str(_mcc_row_get(row, "ad_group_criterion.criterion_id") or ""),
+                "status": str(_mcc_row_get(row, "ad_group_criterion.status") or ""),
+                "keyword": str(_mcc_row_get(row, "ad_group_criterion.keyword.text") or ""),
+                "match_type": str(_mcc_row_get(row, "ad_group_criterion.keyword.match_type") or ""),
+                "impr": int(_mcc_num(_mcc_row_get(row, "metrics.impressions"), int)),
+                "clicks": int(_mcc_num(_mcc_row_get(row, "metrics.clicks"), int)),
+                "cost": _mcc_cost_from_micros(_mcc_row_get(row, "metrics.cost_micros")),
+                "conversions": float(_mcc_num(_mcc_row_get(row, "metrics.conversions"), float)),
+                "conv_value": float(_mcc_num(_mcc_row_get(row, "metrics.conversions_value"), float)),
+            })
+        elif key == "negatives_account":
+            item.update({"text": str(_mcc_row_get(row, "customer_negative_criterion.keyword.text") or ""), "match_type": str(_mcc_row_get(row, "customer_negative_criterion.keyword.match_type") or "")})
+        elif key == "negatives_shared":
+            item.update({
+                "shared_set_id": str(_mcc_row_get(row, "shared_set.id") or ""),
+                "shared_set_name": str(_mcc_row_get(row, "shared_set.name") or ""),
+                "text": str(_mcc_row_get(row, "shared_criterion.keyword.text") or ""),
+                "match_type": str(_mcc_row_get(row, "shared_criterion.keyword.match_type") or ""),
+            })
+        elif key == "negatives_campaign":
+            item.update({
+                "campaign_id": str(_mcc_row_get(row, "campaign.id") or ""),
+                "campaign_name": str(_mcc_row_get(row, "campaign.name") or ""),
+                "text": str(_mcc_row_get(row, "campaign_criterion.keyword.text") or ""),
+                "match_type": str(_mcc_row_get(row, "campaign_criterion.keyword.match_type") or ""),
+            })
+        elif key == "negatives_adgroup":
+            item.update({
+                "campaign_id": str(_mcc_row_get(row, "campaign.id") or ""),
+                "campaign_name": str(_mcc_row_get(row, "campaign.name") or ""),
+                "ad_group_id": str(_mcc_row_get(row, "ad_group.id") or ""),
+                "ad_group_name": str(_mcc_row_get(row, "ad_group.name") or ""),
+                "text": str(_mcc_row_get(row, "ad_group_criterion.keyword.text") or ""),
+                "match_type": str(_mcc_row_get(row, "ad_group_criterion.keyword.match_type") or ""),
+            })
+        elif key == "conversion_actions":
+            item.update({
+                "conversion_id": str(_mcc_row_get(row, "conversion_action.id") or ""),
+                "name": str(_mcc_row_get(row, "conversion_action.name") or ""),
+                "type": str(_mcc_row_get(row, "conversion_action.type") or ""),
+                "category": str(_mcc_row_get(row, "conversion_action.category") or ""),
+                "status": str(_mcc_row_get(row, "conversion_action.status") or ""),
+                "primary_for_goal": bool(_mcc_row_get(row, "conversion_action.primary_for_goal")),
+            })
+        elif key == "user_lists":
+            item.update({
+                "user_list_id": str(_mcc_row_get(row, "user_list.id") or ""),
+                "name": str(_mcc_row_get(row, "user_list.name") or ""),
+                "type": str(_mcc_row_get(row, "user_list.type") or ""),
+                "membership_status": str(_mcc_row_get(row, "user_list.membership_status") or ""),
+                "size_search": int(_mcc_num(_mcc_row_get(row, "user_list.size_for_search"), int)),
+                "size_range_search": str(_mcc_row_get(row, "user_list.size_range_for_search") or ""),
+                "size_display": int(_mcc_num(_mcc_row_get(row, "user_list.size_for_display"), int)),
+                "size_range_display": str(_mcc_row_get(row, "user_list.size_range_for_display") or ""),
+                "eligible_search": bool(_mcc_row_get(row, "user_list.eligible_for_search")),
+                "eligible_display": bool(_mcc_row_get(row, "user_list.eligible_for_display")),
+                "read_only": bool(_mcc_row_get(row, "user_list.read_only")),
+            })
+        elif key == "audience_perf_30d":
+            item.update({
+                "campaign_id": str(_mcc_row_get(row, "campaign.id") or ""),
+                "campaign_name": str(_mcc_row_get(row, "campaign.name") or ""),
+                "ad_group_id": str(_mcc_row_get(row, "ad_group.id") or ""),
+                "ad_group_name": str(_mcc_row_get(row, "ad_group.name") or ""),
+                "user_list_id": str(_mcc_row_get(row, "user_list.id") or ""),
+                "user_list_name": str(_mcc_row_get(row, "user_list.name") or ""),
+                "ad_network_type": str(_mcc_row_get(row, "segments.ad_network_type") or ""),
+                "impr": int(_mcc_num(_mcc_row_get(row, "metrics.impressions"), int)),
+                "clicks": int(_mcc_num(_mcc_row_get(row, "metrics.clicks"), int)),
+                "cost": _mcc_cost_from_micros(_mcc_row_get(row, "metrics.cost_micros")),
+                "conversions": float(_mcc_num(_mcc_row_get(row, "metrics.conversions"), float)),
+                "conv_value": float(_mcc_num(_mcc_row_get(row, "metrics.conversions_value"), float)),
+            })
+        elif key == "auction_insights_search_30d":
+            item.update({
+                "campaign_id": str(_mcc_row_get(row, "campaign.id") or ""),
+                "campaign_name": str(_mcc_row_get(row, "campaign.name") or ""),
+                "auction_domain": str(_mcc_row_get(row, "segments.auction_insight_domain") or ""),
+                "impr_share": float(_mcc_num(_mcc_row_get(row, "metrics.auction_insight_search_impression_share"), float)),
+                "overlap_rate": float(_mcc_num(_mcc_row_get(row, "metrics.auction_insight_search_overlap_rate"), float)),
+                "pos_above_rate": float(_mcc_num(_mcc_row_get(row, "metrics.auction_insight_search_position_above_rate"), float)),
+                "top_impr_pct": float(_mcc_num(_mcc_row_get(row, "metrics.auction_insight_search_top_impression_percentage"), float)),
+                "abs_top_impr_pct": float(_mcc_num(_mcc_row_get(row, "metrics.auction_insight_search_absolute_top_impression_percentage"), float)),
+                "outranking_share": float(_mcc_num(_mcc_row_get(row, "metrics.auction_insight_search_outranking_share"), float)),
+            })
+        else:
+            item["raw"] = row
+        out.append(item)
+    return out
+
+
+def _mcc_collect_briefing(conn, user_id, mcc_cfg, windows, customer_id_filter=""):
+    _ensure_mcc_tables(conn)
+    run_utc = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    run_id = _mcc_start_run(conn, user_id, mcc_cfg.get("slug"))
+    failures = []
+    accounts, gw_accounts, accounts_diag = _mcc_fetch_accounts_for_mcc(mcc_cfg, conn=conn)
+    _mcc_log_event(
+        conn, run_id, run_utc, mcc_cfg.get("slug"), "ACCOUNTS_FETCH", "ok",
+        message=json.dumps({
+            "mcc_customer_id": accounts_diag.get("mcc_customer_id"),
+            "login_customer_id": accounts_diag.get("login_customer_id"),
+            "gaql_query": accounts_diag.get("gaql_query"),
+            "gaql_rows_count": accounts_diag.get("gaql_rows_count"),
+            "fallback_rows_count": accounts_diag.get("fallback_rows_count"),
+            "gateway_error": (gw_accounts or {}).get("error"),
+        }, ensure_ascii=True)[:1000],
+        duration_ms=0,
+    )
+    if (not accounts) and isinstance(gw_accounts, dict) and gw_accounts.get("error"):
+        failures.append({"customer_id": "", "error": str(gw_accounts.get("error"))})
+        _mcc_log_event(
+            conn, run_id, run_utc, mcc_cfg.get("slug"), "ACCOUNTS_EMPTY", "error",
+            message=str(gw_accounts.get("error"))[:1000],
+            duration_ms=0,
+        )
+    wanted_customer_id = _mcc_to_customer_id(customer_id_filter)
+    if wanted_customer_id:
+        accounts = [
+            acc for acc in (accounts or [])
+            if _mcc_to_customer_id((acc or {}).get("customer_id")) == wanted_customer_id
+        ]
+    briefing_rows = []
+    for account in accounts:
+        t0 = time.time()
+        cid = str(account.get("customer_id") or "")
+        aname = str(account.get("account_name") or "")
+        try:
+            kpi_by_window = {}
+            for win in windows:
+                rows, _gw = _mcc_fetch_report_rows(mcc_cfg, account, "customer_kpis", int(win), 5)
+                kpi_by_window[int(win)] = _mcc_kpis_from_rows(rows)
+            # Keep briefing lightweight to avoid timeouts on large MCCs.
+            st_search, _ = _mcc_fetch_report_rows(mcc_cfg, account, "search_terms_search", 30, 1)
+            st_norm = _mcc_report_to_rows("search_terms_search", st_search, {})
+            top_term = st_norm[0] if st_norm else {}
+            item = {
+                "run_id": run_id,
+                "run_utc": run_utc,
+                "mcc_slug": mcc_cfg.get("slug"),
+                "login_customer_id": str(mcc_cfg.get("login_customer_id") or ""),
+                "customer_id": cid,
+                "account_name": aname,
+                "currency": account.get("currency") or "USD",
+                "tz": account.get("tz") or "UTC",
+                "cost_7d": kpi_by_window.get(7, {}).get("cost", 0.0),
+                "conv_7d": kpi_by_window.get(7, {}).get("conversions", 0.0),
+                "value_7d": kpi_by_window.get(7, {}).get("conv_value", 0.0),
+                "roas_7d": kpi_by_window.get(7, {}).get("roas", 0.0),
+                "cost_30d": kpi_by_window.get(30, {}).get("cost", 0.0),
+                "conv_30d": kpi_by_window.get(30, {}).get("conversions", 0.0),
+                "value_30d": kpi_by_window.get(30, {}).get("conv_value", 0.0),
+                "roas_30d": kpi_by_window.get(30, {}).get("roas", 0.0),
+                "cost_90d": kpi_by_window.get(90, {}).get("cost", 0.0),
+                "conv_90d": kpi_by_window.get(90, {}).get("conversions", 0.0),
+                "value_90d": kpi_by_window.get(90, {}).get("conv_value", 0.0),
+                "roas_90d": kpi_by_window.get(90, {}).get("roas", 0.0),
+                "top_term_30d": top_term.get("search_term") or "",
+                "top_term_cost_30d": float(_mcc_num(top_term.get("cost"), float)),
+                "top_term_source": top_term.get("source") or "",
+                "neg_account_count": 0,
+                "neg_shared_count": 0,
+                "neg_campaign_count": 0,
+                "neg_adgroup_count": 0,
+                "search_terms_count": len(st_norm),
+                "campaign_rows_30d": 0,
+                "search_cost_30d": 0.0,
+                "auction_rows_30d": 0,
+                "audience_rows_30d": 0,
+            }
+            item["flags"] = "|".join(_mcc_flags_for_account(item))
+            briefing_rows.append(item)
+            _mcc_log_event(
+                conn, run_id, run_utc, mcc_cfg.get("slug"), "briefing", "ok",
+                message="account_processed", customer_id=cid, account_name=aname,
+                duration_ms=int((time.time() - t0) * 1000.0),
+            )
+        except Exception as exc:
+            failures.append({"customer_id": cid, "error": str(exc)})
+            _mcc_log_event(
+                conn, run_id, run_utc, mcc_cfg.get("slug"), "briefing", "error",
+                message=str(exc), customer_id=cid, account_name=aname,
+                duration_ms=int((time.time() - t0) * 1000.0),
+            )
+    _mcc_finish_run(
+        conn,
+        run_id,
+        status="done" if not failures else "partial",
+        account_count=len(accounts),
+        failure_count=len(failures),
+        summary_obj={"briefing_rows": len(briefing_rows)},
+        errors_obj=failures,
+    )
+    return {
+        "run_id": run_id,
+        "run_utc": run_utc,
+        "accounts": accounts,
+        "accounts_gateway": gw_accounts,
+        "accounts_diagnostic": accounts_diag,
+        "briefing": briefing_rows,
+        "failures": failures,
+    }
+
+
+@app.route("/api/mcc/registry", methods=["GET"])
+def api_mcc_registry():
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        items = _mcc_registry_list(conn, uid)
+        active = _mcc_connected_config(conn, uid)
+        return jsonify({
+            "mccs": items,
+            "connected_mcc": active,
+            "selected_mcc": str((active or {}).get("slug") or ""),
+        })
+    finally:
+        conn.close()
+
+
+# ── MCC Connector Pills ─────────────────────────────────────
+# Returns top MCC clients with their connector metric badges.
+# UI: pastile pe fiecare conector, cu titlu metrică, casuță editabilă.
+CONNECTOR_METRICS = {
+    "google-ads": [
+        {"key": "impressions", "label": "Impressions", "icon": "eye"},
+        {"key": "clicks", "label": "Clicks", "icon": "cursor"},
+        {"key": "conversions", "label": "Conversions", "icon": "target"},
+        {"key": "roas", "label": "ROAS", "icon": "chart-up"},
+        {"key": "spend", "label": "Spend", "icon": "wallet"},
+        {"key": "ctr", "label": "CTR", "icon": "percent"},
+        {"key": "cpc", "label": "CPC", "icon": "coin"},
+    ],
+    "ga4": [
+        {"key": "sessions", "label": "Sessions", "icon": "users"},
+        {"key": "users", "label": "Users", "icon": "user"},
+        {"key": "bounceRate", "label": "Bounce Rate", "icon": "arrow-down"},
+        {"key": "avgSessionDuration", "label": "Avg Duration", "icon": "clock"},
+        {"key": "pageviews", "label": "Pageviews", "icon": "file"},
+        {"key": "conversionRate", "label": "Conv. Rate", "icon": "target"},
+    ],
+    "meta-ads": [
+        {"key": "impressions", "label": "Impressions", "icon": "eye"},
+        {"key": "clicks", "label": "Clicks", "icon": "cursor"},
+        {"key": "spend", "label": "Spend", "icon": "wallet"},
+        {"key": "cpm", "label": "CPM", "icon": "chart-bar"},
+        {"key": "roas", "label": "ROAS", "icon": "chart-up"},
+    ],
+    "google-search-console": [
+        {"key": "clicks", "label": "Clicks", "icon": "cursor"},
+        {"key": "impressions", "label": "Impressions", "icon": "eye"},
+        {"key": "ctr", "label": "CTR", "icon": "percent"},
+        {"key": "position", "label": "Avg Position", "icon": "hash"},
+    ],
+}
+
+
+@app.route("/api/mcc/connector-pills", methods=["GET"])
+def api_mcc_connector_pills():
+    """Return MCC clients × connectors pill data for UI.
+    Query params:
+        limit  – max clients (default 5)
+        status – filter by client status (default 'active')
+    Response shape per client:
+        {customer_name, customer_id, status, industry, connectors: {
+            "google-ads": {connected, metrics: [{key,label,icon,selected}]},
+            ...
+        }}
+    """
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    limit = min(int(request.args.get("limit", 5)), 20)
+    status_filter = request.args.get("status", "")  # '' = all
+    conn = get_db()
+    try:
+        # Fetch MCC clients
+        sql = "SELECT * FROM mcc_clients WHERE user_id = ? ORDER BY priority ASC, id ASC"
+        rows = conn.execute(sql, (uid,)).fetchall()
+        cols = [d[0] for d in conn.execute(sql, (uid,)).description] if rows else []
+
+        # Fetch all connectors for this user/client
+        cc_rows = conn.execute(
+            "SELECT connector_slug, status, config_json FROM connectors_config WHERE user_id = ?",
+            (uid,),
+        ).fetchall()
+        connected_slugs = set()
+        for ccr in cc_rows:
+            if ccr[1] and "connect" in str(ccr[1]).lower():
+                connected_slugs.add(ccr[0])
+
+        pills = []
+        for row in rows:
+            client = dict(zip(cols, row))
+            cid = client.get("customer_id", "")
+            cstatus = client.get("status", "active")
+            if status_filter and cstatus != status_filter:
+                continue
+            if len(pills) >= limit:
+                break
+
+            # Load per-client metric selections from meta_json
+            try:
+                meta = json.loads(client.get("meta_json") or "{}")
+            except Exception:
+                meta = {}
+            metric_selections = meta.get("connector_metrics", {})
+
+            connectors = {}
+            for slug, available_metrics in CONNECTOR_METRICS.items():
+                is_connected = slug in connected_slugs
+                # Per-client metric selection (default: first 3 selected)
+                selected_keys = metric_selections.get(slug, [m["key"] for m in available_metrics[:3]])
+                metrics = []
+                for m in available_metrics:
+                    metrics.append({
+                        **m,
+                        "selected": m["key"] in selected_keys,
+                    })
+                connectors[slug] = {
+                    "connected": is_connected,
+                    "metrics": metrics,
+                }
+
+            pills.append({
+                "id": client.get("id"),
+                "customer_name": client.get("customer_name", ""),
+                "customer_id": cid,
+                "status": cstatus,
+                "industry": client.get("industry", ""),
+                "priority": client.get("priority", 5),
+                "connectors": connectors,
+            })
+
+        return jsonify({"pills": pills, "available_connectors": list(CONNECTOR_METRICS.keys())})
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/connector-pills/<int:client_id>/metrics", methods=["PATCH"])
+def api_mcc_connector_pills_update(client_id):
+    """Update metric selections for a specific MCC client's connector.
+    Body: {"connector": "google-ads", "selected_metrics": ["impressions","clicks","roas"]}
+    """
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    payload = request.get_json(force=True, silent=True) or {}
+    connector = payload.get("connector", "")
+    selected = payload.get("selected_metrics", [])
+    if not connector or connector not in CONNECTOR_METRICS:
+        return jsonify({"error": "invalid_connector"}), 400
+    if not isinstance(selected, list):
+        return jsonify({"error": "selected_metrics_must_be_array"}), 400
+
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT meta_json FROM mcc_clients WHERE id = ? AND user_id = ?",
+            (client_id, uid),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "client_not_found"}), 404
+
+        try:
+            meta = json.loads(row[0] or "{}")
+        except Exception:
+            meta = {}
+        if "connector_metrics" not in meta:
+            meta["connector_metrics"] = {}
+        meta["connector_metrics"][connector] = selected
+
+        conn.execute(
+            "UPDATE mcc_clients SET meta_json = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?",
+            (json.dumps(meta), client_id, uid),
+        )
+        conn.commit()
+        return jsonify({"ok": True, "client_id": client_id, "connector": connector, "selected_metrics": selected})
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/select", methods=["POST"])
+def api_mcc_select():
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    payload = request.get_json(force=True, silent=True) or {}
+    wanted = str(payload.get("mcc_id") or payload.get("slug") or payload.get("login_customer_id") or "").strip()
+    uid = get_current_user_id()
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        item = _mcc_connected_config(conn, uid, wanted)
+        if not item:
+            return jsonify({"error": "not_found"}), 404
+    finally:
+        conn.close()
+    login_customer_id = _mcc_normalize_login_customer_id((item or {}).get("login_customer_id"))
+    session["mcc_selected_slug"] = str((item or {}).get("slug") or "")
+    session["mcc_login_customer_id"] = login_customer_id
+    resp = jsonify({"success": True, "selected_mcc": item, "login_customer_id": login_customer_id})
+    resp.set_cookie("camarad_mcc_slug", str((item or {}).get("slug") or ""), max_age=30 * 24 * 3600, **_auth_cookie_opts())
+    resp.set_cookie("camarad_mcc_login_customer_id", login_customer_id, max_age=30 * 24 * 3600, **_auth_cookie_opts())
+    return resp
+
+
+@app.route("/api/mcc/connect", methods=["POST"])
+def api_mcc_connect():
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    payload = request.get_json(force=True, silent=True) or {}
+    raw_login_customer_id = payload.get("login_customer_id") or payload.get("mcc_id") or payload.get("customer_id")
+    login_customer_id = _mcc_normalize_login_customer_id(raw_login_customer_id)
+    if not login_customer_id:
+        return jsonify({"error": "invalid_login_customer_id"}), 400
+
+    probe_info, probe_gw, _probe_payload = _mcc_manager_probe_via_gateway(login_customer_id)
+    probe_gaql = "SELECT customer.id, customer.descriptive_name FROM customer"
+    probe_rows, probe_rows_gw = _mcc_gaql_fetch(login_customer_id, "", probe_gaql)
+    probe_warning = ""
+    if not probe_rows and not (probe_info or {}).get("name"):
+        gw_error = str((probe_gw or {}).get("error") or (probe_rows_gw or {}).get("error") or "permission_denied_or_not_found")
+        lowered = gw_error.lower()
+        if _mcc_rate_limited_gateway({"error": gw_error}):
+            retry_after = _mcc_gateway_retry_after_seconds({"error": gw_error}, default_seconds=15)
+            resp = jsonify({
+                "error": "rate_limited",
+                "code": "UPSTREAM_RATE_LIMIT",
+                "retry_after_s": retry_after,
+                "probe_ok": False,
+                "details": gw_error,
+            })
+            resp.status_code = 429
+            resp.headers["Retry-After"] = str(retry_after)
+            return resp
+        if any(x in lowered for x in ("permission", "denied", "associated", "not_enabled", "forbidden")):
+            return jsonify({"error": "forbidden_mcc", "details": gw_error}), 403
+        probe_warning = gw_error
+
+    detected_name = str((probe_info or {}).get("name") or "").strip()
+    probe_customer_id = _mcc_to_customer_id((probe_info or {}).get("customer_id"))
+    if not detected_name and probe_customer_id and str(probe_customer_id) == str(login_customer_id):
+        detected_name = f"MCC {login_customer_id}"
+    if (not detected_name) and isinstance(probe_rows, list) and probe_rows and isinstance(probe_rows[0], dict):
+        first = probe_rows[0]
+        gaql_customer_id = _mcc_to_customer_id(
+            _mcc_row_get(first, "customer.id")
+            or first.get("customer_id")
+            or first.get("id")
+        )
+        if gaql_customer_id and str(gaql_customer_id) == str(login_customer_id):
+            detected_name = str(
+                _mcc_row_get(first, "customer.descriptive_name")
+                or first.get("descriptive_name")
+                or first.get("name")
+                or ""
+            ).strip()
+    name = str(payload.get("name") or detected_name or f"MCC {login_customer_id}").strip()
+    slug = _mcc_slug_from_login_customer_id(login_customer_id)
+    uid = get_current_user_id()
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        existing = _mcc_registry_get_by_login_customer_id(conn, uid, login_customer_id)
+        if existing:
+            slug = str(existing.get("slug") or slug)
+        _mcc_db_write(
+            conn,
+            """
+            INSERT INTO mcc_registry (user_id, slug, name, login_customer_id, owner, note, status, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', datetime('now'))
+            ON CONFLICT(user_id, slug) DO UPDATE SET
+                name = excluded.name,
+                login_customer_id = excluded.login_customer_id,
+                status = 'active',
+                updated_at = datetime('now')
+            """,
+            (int(uid), slug, name, login_customer_id, "connected", ""),
+        )
+        conn.commit()
+        mcc = _mcc_connected_config(conn, uid, slug) or {
+            "slug": slug,
+            "name": name,
+            "login_customer_id": login_customer_id,
+            "owner": "connected",
+            "note": "",
+            "status": "active",
+            "updated_at": "",
+        }
+    finally:
+        conn.close()
+
+    session["mcc_selected_slug"] = str((mcc or {}).get("slug") or slug)
+    session["mcc_login_customer_id"] = login_customer_id
+    resp = jsonify({
+        "ok": True,
+        "mcc": mcc,
+        "probe_rows": max(int(_mcc_num((probe_info or {}).get("rows_count"), int)), len(probe_rows or [])),
+        "probe_ok": bool((probe_info or {}).get("name") or probe_rows or (probe_customer_id and str(probe_customer_id) == str(login_customer_id))),
+        "warning": probe_warning,
+    })
+    resp.set_cookie("camarad_mcc_slug", str((mcc or {}).get("slug") or slug), max_age=30 * 24 * 3600, **_auth_cookie_opts())
+    resp.set_cookie("camarad_mcc_login_customer_id", login_customer_id, max_age=30 * 24 * 3600, **_auth_cookie_opts())
+    return resp
+
+
+@app.route("/api/mcc/accounts", methods=["GET"])
+@app.route("/api/mcc/<mcc_id>/accounts", methods=["GET"])
+def api_mcc_accounts(mcc_id=None):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    conn = None
+    try:
+        conn = get_db()
+        _mcc_prepare_conn(conn)
+        mcc = _mcc_connected_config(conn, uid, mcc_id)
+        if not mcc:
+            return jsonify({"error": "mcc_not_connected"}), 400
+        login_customer_id = _mcc_to_customer_id((mcc or {}).get("login_customer_id"))
+        use_cache = str(request.args.get("use_cache", "1")).strip().lower() in ("1", "true", "yes", "on")
+        verbose = str(request.args.get("verbose", "0")).strip().lower() in ("1", "true", "yes", "on")
+        slim = str(request.args.get("slim", "1")).strip().lower() in ("1", "true", "yes", "on")
+        if verbose:
+            slim = False
+        try:
+            limit = int(request.args.get("limit", 50))
+        except Exception:
+            limit = 50
+        try:
+            offset = int(request.args.get("offset", 0))
+        except Exception:
+            offset = 0
+        limit = max(1, min(500, limit))
+        offset = max(0, offset)
+        query = str(request.args.get("q") or "").strip().lower()
+
+        def _mcc_accounts_gateway_public(gateway_obj):
+            gw_in = gateway_obj if isinstance(gateway_obj, dict) else {}
+            out = {}
+            for k in ("stale", "retry_after_s", "cooldown", "cache_state", "error"):
+                if k in gw_in:
+                    out[k] = gw_in.get(k)
+            return out
+
+        def _mcc_accounts_row_slim(acc):
+            row = acc if isinstance(acc, dict) else {}
+            cid = _mcc_to_customer_id(row.get("customer_id"))
+            return {
+                "customer_id": cid,
+                "account_name": str(row.get("account_name") or (f"Account {cid}" if cid else "Account")),
+            }
+
+        probe = _mcc_finalize_probe_result(_mcc_probe_access_for_mcc(mcc, use_cache=use_cache, conn=conn), login_customer_id)
+        if int(_mcc_num((probe or {}).get("upstream_status"), int)) == 429:
+            retry_after = int(max(1, min(300, _mcc_num((probe or {}).get("retry_after_s"), int) or 20)))
+            resp = jsonify({
+                "error": "rate_limited",
+                "code": "UPSTREAM_RATE_LIMIT",
+                "retry_after_s": retry_after,
+                "probe": probe,
+                "mcc": mcc,
+            })
+            resp.status_code = 429
+            resp.headers["Retry-After"] = str(retry_after)
+            return resp
+        if not _mcc_probe_has_access(probe, login_customer_id):
+            payload = {
+                "accounts": [],
+                "total": 0,
+                "limit": limit,
+                "offset": offset,
+                "has_more": False,
+                "query": query,
+                "gateway": {"error": "probe_failed"},
+            }
+            if not slim:
+                payload.update({
+                    "mcc": mcc,
+                    "probe": probe,
+                    "diagnostic": {"reason": "probe_not_ok"},
+                })
+            return jsonify(payload)
+        accounts, gw, diag = _mcc_fetch_accounts_for_mcc(mcc, use_cache=use_cache, conn=conn)
+        if (not accounts) and _mcc_rate_limited_gateway(gw):
+            retry_after = int(max(1, min(300, _mcc_gateway_retry_after_seconds(gw, default_seconds=20))))
+            resp = jsonify({
+                "error": "rate_limited",
+                "code": "UPSTREAM_RATE_LIMIT",
+                "retry_after_s": retry_after,
+                "gateway": gw,
+                "diagnostic": diag,
+                "probe": probe,
+                "mcc": mcc,
+            })
+            resp.status_code = 429
+            resp.headers["Retry-After"] = str(retry_after)
+            return resp
+        filtered_accounts = list(accounts or [])
+        if query:
+            filtered_accounts = [
+                a for a in filtered_accounts
+                if query in str((a or {}).get("account_name") or "").lower()
+                or query in str((a or {}).get("customer_id") or "")
+            ]
+        total = len(filtered_accounts)
+        page_rows = filtered_accounts[offset:offset + limit]
+        has_more = (offset + len(page_rows)) < total
+        payload = {
+            "accounts": [_mcc_accounts_row_slim(a) for a in page_rows] if slim else page_rows,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "query": query,
+            "gateway": _mcc_accounts_gateway_public(gw) if slim else gw,
+        }
+        if not slim:
+            payload.update({
+                "mcc": mcc,
+                "diagnostic": diag,
+                "probe": probe,
+            })
+        return jsonify(payload)
+    except Exception as exc:
+        print("mcc_accounts_exception", json.dumps({
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+            "mcc_id": str(mcc_id or ""),
+        }, ensure_ascii=True))
+        traceback.print_exc()
+        return jsonify({
+            "error": "internal_error",
+            "error_class": exc.__class__.__name__,
+            "message": str(exc),
+        }), 500
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/watchlists", methods=["GET"])
+def api_mcc_watchlists():
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    ws_slug = _mcc_watchlist_ws_slug()
+    conn = None
+    try:
+        conn = get_db()
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        default_id = _mcc_watchlist_default(conn, ws_slug)
+        conn.commit()
+        rows = conn.execute(
+            """
+            SELECT wl.id, wl.name, COUNT(wli.id) AS item_count
+            FROM mcc_watchlists wl
+            LEFT JOIN mcc_watchlist_items wli ON wli.watchlist_id = wl.id
+            WHERE wl.ws_slug = ?
+            GROUP BY wl.id, wl.name
+            ORDER BY
+              CASE WHEN wl.id = ? THEN 0 ELSE 1 END,
+              wl.name COLLATE NOCASE ASC
+            """,
+            (str(ws_slug), int(default_id)),
+        ).fetchall()
+        items = [
+            {
+                "id": int(r[0]),
+                "name": str(r[1] or ""),
+                "count": int(_mcc_num(r[2], int)),
+            }
+            for r in (rows or [])
+        ]
+        return jsonify({"items": items, "default_id": int(default_id)})
+    except Exception as exc:
+        print("mcc_watchlists_list_exception", json.dumps({
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+        }, ensure_ascii=True))
+        traceback.print_exc()
+        return jsonify({"error": "internal_error", "message": str(exc)}), 500
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/watchlists", methods=["POST"])
+def api_mcc_watchlists_create():
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    payload = request.get_json(force=True, silent=True) or {}
+    name = _mcc_watchlist_name(payload.get("name"))
+    if not name:
+        return jsonify({"error": "invalid_name"}), 400
+    ws_slug = _mcc_watchlist_ws_slug()
+    conn = None
+    try:
+        conn = get_db()
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        _mcc_watchlist_default(conn, ws_slug)
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM mcc_watchlists
+            WHERE ws_slug = ? AND name = ?
+            LIMIT 1
+            """,
+            (str(ws_slug), str(name)),
+        ).fetchone()
+        if existing:
+            item = _mcc_watchlist_snapshot(conn, ws_slug, int(existing[0]))
+            return jsonify({"item": item, "created": False})
+        conn.execute(
+            """
+            INSERT INTO mcc_watchlists (ws_slug, name, created_at, updated_at)
+            VALUES (?, ?, datetime('now'), datetime('now'))
+            """,
+            (str(ws_slug), str(name)),
+        )
+        created_id = int(_mcc_num((conn.execute("SELECT last_insert_rowid()").fetchone() or [0])[0], int))
+        conn.commit()
+        item = _mcc_watchlist_snapshot(conn, ws_slug, created_id)
+        return jsonify({"item": item, "created": True}), 201
+    except sqlite3.IntegrityError:
+        try:
+            if conn is not None:
+                row = conn.execute(
+                    "SELECT id FROM mcc_watchlists WHERE ws_slug = ? AND name = ? LIMIT 1",
+                    (str(ws_slug), str(name)),
+                ).fetchone()
+                if row:
+                    return jsonify({"item": _mcc_watchlist_snapshot(conn, ws_slug, int(row[0])), "created": False})
+        except Exception:
+            pass
+        return jsonify({"error": "duplicate_name"}), 409
+    except Exception as exc:
+        print("mcc_watchlists_create_exception", json.dumps({
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+            "ws_slug": ws_slug,
+        }, ensure_ascii=True))
+        traceback.print_exc()
+        return jsonify({"error": "internal_error", "message": str(exc)}), 500
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/watchlists/<int:watchlist_id>", methods=["PATCH"])
+def api_mcc_watchlists_patch(watchlist_id):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    payload = request.get_json(force=True, silent=True) or {}
+    name = _mcc_watchlist_name(payload.get("name"))
+    if not name:
+        return jsonify({"error": "invalid_name"}), 400
+    ws_slug = _mcc_watchlist_ws_slug()
+    conn = None
+    try:
+        conn = get_db()
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        _mcc_watchlist_default(conn, ws_slug)
+        watchlist = _mcc_watchlist_get(conn, ws_slug, watchlist_id)
+        if not watchlist:
+            return jsonify({"error": "not_found"}), 404
+        conn.execute(
+            """
+            UPDATE mcc_watchlists
+            SET name = ?, updated_at = datetime('now')
+            WHERE id = ? AND ws_slug = ?
+            """,
+            (str(name), int(watchlist_id), str(ws_slug)),
+        )
+        conn.commit()
+        return jsonify({"item": _mcc_watchlist_snapshot(conn, ws_slug, watchlist_id)})
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "duplicate_name"}), 409
+    except Exception as exc:
+        print("mcc_watchlists_patch_exception", json.dumps({
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+            "watchlist_id": int(watchlist_id),
+        }, ensure_ascii=True))
+        traceback.print_exc()
+        return jsonify({"error": "internal_error", "message": str(exc)}), 500
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/watchlists/<int:watchlist_id>", methods=["DELETE"])
+def api_mcc_watchlists_delete(watchlist_id):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    ws_slug = _mcc_watchlist_ws_slug()
+    conn = None
+    try:
+        conn = get_db()
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        default_id = _mcc_watchlist_default(conn, ws_slug)
+        watchlist = _mcc_watchlist_get(conn, ws_slug, watchlist_id)
+        if not watchlist:
+            return jsonify({"error": "not_found"}), 404
+        if int(watchlist_id) == int(default_id):
+            return jsonify({"error": "default_watchlist_protected"}), 400
+        item_count = _mcc_watchlist_item_count(conn, watchlist_id)
+        if item_count > 0:
+            return jsonify({"error": "watchlist_not_empty", "count": int(item_count)}), 400
+        conn.execute(
+            "DELETE FROM mcc_watchlists WHERE id = ? AND ws_slug = ?",
+            (int(watchlist_id), str(ws_slug)),
+        )
+        conn.commit()
+        return jsonify({"ok": True, "deleted_id": int(watchlist_id)})
+    except Exception as exc:
+        print("mcc_watchlists_delete_exception", json.dumps({
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+            "watchlist_id": int(watchlist_id),
+        }, ensure_ascii=True))
+        traceback.print_exc()
+        return jsonify({"error": "internal_error", "message": str(exc)}), 500
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/watchlists/<int:watchlist_id>/items", methods=["GET"])
+def api_mcc_watchlist_items(watchlist_id):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    ws_slug = _mcc_watchlist_ws_slug()
+    query = str(request.args.get("q") or "").strip().lower()
+    try:
+        limit = int(request.args.get("limit", 50))
+    except Exception:
+        limit = 50
+    try:
+        offset = int(request.args.get("offset", 0))
+    except Exception:
+        offset = 0
+    limit = max(1, min(500, limit))
+    offset = max(0, offset)
+    conn = None
+    try:
+        conn = get_db()
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        _mcc_watchlist_default(conn, ws_slug)
+        watchlist = _mcc_watchlist_get(conn, ws_slug, watchlist_id)
+        if not watchlist:
+            return jsonify({"error": "not_found"}), 404
+        where = "watchlist_id = ?"
+        params = [int(watchlist_id)]
+        if query:
+            where += " AND (LOWER(COALESCE(descriptive_name,'')) LIKE ? OR customer_id LIKE ?)"
+            like = f"%{query}%"
+            params.extend([like, like])
+        count_sql = f"SELECT COUNT(1) FROM mcc_watchlist_items WHERE {where}"
+        total = int(_mcc_num((conn.execute(count_sql, tuple(params)).fetchone() or [0])[0], int))
+        items_sql = f"""
+            SELECT customer_id, descriptive_name, is_manager, added_at
+            FROM mcc_watchlist_items
+            WHERE {where}
+            ORDER BY added_at DESC, id DESC
+            LIMIT ? OFFSET ?
+        """
+        rows = conn.execute(items_sql, tuple(params + [int(limit), int(offset)])).fetchall()
+        items = [
+            {
+                "customer_id": str(r[0] or ""),
+                "descriptive_name": str(r[1] or ""),
+                "is_manager": bool(int(_mcc_num(r[2], int))),
+                "added_at": str(r[3] or ""),
+            }
+            for r in (rows or [])
+        ]
+        return jsonify({
+            "items": items,
+            "total": int(total),
+            "limit": int(limit),
+            "offset": int(offset),
+            "has_more": bool((offset + len(items)) < total),
+        })
+    except Exception as exc:
+        print("mcc_watchlist_items_list_exception", json.dumps({
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+            "watchlist_id": int(watchlist_id),
+        }, ensure_ascii=True))
+        traceback.print_exc()
+        return jsonify({"error": "internal_error", "message": str(exc)}), 500
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/watchlists/<int:watchlist_id>/items", methods=["POST"])
+def api_mcc_watchlist_items_add(watchlist_id):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    payload = request.get_json(force=True, silent=True) or {}
+    customer_id = _mcc_to_customer_id(payload.get("customer_id"))
+    if not customer_id:
+        return jsonify({"error": "invalid_customer_id"}), 400
+    descriptive_name = str(payload.get("descriptive_name") or "").strip()[:255]
+    is_manager = 1 if bool(payload.get("is_manager")) else 0
+    ws_slug = _mcc_watchlist_ws_slug()
+    conn = None
+    try:
+        conn = get_db()
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        _mcc_watchlist_default(conn, ws_slug)
+        watchlist = _mcc_watchlist_get(conn, ws_slug, watchlist_id)
+        if not watchlist:
+            return jsonify({"error": "not_found"}), 404
+        existing = conn.execute(
+            """
+            SELECT id, customer_id, descriptive_name, is_manager, added_at
+            FROM mcc_watchlist_items
+            WHERE watchlist_id = ? AND customer_id = ?
+            LIMIT 1
+            """,
+            (int(watchlist_id), str(customer_id)),
+        ).fetchone()
+        if existing:
+            existing_name = str(existing[2] or "")
+            existing_manager = int(_mcc_num(existing[3], int))
+            if descriptive_name and (descriptive_name != existing_name or int(is_manager) != existing_manager):
+                conn.execute(
+                    """
+                    UPDATE mcc_watchlist_items
+                    SET descriptive_name = ?, is_manager = ?
+                    WHERE id = ?
+                    """,
+                    (str(descriptive_name), int(is_manager), int(existing[0])),
+                )
+                conn.commit()
+                existing = conn.execute(
+                    """
+                    SELECT id, customer_id, descriptive_name, is_manager, added_at
+                    FROM mcc_watchlist_items
+                    WHERE id = ?
+                    LIMIT 1
+                    """,
+                    (int(existing[0]),),
+                ).fetchone()
+            return jsonify({
+                "item": {
+                    "customer_id": str(existing[1] or ""),
+                    "descriptive_name": str(existing[2] or ""),
+                    "is_manager": bool(int(_mcc_num(existing[3], int))),
+                    "added_at": str(existing[4] or ""),
+                },
+                "created": False,
+            })
+        conn.execute(
+            """
+            INSERT INTO mcc_watchlist_items (watchlist_id, customer_id, descriptive_name, is_manager, added_at)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            """,
+            (int(watchlist_id), str(customer_id), str(descriptive_name), int(is_manager)),
+        )
+        created = conn.execute(
+            """
+            SELECT customer_id, descriptive_name, is_manager, added_at
+            FROM mcc_watchlist_items
+            WHERE watchlist_id = ? AND customer_id = ?
+            LIMIT 1
+            """,
+            (int(watchlist_id), str(customer_id)),
+        ).fetchone()
+        conn.commit()
+        return jsonify({
+            "item": {
+                "customer_id": str((created or [""])[0] or ""),
+                "descriptive_name": str((created or ["", ""])[1] or ""),
+                "is_manager": bool(int(_mcc_num((created or ["", "", 0])[2], int))),
+                "added_at": str((created or ["", "", 0, ""])[3] or ""),
+            },
+            "created": True,
+        }), 201
+    except sqlite3.IntegrityError:
+        existing = None
+        try:
+            if conn is not None:
+                existing = conn.execute(
+                    """
+                    SELECT customer_id, descriptive_name, is_manager, added_at
+                    FROM mcc_watchlist_items
+                    WHERE watchlist_id = ? AND customer_id = ?
+                    LIMIT 1
+                    """,
+                    (int(watchlist_id), str(customer_id)),
+                ).fetchone()
+        except Exception:
+            existing = None
+        if existing:
+            return jsonify({
+                "item": {
+                    "customer_id": str(existing[0] or ""),
+                    "descriptive_name": str(existing[1] or ""),
+                    "is_manager": bool(int(_mcc_num(existing[2], int))),
+                    "added_at": str(existing[3] or ""),
+                },
+                "created": False,
+            })
+        return jsonify({"error": "duplicate_item"}), 409
+    except Exception as exc:
+        print("mcc_watchlist_items_add_exception", json.dumps({
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+            "watchlist_id": int(watchlist_id),
+        }, ensure_ascii=True))
+        traceback.print_exc()
+        return jsonify({"error": "internal_error", "message": str(exc)}), 500
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/watchlists/<int:watchlist_id>/items/<customer_id>", methods=["DELETE"])
+def api_mcc_watchlist_items_delete(watchlist_id, customer_id):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    wanted_customer_id = _mcc_to_customer_id(customer_id)
+    if not wanted_customer_id:
+        return jsonify({"error": "invalid_customer_id"}), 400
+    ws_slug = _mcc_watchlist_ws_slug()
+    conn = None
+    try:
+        conn = get_db()
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        _mcc_watchlist_default(conn, ws_slug)
+        watchlist = _mcc_watchlist_get(conn, ws_slug, watchlist_id)
+        if not watchlist:
+            return jsonify({"error": "not_found"}), 404
+        cur = conn.execute(
+            """
+            DELETE FROM mcc_watchlist_items
+            WHERE watchlist_id = ? AND customer_id = ?
+            """,
+            (int(watchlist_id), str(wanted_customer_id)),
+        )
+        conn.commit()
+        return jsonify({
+            "ok": True,
+            "deleted": bool(int(cur.rowcount or 0) > 0),
+            "customer_id": str(wanted_customer_id),
+        })
+    except Exception as exc:
+        print("mcc_watchlist_items_delete_exception", json.dumps({
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+            "watchlist_id": int(watchlist_id),
+            "customer_id": str(wanted_customer_id),
+        }, ensure_ascii=True))
+        traceback.print_exc()
+        return jsonify({"error": "internal_error", "message": str(exc)}), 500
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/watchlists/<int:watchlist_id>/brief", methods=["POST"])
+def api_mcc_watchlist_brief(watchlist_id):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    ws_slug = _mcc_watchlist_ws_slug()
+    windows = _mcc_watchlist_brief_windows(request.args.get("window") or request.args.get("windows") or "7,30")
+    force = str(request.args.get("force", "0")).strip().lower() in ("1", "true", "yes", "on")
+    try:
+        ttl_sec = int(request.args.get("ttl_sec", 21600))
+    except Exception:
+        ttl_sec = 21600
+    ttl_sec = max(60, min(7 * 24 * 3600, int(ttl_sec)))
+
+    uid = get_current_user_id()
+    conn = None
+    try:
+        conn = get_db()
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        mcc = _mcc_connected_config(conn, uid)
+        if not mcc:
+            return jsonify({"error": "mcc_not_connected"}), 400
+        watchlist = _mcc_watchlist_get(conn, ws_slug, watchlist_id)
+        if not watchlist:
+            return jsonify({"error": "not_found"}), 404
+
+        watchlist_rows = conn.execute(
+            """
+            SELECT customer_id, descriptive_name, is_manager
+            FROM mcc_watchlist_items
+            WHERE watchlist_id = ?
+            ORDER BY added_at DESC, id DESC
+            """,
+            (int(watchlist_id),),
+        ).fetchall()
+        if not watchlist_rows:
+            return jsonify({
+                "watchlist_id": int(watchlist_id),
+                "ws_slug": str(ws_slug),
+                "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "windows": windows,
+                "items": [],
+                "stats": {"accounts_total": 0, "accounts_ok": 0, "accounts_failed": 0},
+            })
+
+        accounts, _gw_accounts, _diag_accounts = _mcc_fetch_accounts_for_mcc(mcc, use_cache=True, conn=conn)
+        account_map = {}
+        for acc in (accounts or []):
+            if not isinstance(acc, dict):
+                continue
+            cid = _mcc_to_customer_id(acc.get("customer_id"))
+            if not cid:
+                continue
+            account_map[cid] = dict(acc)
+
+        out_items = []
+        ok_count = 0
+        failed_count = 0
+        lock = _mcc_watchlist_brief_lock((mcc or {}).get("login_customer_id"))
+        with lock:
+            for row in (watchlist_rows or []):
+                customer_id = _mcc_to_customer_id((row or [""])[0])
+                if not customer_id:
+                    continue
+                descriptive_name = str((row or ["", ""])[1] or "")
+                acc = account_map.get(customer_id) or {
+                    "customer_id": customer_id,
+                    "account_name": descriptive_name or f"Account {customer_id}",
+                    "currency": "USD",
+                    "tz": "UTC",
+                }
+                item = {
+                    "customer_id": str(customer_id),
+                    "descriptive_name": descriptive_name or str(acc.get("account_name") or f"Account {customer_id}"),
+                    "currency_code": str(acc.get("currency") or "USD"),
+                    "time_zone": str(acc.get("tz") or "UTC"),
+                    "metrics": {},
+                    "delta": {
+                        "roas_7_vs_30_pct": 0.0,
+                        "cost_7_vs_30_pct": 0.0,
+                    },
+                    "top_campaigns_7": [],
+                    "flags": [],
+                }
+                try:
+                    for win in windows:
+                        cache_key = _mcc_watchlist_brief_cache_key(ws_slug, watchlist_id, customer_id, win)
+                        cached = None if force else _mcc_watchlist_brief_cache_get(conn, cache_key)
+                        payload = cached if isinstance(cached, dict) else None
+                        if not payload:
+                            kpi_rows, _kpi_gw = _mcc_fetch_report_rows(mcc, acc, "customer_kpis", int(win), 5)
+                            kpi = _mcc_kpis_from_rows(kpi_rows)
+                            payload = {
+                                "metrics": {
+                                    "cost": round(float(_mcc_num(kpi.get("cost"), float)), 6),
+                                    "conv_value": round(float(_mcc_num(kpi.get("conv_value"), float)), 6),
+                                    "conversions": round(float(_mcc_num(kpi.get("conversions"), float)), 6),
+                                    "roas": round(float(_mcc_num(kpi.get("roas"), float)), 6),
+                                }
+                            }
+                            if int(win) == 7:
+                                camp_rows, _camp_gw = _mcc_fetch_report_rows(mcc, acc, "campaigns", 7, 3)
+                                camp_norm = _mcc_report_to_rows("campaigns", camp_rows, {})
+                                top_campaigns = sorted(
+                                    [x for x in (camp_norm or []) if isinstance(x, dict)],
+                                    key=lambda x: float(_mcc_num(x.get("cost"), float)),
+                                    reverse=True,
+                                )[:3]
+                                payload["top_campaigns_7"] = [
+                                    {
+                                        "campaign_id": str(c.get("campaign_id") or ""),
+                                        "name": str(c.get("campaign_name") or ""),
+                                        "cost": round(float(_mcc_num(c.get("cost"), float)), 6),
+                                        "conv_value": round(float(_mcc_num(c.get("conv_value"), float)), 6),
+                                        "roas": round(float(_mcc_num(c.get("roas"), float)), 6),
+                                    }
+                                    for c in top_campaigns
+                                ]
+                            _mcc_watchlist_brief_cache_set(conn, cache_key, payload, ttl_sec)
+                        win_metrics = payload.get("metrics") if isinstance(payload, dict) else {}
+                        item["metrics"][str(int(win))] = {
+                            "cost": round(float(_mcc_num((win_metrics or {}).get("cost"), float)), 6),
+                            "conv_value": round(float(_mcc_num((win_metrics or {}).get("conv_value"), float)), 6),
+                            "conversions": round(float(_mcc_num((win_metrics or {}).get("conversions"), float)), 6),
+                            "roas": round(float(_mcc_num((win_metrics or {}).get("roas"), float)), 6),
+                        }
+                        if int(win) == 7 and isinstance(payload, dict) and isinstance(payload.get("top_campaigns_7"), list):
+                            item["top_campaigns_7"] = payload.get("top_campaigns_7") or []
+
+                    m7 = (item.get("metrics") or {}).get("7") or {"cost": 0, "conv_value": 0, "conversions": 0, "roas": 0}
+                    m30 = (item.get("metrics") or {}).get("30") or {"cost": 0, "conv_value": 0, "conversions": 0, "roas": 0}
+                    expected_cost_7 = (float(_mcc_num(m30.get("cost"), float)) / 30.0) * 7.0 if float(_mcc_num(m30.get("cost"), float)) > 0 else 0.0
+                    item["delta"] = {
+                        "roas_7_vs_30_pct": _mcc_pct_delta(m7.get("roas"), m30.get("roas")),
+                        "cost_7_vs_30_pct": _mcc_pct_delta(m7.get("cost"), expected_cost_7),
+                    }
+                    item["flags"] = _mcc_watchlist_brief_flags(m7, m30)
+                    ok_count += 1
+                except Exception:
+                    failed_count += 1
+                    item["flags"] = ["FETCH_ERROR"]
+                out_items.append(item)
+            conn.commit()
+
+        return jsonify({
+            "watchlist_id": int(watchlist_id),
+            "ws_slug": str(ws_slug),
+            "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "windows": windows,
+            "items": out_items,
+            "stats": {
+                "accounts_total": len(out_items),
+                "accounts_ok": int(ok_count),
+                "accounts_failed": int(failed_count),
+            },
+        })
+    except Exception as exc:
+        print("mcc_watchlist_brief_exception", json.dumps({
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+            "watchlist_id": int(watchlist_id),
+            "ws_slug": str(ws_slug),
+            "windows": windows,
+        }, ensure_ascii=True))
+        traceback.print_exc()
+        return jsonify({"error": "internal_error", "message": str(exc)}), 500
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/probe_access", methods=["GET"])
+@app.route("/api/mcc/<mcc_id>/probe_access", methods=["GET"])
+def api_mcc_probe_access(mcc_id=None):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    conn = None
+    try:
+        conn = get_db()
+        _mcc_prepare_conn(conn)
+        mcc = _mcc_connected_config(conn, uid, mcc_id)
+        if not mcc:
+            return jsonify({"error": "mcc_not_connected"}), 400
+        login_customer_id = _mcc_to_customer_id((mcc or {}).get("login_customer_id"))
+        use_cache = str(request.args.get("use_cache", "1")).strip().lower() in ("1", "true", "yes", "on")
+        probe = _mcc_finalize_probe_result(_mcc_probe_access_for_mcc(mcc, use_cache=use_cache, conn=conn), login_customer_id)
+        gateway = probe.get("gateway") if isinstance(probe, dict) else {}
+        if _mcc_rate_limited_gateway(gateway) or int(_mcc_num((probe or {}).get("upstream_status"), int)) == 429:
+            retry_after = int(max(1, min(300, _mcc_gateway_retry_after_seconds(gateway, default_seconds=int(_mcc_num((probe or {}).get("retry_after_s"), int) or 20)))))
+            resp = jsonify({
+                **(probe or {}),
+                "error": "rate_limited",
+                "code": "UPSTREAM_RATE_LIMIT",
+                "retry_after_s": retry_after,
+                "mcc": mcc,
+            })
+            resp.status_code = 429
+            resp.headers["Retry-After"] = str(retry_after)
+            return resp
+        return jsonify({**(probe or {}), "mcc": mcc})
+    except Exception as exc:
+        print("mcc_probe_exception", json.dumps({
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+            "mcc_id": str(mcc_id or ""),
+        }, ensure_ascii=True))
+        traceback.print_exc()
+        return jsonify({
+            "error": "internal_error",
+            "error_class": exc.__class__.__name__,
+            "message": str(exc),
+        }), 500
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/briefing", methods=["GET"])
+@app.route("/api/mcc/<mcc_id>/briefing", methods=["GET"])
+def api_mcc_briefing(mcc_id=None):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    windows_raw = str(request.args.get("windows") or "7,30,90")
+    customer_id_filter = _mcc_to_customer_id(request.args.get("customer_id") or "")
+    wanted = []
+    for token in windows_raw.split(","):
+        try:
+            value = int(str(token or "").strip())
+        except Exception:
+            continue
+        if value in (7, 30, 90):
+            wanted.append(value)
+    windows = sorted(set(wanted or [7, 30, 90]))
+    uid = get_current_user_id()
+    conn = None
+    try:
+        conn = get_db()
+        _mcc_prepare_conn(conn)
+        mcc = _mcc_connected_config(conn, uid, mcc_id)
+        if not mcc:
+            return jsonify({"error": "mcc_not_connected"}), 400
+        login_customer_id = _mcc_to_customer_id((mcc or {}).get("login_customer_id"))
+        probe = _mcc_finalize_probe_result(_mcc_probe_access_for_mcc(mcc, use_cache=True, conn=conn), login_customer_id)
+        if int(_mcc_num((probe or {}).get("upstream_status"), int)) == 429:
+            retry_after = int(max(1, min(300, _mcc_num((probe or {}).get("retry_after_s"), int) or 20)))
+            resp = jsonify({
+                "error": "rate_limited",
+                "code": "UPSTREAM_RATE_LIMIT",
+                "retry_after_s": retry_after,
+                "probe": probe,
+                "mcc": mcc,
+            })
+            resp.status_code = 429
+            resp.headers["Retry-After"] = str(retry_after)
+            return resp
+        if not _mcc_probe_has_access(probe, login_customer_id):
+            return jsonify({
+                "run_id": "",
+                "run_utc": "",
+                "mcc": mcc,
+                "windows": windows,
+                "rows": [],
+                "account_count": 0,
+                "failure_count": 0,
+                "failures": [],
+                "probe": probe,
+            })
+        result = _mcc_collect_briefing(conn, uid, mcc, windows, customer_id_filter=customer_id_filter)
+        gw_accounts = result.get("accounts_gateway") or {}
+        accounts_diag = result.get("accounts_diagnostic") or {}
+        if (not (result.get("accounts") or [])) and _mcc_rate_limited_gateway(gw_accounts):
+            retry_after = int(max(1, min(300, _mcc_gateway_retry_after_seconds(gw_accounts, default_seconds=20))))
+            resp = jsonify({
+                "error": "rate_limited",
+                "code": "UPSTREAM_RATE_LIMIT",
+                "retry_after_s": retry_after,
+                "gateway": gw_accounts,
+                "diagnostic": accounts_diag,
+                "probe": probe,
+                "mcc": mcc,
+            })
+            resp.status_code = 429
+            resp.headers["Retry-After"] = str(retry_after)
+            return resp
+        conn.commit()
+        return jsonify({
+            "run_id": result.get("run_id"),
+            "run_utc": result.get("run_utc"),
+            "mcc": mcc,
+            "windows": windows,
+            "rows": result.get("briefing") or [],
+            "account_count": len(result.get("accounts") or []),
+            "failure_count": len(result.get("failures") or []),
+            "failures": result.get("failures") or [],
+            "probe": probe,
+        })
+    except Exception as exc:
+        print("mcc_briefing_exception", json.dumps({
+            "error_class": exc.__class__.__name__,
+            "error": str(exc),
+            "mcc_id": str(mcc_id or ""),
+            "windows": windows,
+        }, ensure_ascii=True))
+        traceback.print_exc()
+        return jsonify({
+            "error": "internal_error",
+            "error_class": exc.__class__.__name__,
+            "message": str(exc),
+        }), 500
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/reports/<report_name>", methods=["GET"])
+@app.route("/api/mcc/<mcc_id>/reports/<report_name>", methods=["GET"])
+def api_mcc_reports(report_name, mcc_id=None):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    requested_limit = request.args.get("limit", _mcc_default_limit(report_name), type=int)
+    window = _mcc_report_window(report_name, request.args.get("window", 30))
+    customer_id_filter = _mcc_to_customer_id(request.args.get("customer_id") or "")
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        mcc = _mcc_connected_config(conn, uid, mcc_id)
+        if not mcc:
+            return jsonify({"error": "mcc_not_connected"}), 400
+        login_customer_id = _mcc_to_customer_id((mcc or {}).get("login_customer_id"))
+        probe = _mcc_finalize_probe_result(_mcc_probe_access_for_mcc(mcc, use_cache=True, conn=conn), login_customer_id)
+        if int(_mcc_num((probe or {}).get("upstream_status"), int)) == 429:
+            retry_after = int(max(1, min(300, _mcc_num((probe or {}).get("retry_after_s"), int) or 20)))
+            resp = jsonify({
+                "error": "rate_limited",
+                "code": "UPSTREAM_RATE_LIMIT",
+                "retry_after_s": retry_after,
+                "probe": probe,
+                "mcc": mcc,
+            })
+            resp.status_code = 429
+            resp.headers["Retry-After"] = str(retry_after)
+            return resp
+        if not _mcc_probe_has_access(probe, login_customer_id):
+            return jsonify({
+                "run_id": "",
+                "run_utc": "",
+                "mcc": mcc,
+                "report": report_name,
+                "window": window,
+                "rows": [],
+                "failure_count": 0,
+                "probe": probe,
+            })
+        run_utc = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        run_id = _mcc_start_run(conn, uid, mcc.get("slug"))
+        accounts, _gw, _diag = _mcc_fetch_accounts_for_mcc(mcc, conn=conn)
+        rows = []
+        failures = []
+        report_key = str(report_name or "").strip().lower()
+        for account in accounts:
+            cid = _mcc_to_customer_id(account.get("customer_id"))
+            if customer_id_filter and cid != customer_id_filter:
+                continue
+            t0 = time.time()
+            try:
+                _mcc_log_event(
+                    conn, run_id, run_utc, mcc.get("slug"), "REPORT_START", "running",
+                    message=f"{report_key}", customer_id=cid, account_name=account.get("account_name") or "",
+                    duration_ms=0,
+                )
+                base = {
+                    "run_id": run_id,
+                    "run_utc": run_utc,
+                    "mcc_slug": mcc.get("slug"),
+                    "login_customer_id": mcc.get("login_customer_id") or "",
+                    "customer_id": cid,
+                    "account_name": account.get("account_name") or "",
+                }
+                if report_key == "search_terms":
+                    rs, gws = _mcc_fetch_report_rows(mcc, account, "search_terms_search", window, requested_limit)
+                    rp, gwp = _mcc_fetch_report_rows(mcc, account, "search_terms_pmax", window, requested_limit)
+                    rows.extend(_mcc_report_to_rows("search_terms_search", rs, base))
+                    rows.extend(_mcc_report_to_rows("search_terms_pmax", rp, base))
+                    if (not rs and isinstance(gws, dict) and gws.get("error")) and (not rp and isinstance(gwp, dict) and gwp.get("error")):
+                        raise RuntimeError(f"search_terms|gateway_error|search={gws.get('error')}|pmax={gwp.get('error')}")
+                else:
+                    target_key = report_key
+                    if target_key == "auction_insights":
+                        target_key = "auction_insights_search_30d"
+                    if target_key == "audience_perf":
+                        target_key = "audience_perf_30d"
+                    rs, _gw = _mcc_fetch_report_rows(mcc, account, target_key, window, requested_limit)
+                    rows.extend(_mcc_report_to_rows(target_key, rs, base))
+                    best_effort = target_key in ("auction_insights_search_30d", "audience_perf_30d")
+                    if (not rs) and isinstance(_gw, dict) and _gw.get("error") and (not best_effort):
+                        raise RuntimeError(f"{target_key}|gateway_error|{_gw.get('error')}")
+                row_count_for_account = len([r for r in rows if str(r.get("customer_id") or "") == cid])
+                _mcc_log_event(
+                    conn, run_id, run_utc, mcc.get("slug"), "REPORT_OK", "ok",
+                    message=f"{report_key}|rows={row_count_for_account}", customer_id=cid, account_name=base["account_name"],
+                    duration_ms=int((time.time() - t0) * 1000.0),
+                )
+            except Exception as exc:
+                failures.append({"customer_id": cid, "error": str(exc)})
+                _mcc_log_event(
+                    conn, run_id, run_utc, mcc.get("slug"), "REPORT_FAIL", "error",
+                    message=f"{report_key}|{str(exc)}", customer_id=cid, account_name=account.get("account_name") or "",
+                    duration_ms=int((time.time() - t0) * 1000.0),
+                )
+        _mcc_finish_run(
+            conn, run_id,
+            status="done" if not failures else "partial",
+            account_count=len(accounts),
+            failure_count=len(failures),
+            summary_obj={"report": report_key, "row_count": len(rows)},
+            errors_obj=failures,
+        )
+        conn.commit()
+        return jsonify({
+            "run_id": run_id,
+            "run_utc": run_utc,
+            "mcc": mcc,
+            "report_name": report_key,
+            "window": window,
+            "rows": rows,
+            "row_count": len(rows),
+            "failure_count": len(failures),
+            "failures": failures,
+        })
+    finally:
+        conn.close()
+
+
+def _mcc_tab_csv_write(out_dir, tab_name, rows):
+    safe_name = re.sub(r"[^A-Za-z0-9_]+", "_", str(tab_name or "TAB")).strip("_") or "TAB"
+    path = out_dir / f"{safe_name}.csv"
+    data_rows = rows if isinstance(rows, list) else []
+    headers = []
+    for row in data_rows:
+        if not isinstance(row, dict):
+            continue
+        for key in row.keys():
+            if key not in headers:
+                headers.append(key)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=headers or ["empty"])
+        writer.writeheader()
+        if not headers:
+            writer.writerow({"empty": ""})
+        else:
+            for row in data_rows:
+                writer.writerow({k: row.get(k) for k in headers})
+    return path
+
+
+@app.route("/api/mcc/export/sheets", methods=["POST"])
+@app.route("/api/mcc/<mcc_id>/export/sheets", methods=["POST"])
+def api_mcc_export_sheets(mcc_id=None):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    payload = request.get_json(force=True, silent=True) or {}
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        mcc = _mcc_connected_config(conn, uid, mcc_id)
+        if not mcc:
+            return jsonify({"error": "mcc_not_connected"}), 400
+        collected = _mcc_collect_briefing(conn, uid, mcc, [7, 30, 90])
+        run_id = str(collected.get("run_id") or "")
+        run_utc = str(collected.get("run_utc") or "")
+        accounts = collected.get("accounts") or []
+        briefing_rows = collected.get("briefing") or []
+        tabs = {
+            "RUN_LOG": [],
+            "BRIEFING": briefing_rows,
+            "SUMMARY_7D": [],
+            "SUMMARY_30D": [],
+            "SUMMARY_90D": [],
+            "CAMPAIGNS_30D": [],
+            "CAMPAIGNS_90D": [],
+            "ASSET_GROUPS_30D": [],
+            "ASSET_GROUPS_90D": [],
+            "SEARCH_TERMS_30D": [],
+            "KEYWORDS_30D": [],
+            "NEGATIVES_ACCOUNT": [],
+            "NEGATIVES_SHARED": [],
+            "NEGATIVES_CAMPAIGN": [],
+            "NEGATIVES_ADGROUP": [],
+            "CONVERSION_ACTIONS": [],
+            "USER_LISTS": [],
+            "AUDIENCE_PERF_30D": [],
+            "AUCTION_INSIGHTS_30D": [],
+        }
+        ev_rows = conn.execute(
+            """
+            SELECT run_id, run_utc, mcc_slug, stage, customer_id, account_name, status, message, duration_ms
+            FROM mcc_run_events
+            WHERE run_id = ?
+            ORDER BY id ASC
+            """,
+            (run_id,),
+        ).fetchall()
+        for r in ev_rows:
+            tabs["RUN_LOG"].append({
+                "run_id": r[0], "run_utc": r[1], "mcc_slug": r[2], "stage": r[3], "customer_id": r[4],
+                "account_name": r[5], "status": r[6], "message": r[7], "duration_ms": r[8],
+            })
+        for b in briefing_rows:
+            tabs["SUMMARY_7D"].append({
+                "run_id": run_id, "run_utc": run_utc, "mcc_slug": mcc.get("slug"), "customer_id": b.get("customer_id"),
+                "account_name": b.get("account_name"), "currency": b.get("currency"), "tz": b.get("tz"),
+                "cost": b.get("cost_7d"), "conversions": b.get("conv_7d"), "conv_value": b.get("value_7d"), "roas": b.get("roas_7d"),
+            })
+            tabs["SUMMARY_30D"].append({
+                "run_id": run_id, "run_utc": run_utc, "mcc_slug": mcc.get("slug"), "customer_id": b.get("customer_id"),
+                "account_name": b.get("account_name"), "currency": b.get("currency"), "tz": b.get("tz"),
+                "cost": b.get("cost_30d"), "conversions": b.get("conv_30d"), "conv_value": b.get("value_30d"), "roas": b.get("roas_30d"),
+            })
+            tabs["SUMMARY_90D"].append({
+                "run_id": run_id, "run_utc": run_utc, "mcc_slug": mcc.get("slug"), "customer_id": b.get("customer_id"),
+                "account_name": b.get("account_name"), "currency": b.get("currency"), "tz": b.get("tz"),
+                "cost": b.get("cost_90d"), "conversions": b.get("conv_90d"), "conv_value": b.get("value_90d"), "roas": b.get("roas_90d"),
+            })
+        report_tabs = [
+            ("campaigns", 30, "CAMPAIGNS_30D"),
+            ("campaigns", 90, "CAMPAIGNS_90D"),
+            ("asset_groups", 30, "ASSET_GROUPS_30D"),
+            ("asset_groups", 90, "ASSET_GROUPS_90D"),
+            ("search_terms", 30, "SEARCH_TERMS_30D"),
+            ("keywords", 30, "KEYWORDS_30D"),
+            ("negatives_account", 30, "NEGATIVES_ACCOUNT"),
+            ("negatives_shared", 30, "NEGATIVES_SHARED"),
+            ("negatives_campaign", 30, "NEGATIVES_CAMPAIGN"),
+            ("negatives_adgroup", 30, "NEGATIVES_ADGROUP"),
+            ("conversion_actions", 30, "CONVERSION_ACTIONS"),
+            ("user_lists", 30, "USER_LISTS"),
+            ("audience_perf_30d", 30, "AUDIENCE_PERF_30D"),
+            ("auction_insights_search_30d", 30, "AUCTION_INSIGHTS_30D"),
+        ]
+        for account in accounts:
+            base = {
+                "run_id": run_id,
+                "run_utc": run_utc,
+                "mcc_slug": mcc.get("slug"),
+                "login_customer_id": mcc.get("login_customer_id"),
+                "customer_id": account.get("customer_id"),
+                "account_name": account.get("account_name"),
+            }
+            for rep_name, win, tab_name in report_tabs:
+                raw_rows, _gw = _mcc_fetch_report_rows(mcc, account, rep_name, win, _mcc_default_limit(rep_name))
+                tabs[tab_name].extend(_mcc_report_to_rows(rep_name, raw_rows, base))
+        template_id = str(payload.get("template_sheet_id") or payload.get("sheet_id") or "").strip()
+        sheets_ok = False
+        sheets_link = ""
+        if template_id:
+            body = {
+                "template_sheet_id": template_id,
+                "run_id": run_id,
+                "tabs": tabs,
+                "mcc_slug": mcc.get("slug"),
+            }
+            for path in ("/api/connectors/google-sheets/write", "/api/connectors/sheets/write", "/api/connectors/google-drive/sheets/write"):
+                status, response_payload, _text = _coolbits_request("POST", path, body=body, timeout=45)
+                if 200 <= int(status) < 300 and isinstance(response_payload, dict):
+                    sheets_ok = True
+                    sheets_link = str(response_payload.get("url") or response_payload.get("sheet_url") or "")
+                    break
+        if sheets_ok:
+            conn.commit()
+            return jsonify({
+                "run_id": run_id,
+                "run_utc": run_utc,
+                "mcc_slug": mcc.get("slug"),
+                "mode": "sheets",
+                "sheet_url": sheets_link,
+                "tabs": list(tabs.keys()),
+            })
+        out_dir = Path(MCC_EXPORT_DIR).resolve() / run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        json_path = out_dir / "export.json"
+        json_path.write_text(json.dumps({"run_id": run_id, "run_utc": run_utc, "mcc": mcc, "tabs": tabs}, ensure_ascii=True), encoding="utf-8")
+        csv_files = []
+        for tab_name, rows in tabs.items():
+            path = _mcc_tab_csv_write(out_dir, tab_name, rows)
+            csv_files.append(str(path.name))
+        download_json = f"/api/mcc/export/{run_id}/export.json"
+        download_files = [f"/api/mcc/export/{run_id}/{name}" for name in csv_files]
+        conn.commit()
+        return jsonify({
+            "run_id": run_id,
+            "run_utc": run_utc,
+            "mcc_slug": mcc.get("slug"),
+            "mode": "artifact",
+            "artifact_json": download_json,
+            "artifact_dir": f"/api/mcc/export/{run_id}/",
+            "csv_files": csv_files,
+            "download_files": download_files,
+            "tabs": list(tabs.keys()),
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/runs", methods=["GET"])
+def api_mcc_runs():
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    limit = max(1, min(100, int(request.args.get("limit", 20) or 20)))
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        rows = conn.execute(
+            """
+            SELECT run_id, mcc_slug, status, account_count, failure_count, started_at, finished_at, duration_ms
+            FROM mcc_runs
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(uid), int(limit)),
+        ).fetchall()
+        out = []
+        for r in rows:
+            run_id = str(r[0] or "")
+            ev = conn.execute(
+                """
+                SELECT stage, status, message
+                FROM mcc_run_events
+                WHERE run_id = ?
+                  AND stage IN ('REPORT_OK', 'REPORT_FAIL')
+                ORDER BY id DESC
+                LIMIT 200
+                """,
+                (run_id,),
+            ).fetchall()
+            by_report = {}
+            for e in ev:
+                stage = str(e[0] or "")
+                status = str(e[1] or "")
+                msg = str(e[2] or "")
+                report = msg.split("|", 1)[0] if "|" in msg else msg
+                report = report.strip() or "report"
+                entry = by_report.get(report, {"report": report, "ok": 0, "fail": 0, "rows": 0})
+                if stage == "REPORT_FAIL" or status == "error":
+                    entry["fail"] += 1
+                else:
+                    entry["ok"] += 1
+                    m = re.search(r"rows=(\d+)", msg)
+                    if m:
+                        entry["rows"] = max(entry["rows"], int(m.group(1)))
+                by_report[report] = entry
+            out.append({
+                "run_id": run_id,
+                "mcc_slug": r[1],
+                "status": r[2],
+                "account_count": int(r[3] or 0),
+                "failure_count": int(r[4] or 0),
+                "started_at": r[5],
+                "finished_at": r[6],
+                "duration_ms": int(r[7] or 0),
+                "report_badges": sorted(by_report.values(), key=lambda x: x.get("report", "")),
+            })
+        return jsonify({"runs": out})
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/runs/<run_id>/events", methods=["GET"])
+def api_mcc_run_events(run_id):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    limit = max(1, min(200, int(request.args.get("limit", 20) or 20)))
+    stage = str(request.args.get("stage") or "").strip().upper()
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        own = conn.execute(
+            "SELECT 1 FROM mcc_runs WHERE run_id = ? AND user_id = ? LIMIT 1",
+            (str(run_id), int(uid)),
+        ).fetchone()
+        if not own:
+            return jsonify({"error": "not_found"}), 404
+        sql = """
+            SELECT run_id, run_utc, mcc_slug, stage, customer_id, account_name, status, message, duration_ms, created_at
+            FROM mcc_run_events
+            WHERE run_id = ?
+        """
+        params = [str(run_id)]
+        if stage:
+            sql += " AND UPPER(stage) = ?"
+            params.append(stage)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(int(limit))
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "run_id": r[0],
+                "run_utc": r[1],
+                "mcc_slug": r[2],
+                "stage": r[3],
+                "customer_id": r[4],
+                "account_name": r[5],
+                "status": r[6],
+                "message": r[7],
+                "duration_ms": int(r[8] or 0),
+                "created_at": r[9],
+            })
+        return jsonify({"events": out})
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/export/<run_id>/<path:filename>", methods=["GET"])
+def api_mcc_export_download(run_id, filename):
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    safe_run_id = re.sub(r"[^A-Za-z0-9_-]", "", str(run_id or ""))
+    safe_name = os.path.basename(str(filename or ""))
+    if not safe_run_id or not safe_name:
+        return jsonify({"error": "invalid_path"}), 400
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _ensure_mcc_tables(conn)
+        row = conn.execute(
+            "SELECT 1 FROM mcc_runs WHERE run_id = ? AND user_id = ? LIMIT 1",
+            (safe_run_id, int(uid)),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "not_found"}), 404
+    finally:
+        conn.close()
+    base_dir = Path(MCC_EXPORT_DIR).resolve() / safe_run_id
+    target = (base_dir / safe_name).resolve()
+    if not str(target).startswith(str(base_dir)):
+        return jsonify({"error": "invalid_path"}), 400
+    if not target.exists() or not target.is_file():
+        return jsonify({"error": "not_found"}), 404
+    return send_file(str(target), as_attachment=True, download_name=safe_name)
+
+
+# ── MCC PPC Pipeline Endpoints ────────────────────────────────────
+# Client management, refresh streaming, dashboard, token accounting
+# for CoolBits SRL agency with Basic Access Google Ads API
+
+try:
+    from mcc_ppc_models import ensure_mcc_ppc_tables, seed_coolbits_srl_clients, init_todays_budget
+    from mcc_ppc_clients import (
+        handle_list_clients, handle_get_client, handle_add_client,
+        handle_update_client, handle_delete_client, handle_client_health,
+        handle_cost_estimate,
+    )
+    from mcc_ppc_dashboard import handle_dashboard, handle_token_usage, handle_cycle_detail
+    from mcc_ppc_stream import MCCRefreshEngine, get_or_create_engine, stop_engine
+    _MCC_PPC_AVAILABLE = True
+except ImportError:
+    _MCC_PPC_AVAILABLE = False
+
+
+def _mcc_ppc_ensure_tables(conn):
+    """Ensure MCC PPC tables exist and seed CoolBits SRL clients."""
+    if not _MCC_PPC_AVAILABLE:
+        return
+    try:
+        ensure_mcc_ppc_tables(conn)
+        uid = get_current_user_id()
+        seed_coolbits_srl_clients(conn, uid or 1)
+    except Exception:
+        pass
+
+
+@app.route("/api/mcc/<mcc_slug>/clients", methods=["GET"])
+def api_mcc_ppc_list_clients(mcc_slug):
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    status_filter = request.args.get("status")
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        result = handle_list_clients(conn, uid, mcc_slug, status_filter)
+        return jsonify(result)
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/clients/<customer_id>", methods=["GET"])
+def api_mcc_ppc_get_client(mcc_slug, customer_id):
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        result = handle_get_client(conn, uid, mcc_slug, customer_id)
+        code = 200 if result.get("ok") else 404
+        return jsonify(result), code
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/clients", methods=["POST"])
+def api_mcc_ppc_add_client(mcc_slug):
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    data = request.get_json(force=True, silent=True) or {}
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        result = handle_add_client(conn, uid, mcc_slug, data)
+        code = 201 if result.get("ok") else 400
+        return jsonify(result), code
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/clients/<customer_id>", methods=["PATCH"])
+def api_mcc_ppc_update_client(mcc_slug, customer_id):
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    data = request.get_json(force=True, silent=True) or {}
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        result = handle_update_client(conn, uid, mcc_slug, customer_id, data)
+        code = 200 if result.get("ok") else 404
+        return jsonify(result), code
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/clients/<customer_id>", methods=["DELETE"])
+def api_mcc_ppc_delete_client(mcc_slug, customer_id):
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    uid = get_current_user_id()
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        result = handle_delete_client(conn, uid, mcc_slug, customer_id)
+        code = 200 if result.get("ok") else 404
+        return jsonify(result), code
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/clients/health", methods=["GET"])
+def api_mcc_ppc_health(mcc_slug):
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        result = handle_client_health(conn, mcc_slug)
+        return jsonify(result)
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/clients/cost-estimate", methods=["GET"])
+def api_mcc_ppc_cost_estimate(mcc_slug):
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    refresh_s = request.args.get("refresh_interval_s", type=int)
+    hours = request.args.get("active_hours", 8, type=int)
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        result = handle_cost_estimate(conn, mcc_slug, refresh_s, hours)
+        return jsonify(result)
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/dashboard", methods=["GET"])
+def api_mcc_unified_dashboard():
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+
+    requested_mcc = (
+        request.args.get("mcc")
+        or request.args.get("mcc_slug")
+        or request.args.get("mcc_id")
+        or request.args.get("slug")
+    )
+    hours = request.args.get("hours", 24, type=int)
+    active_hours = request.args.get("active_hours", 8, type=int)
+    uid = get_current_user_id()
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        connected = _mcc_connected_config(conn, uid, requested_mcc)
+        if not connected:
+            return jsonify({"ok": False, "error": "mcc_not_connected"}), 404
+
+        mcc_slug = str((connected or {}).get("slug") or "").strip().lower()
+        if not mcc_slug:
+            return jsonify({"ok": False, "error": "mcc_slug_missing"}), 400
+
+        clients = handle_list_clients(conn, uid, mcc_slug)
+        health = handle_client_health(conn, mcc_slug)
+        dashboard = handle_dashboard(conn, mcc_slug)
+        tokens = handle_token_usage(conn, mcc_slug, hours=hours)
+        cost_estimate = handle_cost_estimate(conn, mcc_slug, active_hours=active_hours)
+        registry = _mcc_registry_list(conn, uid)
+        watchlist_ws_slug = _mcc_watchlist_ws_slug()
+        watchlist_id = _mcc_watchlist_default(conn, watchlist_ws_slug)
+        watchlist = _mcc_watchlist_snapshot(conn, watchlist_ws_slug, watchlist_id) if watchlist_id else None
+
+        return jsonify({
+            "ok": True,
+            "protocol": {
+                "name": "cblm.mcc.v1",
+                "role": "contract_first_dashboard_surface",
+            },
+            "host_hint": "mcc.camarad.ai/dashboard",
+            "mcc": connected,
+            "registry": {
+                "count": len(registry or []),
+                "items": registry or [],
+            },
+            "dashboard": dashboard,
+            "clients": clients,
+            "health": health,
+            "tokens": tokens,
+            "cost_estimate": cost_estimate,
+            "watchlist": watchlist,
+            "capabilities": {
+                "google_ads_api": {
+                    "access_level": "Basic Access",
+                    "can_read_reports": True,
+                    "can_list_child_accounts": True,
+                    "can_run_gaql": True,
+                    "can_mutate": False,
+                    "mutate_reason": "product policy is read-only; current intended use is reporting with audit-first flows",
+                    "login_customer_id": str((connected or {}).get("login_customer_id") or ""),
+                },
+                "ga4": {
+                    "available": True,
+                    "mode": "overlay_context",
+                },
+                "merchant_center": {
+                    "available": False,
+                    "mode": "next_connector",
+                },
+            },
+            "recommended_templates": _mcc_recommended_templates(),
+            "endpoints": {
+                "page": "/dashboard",
+                "dashboard": "/api/mcc/dashboard",
+                "stream": f"/api/mcc/{mcc_slug}/stream",
+                "refresh": f"/api/mcc/{mcc_slug}/refresh",
+                "clients": f"/api/mcc/{mcc_slug}/clients",
+                "tokens": f"/api/mcc/{mcc_slug}/tokens",
+            },
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/dashboard", methods=["GET"])
+def api_mcc_ppc_dashboard(mcc_slug):
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        result = handle_dashboard(conn, mcc_slug)
+        return jsonify(result)
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/tokens", methods=["GET"])
+def api_mcc_ppc_tokens(mcc_slug):
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    hours = request.args.get("hours", 24, type=int)
+    customer_id = request.args.get("customer_id")
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        result = handle_token_usage(conn, mcc_slug, hours, customer_id)
+        return jsonify(result)
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/cycles", methods=["GET"])
+def api_mcc_ppc_cycles(mcc_slug):
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    from mcc_ppc_models import get_recent_cycles as _get_recent_cycles
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        limit = request.args.get("limit", 20, type=int)
+        cycles = _get_recent_cycles(conn, mcc_slug, min(100, max(1, limit)))
+        return jsonify({"ok": True, "cycles": cycles, "count": len(cycles)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/cycles/<cycle_id>", methods=["GET"])
+def api_mcc_ppc_cycle_detail(mcc_slug, cycle_id):
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        result = handle_cycle_detail(conn, mcc_slug, cycle_id)
+        code = 200 if result.get("ok") else 404
+        return jsonify(result), code
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/stream", methods=["GET"])
+def api_mcc_ppc_stream(mcc_slug):
+    """SSE endpoint — streams MCC refresh cycle events in real time."""
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+
+    mode = request.args.get("mode", "single")  # single | continuous
+    interval_s = request.args.get("interval", type=int)
+    db_path = str(Config.DATABASE) if hasattr(Config, 'DATABASE') else "camarad.db"
+
+    engine = get_or_create_engine(db_path, mcc_slug)
+
+    # Ensure tables exist before streaming
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+    finally:
+        conn.close()
+
+    if mode == "continuous":
+        gen = engine.stream_continuous(interval_s)
+    else:
+        gen = engine.stream_cycle(trigger_type="api_stream")
+
+    return Response(
+        stream_with_context(gen),
+        content_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.route("/api/mcc/<mcc_slug>/stream/stop", methods=["POST"])
+def api_mcc_ppc_stream_stop(mcc_slug):
+    """Stop a continuous SSE refresh stream."""
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    stopped = stop_engine(mcc_slug)
+    return jsonify({"ok": True, "stopped": stopped, "mcc_slug": mcc_slug})
+
+
+@app.route("/api/mcc/<mcc_slug>/refresh", methods=["POST"])
+def api_mcc_ppc_refresh_now(mcc_slug):
+    """Trigger an immediate refresh cycle (non-streaming, returns JSON)."""
+    if not _MCC_PPC_AVAILABLE:
+        return jsonify({"error": "mcc_ppc_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    db_path = str(Config.DATABASE) if hasattr(Config, 'DATABASE') else "camarad.db"
+    engine = MCCRefreshEngine(db_path, mcc_slug)
+
+    # Ensure tables
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+    finally:
+        conn.close()
+
+    result = engine.run_single_cycle(trigger_type="manual_api")
+    return jsonify(result)
+
+
+# ── MCC PPC Scenarios & Alerts ────────────────────────────────────
+try:
+    from mcc_ppc_scenarios import (
+        SCENARIOS as _PPC_SCENARIOS,
+        run_all_scenarios as _run_all_scenarios,
+        ensure_scenario_tables as _ensure_scenario_tables,
+        persist_scenario_results as _persist_scenario_results,
+        get_active_alerts as _get_active_alerts,
+        acknowledge_alert as _acknowledge_alert,
+    )
+    from mcc_ppc_gateway import check_gateway_health as _check_gw_health
+    _MCC_SCENARIOS_AVAILABLE = True
+except ImportError:
+    _MCC_SCENARIOS_AVAILABLE = False
+
+
+def _mcc_ppc_ensure_scenario_tables(conn):
+    if _MCC_SCENARIOS_AVAILABLE:
+        try:
+            _ensure_scenario_tables(conn)
+        except Exception:
+            pass
+
+
+@app.route("/api/mcc/<mcc_slug>/alerts", methods=["GET"])
+def api_mcc_ppc_alerts(mcc_slug):
+    """GET /api/mcc/<slug>/alerts — Active alerts feed for MCC dashboard."""
+    if not _MCC_SCENARIOS_AVAILABLE:
+        return jsonify({"error": "scenarios_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    severity = request.args.get("severity")
+    limit = request.args.get("limit", 50, type=int)
+    show_ack = request.args.get("acknowledged", "false").lower() in ("1", "true")
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        _mcc_ppc_ensure_scenario_tables(conn)
+        alerts = _get_active_alerts(conn, mcc_slug, limit, severity, show_ack)
+        return jsonify({"ok": True, "alerts": alerts, "count": len(alerts)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/alerts/<alert_id>/acknowledge", methods=["POST"])
+def api_mcc_ppc_ack_alert(mcc_slug, alert_id):
+    """POST /api/mcc/<slug>/alerts/<id>/acknowledge — Dismiss an alert."""
+    if not _MCC_SCENARIOS_AVAILABLE:
+        return jsonify({"error": "scenarios_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_scenario_tables(conn)
+        _acknowledge_alert(conn, alert_id)
+        return jsonify({"ok": True, "alert_id": alert_id, "acknowledged": True})
+    finally:
+        conn.close()
+
+
+@app.route("/api/mcc/<mcc_slug>/scenarios", methods=["GET"])
+def api_mcc_ppc_scenarios(mcc_slug):
+    """GET /api/mcc/<slug>/scenarios — List available analysis scenarios."""
+    if not _MCC_SCENARIOS_AVAILABLE:
+        return jsonify({"error": "scenarios_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    return jsonify({"ok": True, "scenarios": _PPC_SCENARIOS})
+
+
+@app.route("/api/mcc/<mcc_slug>/gateway/health", methods=["GET"])
+def api_mcc_ppc_gateway_health(mcc_slug):
+    """GET /api/mcc/<slug>/gateway/health — Check gateway connectivity."""
+    if not _MCC_SCENARIOS_AVAILABLE:
+        return jsonify({"error": "gateway_check_not_available"}), 503
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    health = _check_gw_health()
+    return jsonify({"ok": health.get("ok", False), "mcc_slug": mcc_slug, **health})
+
+
+@app.route("/api/mcc/<mcc_slug>/ops-budget", methods=["GET"])
+def api_mcc_ppc_ops_budget(mcc_slug):
+    """GET /api/mcc/<slug>/ops-budget — Separated Google Ads API ops vs LLM token usage."""
+    guarded = _mcc_api_guard()
+    if guarded is not None:
+        return guarded
+    conn = get_db()
+    try:
+        _mcc_prepare_conn(conn)
+        _mcc_ppc_ensure_tables(conn)
+        from mcc_ppc_models import get_daily_ops_summary, get_daily_llm_summary, is_quota_safe
+        ops = get_daily_ops_summary(conn, mcc_slug)
+        llm = get_daily_llm_summary(conn, mcc_slug)
+        safe, _ = is_quota_safe(conn, mcc_slug)
+        return jsonify({
+            "ok": True,
+            "mcc_slug": mcc_slug,
+            "api_ops": ops,
+            "llm_usage": llm,
+            "quota_safe": safe,
+            "note": "api_ops tracks Google Ads API operations (15k/day Basic Access). llm_usage tracks AI agent token consumption. These are separate budgets.",
+        })
+    except Exception as exc:
+        return jsonify({"ok": True, "mcc_slug": mcc_slug,
+                        "api_ops": {"ops_used": 0, "ops_limit": 15000, "note": "ledger tables initializing"},
+                        "llm_usage": {"total_tokens": 0, "calls": 0},
+                        "quota_safe": True})
+    finally:
+        conn.close()
+
+
+# ── MCC PPC Dashboard Page Route ──────────────────────────────────
+@app.route("/mcc/ppc/dashboard")
+@app.route("/mcc/ppc/dashboard/<mcc_slug>")
+def mcc_ppc_dashboard_page(mcc_slug="coolbits"):
+    """
+    Serve the MCC PPC dashboard page.
+    This will be the primary UI at mcc.camarad.ai/dashboard
+    """
+    return render_template("mcc_dashboard.html", mcc_slug=mcc_slug)
+
+
 @app.route("/api/rag/api-docs")
 def rag_api_docs():
     query = request.args.get('q', '').strip()
@@ -6518,6 +17464,42 @@ GOOGLE_ADS_MOCK_KEYWORDS = {
 }
 
 
+def _maybe_refund_orchestrator_execute_spend(user_id, *, reason, error_code, client_id=None):
+    path = str(request.path or "")
+    if request.method != "POST" or path != "/api/orchestrator/execute":
+        return None
+
+    payload = request.get_json(force=False, silent=True) or {}
+    request_id = _shadow_request_id(payload.get("request_id") or request.headers.get("X-Request-ID"))
+    if not request_id:
+        return None
+
+    conn = get_db()
+    try:
+        _ensure_client_tables(conn)
+        _ensure_usage_ledger_table(conn)
+        refund = _refund_ct_spend(
+            conn,
+            request_id=request_id,
+            user_id=int(user_id or 0),
+            reason=reason,
+            error_code=error_code,
+            client_id=client_id,
+            workspace_id=_current_workspace_slug(),
+        )
+        conn.commit()
+        return refund
+    except Exception as refund_err:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"orchestrator_execute_refund_error: {refund_err}")
+        return None
+    finally:
+        conn.close()
+
+
 @app.before_request
 def enforce_client_scope_ownership():
     """Global hardening: if client scope is provided on sensitive APIs, it must be owned."""
@@ -6539,7 +17521,18 @@ def enforce_client_scope_ownership():
     if parse_ok is False:
         return jsonify({"error": "Invalid X-Client-ID"}), 400
     if requires_client_scope and client_id is None:
-        return jsonify({"error": "Client scope required"}), 400
+        response = {"error": "Client scope required", "code": "CLIENT_SCOPE_REQUIRED"}
+        refund = _maybe_refund_orchestrator_execute_spend(
+            _scope_effective_user_id(),
+            reason="Refunded because flow execution was attempted without a client scope.",
+            error_code="client_scope_required",
+            client_id=None,
+        )
+        if refund and refund.get("refunded"):
+            response["ct_refunded"] = True
+            response["refunded_amount"] = int(refund.get("amount") or 0)
+            response["refund_request_id"] = str(refund.get("refund_request_id") or "")
+        return jsonify(response), 400
     if client_id is None:
         return None
 
@@ -6553,7 +17546,18 @@ def enforce_client_scope_ownership():
     try:
         _ensure_client_tables(conn)
         if not _client_owned(conn, int(user_id), int(client_id)):
-            return jsonify({"error": "Client not found or not owned"}), 404
+            response = {"error": "Client not found or not owned"}
+            refund = _maybe_refund_orchestrator_execute_spend(
+                user_id,
+                reason="Refunded because flow execution targeted a client that is not available in this scope.",
+                error_code="client_not_owned",
+                client_id=client_id,
+            )
+            if refund and refund.get("refunded"):
+                response["ct_refunded"] = True
+                response["refunded_amount"] = int(refund.get("amount") or 0)
+                response["refund_request_id"] = str(refund.get("refund_request_id") or "")
+            return jsonify(response), 404
     finally:
         conn.close()
     return None
@@ -6567,6 +17571,9 @@ def enforce_no_store_for_html(response):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    path = str(request.path or "")
+    if path.startswith("/mcc") or path.startswith("/api/mcc"):
+        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
     return response
 
 
@@ -6598,15 +17605,39 @@ def _google_ads_gateway_fetch(path_candidates, params=None, timeout=25):
 
     last_error = None
     for path in path_candidates:
-        try:
-            status, payload, text = _coolbits_request("GET", path, params=params, timeout=timeout)
-            if 200 <= int(status) < 300:
-                return payload, {"enabled": True, "path": path, "status": int(status)}
-            last_error = f"{path} -> HTTP {status}"
-            if payload is None and text:
-                last_error += f" ({text[:180]})"
-        except Exception as e:
-            last_error = f"{path} -> {e}"
+        full_url = f"{COOLBITS_URL}{path if str(path).startswith('/') else '/' + str(path)}"
+        for attempt in range(3):
+            try:
+                status, payload, text = _coolbits_request("GET", path, params=params, timeout=timeout)
+                code = int(status)
+                if 200 <= code < 300:
+                    return payload, {"enabled": True, "path": path, "status": code}
+                last_error = f"GET {full_url} -> HTTP {code}"
+                detail = ""
+                if isinstance(payload, dict):
+                    detail = str(payload.get("message") or payload.get("error") or payload.get("details") or "").strip()
+                if detail:
+                    last_error += f" ({detail[:180]})"
+                elif payload is None and text:
+                    last_error += f" ({text[:180]})"
+                if code == 429:
+                    retry_after = 20
+                    if isinstance(payload, dict):
+                        try:
+                            retry_after = int(payload.get("retry_after_s") or payload.get("retry_after") or retry_after)
+                        except Exception:
+                            retry_after = 20
+                    return None, {
+                        "enabled": True,
+                        "path": path,
+                        "status": 429,
+                        "retry_after_s": int(max(1, min(300, retry_after))),
+                        "error": last_error or "rate_limited_upstream_429",
+                    }
+                break
+            except Exception as e:
+                last_error = f"GET {full_url} -> {e}"
+                break
 
     return None, {"enabled": True, "error": last_error or "gateway_unavailable"}
 
@@ -6622,6 +17653,729 @@ def _google_ads_list_from_payload(payload, preferred_keys):
             return rows
     return []
 
+
+def _mcc_extract_rows(payload):
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in ("rows", "results", "items"):
+        rows = payload.get(key)
+        if isinstance(rows, list):
+            return rows
+    data = payload.get("data")
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("rows", "results", "items"):
+            rows = data.get(key)
+            if isinstance(rows, list):
+                return rows
+        for val in data.values():
+            if isinstance(val, dict):
+                rows = val.get("rows")
+                if isinstance(rows, list):
+                    return rows
+    return []
+
+
+def _mcc_row_get(row, path, default=None):
+    cur = row
+    for token in str(path or "").split("."):
+        if not token:
+            continue
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(token)
+    return cur if cur is not None else default
+
+
+def _mcc_num(value, tp=float):
+    try:
+        if value is None:
+            return tp(0)
+        return tp(value)
+    except Exception:
+        return tp(0)
+
+
+def _mcc_cost_from_micros(value):
+    return round(float(_mcc_num(value, float)) / 1_000_000.0, 6)
+
+
+def _mcc_gaql_fetch(login_customer_id, customer_id, gaql):
+    if not str(gaql or "").strip():
+        return [], {"enabled": False, "error": "missing_gaql"}
+    login_id = _mcc_to_customer_id(login_customer_id)
+    target_customer_id = _mcc_to_customer_id(customer_id) or login_id
+    params = {
+        "query": gaql,
+        "gaql": gaql,
+        "login_customer_id": str(login_id or ""),
+        "manager_customer_id": str(login_id or ""),
+        "managerId": str(login_id or ""),
+        "customer_id": str(target_customer_id or ""),
+        "cid": str(target_customer_id or ""),
+        "account_id": str(target_customer_id or ""),
+    }
+    payload, gw = _google_ads_gateway_fetch(
+        [
+            "/api/connectors/googleads/report",
+        ],
+        params=params,
+        timeout=45,
+    )
+    rows = _mcc_extract_rows(payload)
+    return rows, gw
+
+
+def _mcc_start_run(conn, user_id, mcc_slug):
+    run_id = f"mcc_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+    _mcc_prepare_conn(conn)
+    _mcc_db_write(conn,
+        """
+        INSERT INTO mcc_runs (run_id, user_id, mcc_slug, status, started_at)
+        VALUES (?, ?, ?, 'running', datetime('now'))
+        """,
+        (run_id, int(user_id), str(mcc_slug or "")),
+    )
+    return run_id
+
+
+def _mcc_log_event(conn, run_id, run_utc, mcc_slug, stage, status, message="", customer_id="", account_name="", duration_ms=0):
+    _mcc_prepare_conn(conn)
+    _mcc_db_write(conn,
+        """
+        INSERT INTO mcc_run_events (run_id, run_utc, mcc_slug, stage, customer_id, account_name, status, message, duration_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(run_id or ""),
+            str(run_utc or ""),
+            str(mcc_slug or ""),
+            str(stage or ""),
+            str(customer_id or ""),
+            str(account_name or ""),
+            str(status or "ok"),
+            str(message or "")[:1000],
+            int(duration_ms or 0),
+        ),
+    )
+
+
+def _mcc_finish_run(conn, run_id, status, account_count, failure_count, summary_obj=None, errors_obj=None):
+    _mcc_prepare_conn(conn)
+    row = None
+    try:
+        row = conn.execute("SELECT started_at FROM mcc_runs WHERE run_id = ? LIMIT 1", (str(run_id),)).fetchone()
+    except Exception:
+        row = None
+    started_at = str(row[0] or "") if row else ""
+    duration_ms = 0
+    if started_at:
+        try:
+            started = datetime.strptime(started_at, "%Y-%m-%d %H:%M:%S")
+            duration_ms = int(max(0.0, (datetime.utcnow() - started).total_seconds() * 1000.0))
+        except Exception:
+            duration_ms = 0
+    _mcc_db_write(conn,
+        """
+        UPDATE mcc_runs
+        SET status = ?, account_count = ?, failure_count = ?, finished_at = datetime('now'), duration_ms = ?,
+            summary_json = ?, errors_json = ?
+        WHERE run_id = ?
+        """,
+        (
+            str(status or "done"),
+            int(account_count or 0),
+            int(failure_count or 0),
+            int(duration_ms),
+            json.dumps(summary_obj or {}, ensure_ascii=True),
+            json.dumps(errors_obj or [], ensure_ascii=True),
+            str(run_id),
+        ),
+    )
+
+
+def _mcc_parse_accounts(rows):
+    out = []
+    seen = set()
+    for row in (rows or []):
+        if not isinstance(row, dict):
+            continue
+        raw_client_customer = (
+            _mcc_row_get(row, "customer_client.client_customer")
+            or row.get("client_customer")
+            or row.get("clientCustomer")
+        )
+        cid = _mcc_to_customer_id(raw_client_customer)
+        if not cid or cid in seen:
+            continue
+        level = int(_mcc_num(_mcc_row_get(row, "customer_client.level") or row.get("level") or 1, int))
+        if level != 1:
+            continue
+        seen.add(cid)
+        out.append({
+            "customer_id": cid,
+            "account_name": str(
+                _mcc_row_get(row, "customer_client.descriptive_name")
+                or row.get("descriptive_name")
+                or row.get("descriptiveName")
+                or f"Account {cid}"
+            ),
+            "currency": str(_mcc_row_get(row, "customer_client.currency_code") or row.get("currency") or "USD"),
+            "tz": str(_mcc_row_get(row, "customer_client.time_zone") or row.get("time_zone") or "UTC"),
+            "status": str(_mcc_row_get(row, "customer_client.status") or row.get("status") or ""),
+            "manager": bool(_mcc_row_get(row, "customer_client.manager") or row.get("manager")),
+            "hidden": bool(_mcc_row_get(row, "customer_client.hidden") or row.get("hidden")),
+            "level": level,
+        })
+    return out
+
+
+def _mcc_accessible_customers_from_payload(payload):
+    out = []
+    seen = set()
+    rows = _google_ads_list_from_payload(payload, ["resourceNames", "customers", "accounts", "clients", "items", "results", "data"])
+    for row in (rows or []):
+        cid = ""
+        name = ""
+        if isinstance(row, str):
+            cid = _mcc_to_customer_id(row.split("/")[-1])
+        elif isinstance(row, dict):
+            cid = _mcc_to_customer_id(
+                row.get("customer_id")
+                or row.get("customerId")
+                or row.get("id")
+                or row.get("resource_name")
+                or row.get("resourceName")
+            )
+            name = str(
+                row.get("descriptive_name")
+                or row.get("descriptiveName")
+                or row.get("name")
+                or ""
+            ).strip()
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        out.append({"customer_id": cid, "name": name})
+    return out
+
+
+def _mcc_manager_probe_via_gateway(login_customer_id):
+    login_id = _mcc_to_customer_id(login_customer_id)
+    if not login_id:
+        return {"customer_id": "", "name": "", "is_manager": False, "rows_count": 0}, {"enabled": False, "error": "missing_login_customer_id"}, {}
+    params = _google_ads_attach_mcc_params(
+        {
+            "managerId": str(login_id),
+            "manager_id": str(login_id),
+            "login_customer_id": str(login_id),
+            "probe": "customer",
+            "force": "1",
+        },
+        login_id,
+    )
+    payload, gw = _google_ads_gateway_fetch(
+        ["/api/connectors/googleads/customers/clients"],
+        params=params,
+        timeout=20,
+    )
+    info = {"customer_id": "", "name": "", "is_manager": False, "rows_count": 0}
+    if isinstance(payload, dict):
+        probe = payload.get("probe") if isinstance(payload.get("probe"), dict) else {}
+        if probe:
+            info["customer_id"] = _mcc_to_customer_id(
+                probe.get("customerId")
+                or probe.get("customer_id")
+                or payload.get("managerId")
+                or payload.get("manager_id")
+            )
+            info["name"] = str(
+                probe.get("descriptiveName")
+                or probe.get("descriptive_name")
+                or probe.get("name")
+                or ""
+            ).strip()
+            if ("isManager" in probe) or ("manager" in probe) or ("is_manager" in probe):
+                info["is_manager"] = bool(probe.get("isManager") or probe.get("manager") or probe.get("is_manager"))
+            elif info["customer_id"] and str(info["customer_id"]) == str(login_id):
+                info["is_manager"] = True
+        clients = _google_ads_list_from_payload(payload, ["clients", "accounts", "customers", "items", "results", "data"])
+        info["rows_count"] = int(_mcc_num(payload.get("rows_count") or len(clients or []), int))
+    return info, gw, payload
+
+
+def _mcc_finalize_probe_result(result, login_customer_id=None):
+    out = dict(result or {})
+    login_id = _mcc_to_customer_id(login_customer_id or out.get("login_customer_id"))
+    try:
+        accessible_count = int(out.get("accessible_count"))
+    except Exception:
+        try:
+            accessible_count = int(float(out.get("accessible_count") or 0))
+        except Exception:
+            accessible_count = 0
+    if not accessible_count:
+        accessible_rows = _google_ads_list_from_payload(
+            out,
+            ["accessible_customers", "accessibleCustomers", "customers", "accounts", "clients", "items", "results", "data"],
+        )
+        accessible_count = len(accessible_rows or [])
+        if "accessible_count" not in out:
+            out["accessible_count"] = accessible_count
+    includes_mcc = bool(out.get("includes_mcc"))
+    probe_customer_id = _mcc_to_customer_id(
+        out.get("probe_customer_id")
+        or out.get("customer_id")
+        or out.get("managerId")
+        or out.get("manager_id")
+    )
+    has_access = bool(includes_mcc or accessible_count > 0)
+    if not includes_mcc and login_id and probe_customer_id and str(probe_customer_id) == str(login_id):
+        out["includes_mcc"] = True
+        has_access = True
+    if not out.get("mcc_name"):
+        out["mcc_name"] = str(out.get("probe_name") or "").strip()
+    out["probe_ok"] = bool(has_access)
+    return out
+
+
+def _mcc_probe_has_access(probe, login_customer_id=""):
+    normalized = _mcc_finalize_probe_result(probe or {}, login_customer_id)
+    return bool(normalized.get("probe_ok"))
+
+
+def _mcc_probe_access_for_mcc(mcc_cfg, use_cache=True, conn=None):
+    mcc_slug = str((mcc_cfg or {}).get("slug") or "")
+    login_customer_id = _mcc_to_customer_id((mcc_cfg or {}).get("login_customer_id"))
+    upstream_key = _mcc_cache_key("upstream", mcc_slug, login_customer_id)
+    mem_key = _mcc_cache_key("probe", mcc_slug, login_customer_id)
+    pcache_key = _mcc_pcache_key("probe", mcc_slug, login_customer_id)
+    result = {
+        "mcc_slug": mcc_slug,
+        "login_customer_id": login_customer_id,
+        "accessible_count": 0,
+        "includes_mcc": False,
+        "mcc_is_manager": False,
+        "mcc_name": "",
+        "probe_ok": False,
+        "upstream_status": 0,
+        "retry_after_s": 0,
+        "stale_data": False,
+        "cache_state": "",
+        "gateway": {},
+    }
+    if use_cache:
+        mem_hit = _mcc_cache_get("probe", mcc_slug, login_customer_id)
+        if isinstance(mem_hit, dict):
+            merged = _mcc_finalize_probe_result(mem_hit, login_customer_id)
+            merged["cache_state"] = "memory_fresh"
+            return merged
+        pval, pstate = _mcc_pcache_get(conn, pcache_key, allow_stale=False)
+        if isinstance(pval, dict):
+            normalized = _mcc_finalize_probe_result(pval, login_customer_id)
+            _mcc_cache_set(normalized, "probe", mcc_slug, login_customer_id)
+            merged = dict(normalized)
+            merged["cache_state"] = str(pstate or "persistent_fresh")
+            return merged
+
+    cooldown_s = _mcc_rate_limit_get(upstream_key)
+    if cooldown_s > 0:
+        if use_cache:
+            stale, state = _mcc_pcache_get(conn, pcache_key, allow_stale=True)
+            if isinstance(stale, dict):
+                merged = _mcc_finalize_probe_result(stale, login_customer_id)
+                merged["stale_data"] = True
+                merged["cache_state"] = str(state or "persistent_stale")
+                merged["retry_after_s"] = int(cooldown_s)
+                return merged
+        result["retry_after_s"] = int(cooldown_s)
+        result["upstream_status"] = 429
+        result["gateway"] = {
+            "error": f"rate_limited_upstream_429 retry_after {int(cooldown_s)}",
+            "retry_after_s": int(cooldown_s),
+            "cooldown": True,
+        }
+        return result
+
+    lock = _mcc_accounts_key_lock(upstream_key)
+    with lock:
+        if use_cache:
+            mem_hit = _mcc_cache_get("probe", mcc_slug, login_customer_id)
+            if isinstance(mem_hit, dict):
+                merged = _mcc_finalize_probe_result(mem_hit, login_customer_id)
+                merged["cache_state"] = "memory_fresh"
+                return merged
+            pval, pstate = _mcc_pcache_get(conn, pcache_key, allow_stale=False)
+            if isinstance(pval, dict):
+                normalized = _mcc_finalize_probe_result(pval, login_customer_id)
+                _mcc_cache_set(normalized, "probe", mcc_slug, login_customer_id)
+                merged = dict(normalized)
+                merged["cache_state"] = str(pstate or "persistent_fresh")
+                return merged
+
+        cooldown_s = _mcc_rate_limit_get(upstream_key)
+        if cooldown_s > 0:
+            if use_cache:
+                stale, state = _mcc_pcache_get(conn, pcache_key, allow_stale=True)
+                if isinstance(stale, dict):
+                    merged = _mcc_finalize_probe_result(stale, login_customer_id)
+                    merged["stale_data"] = True
+                    merged["cache_state"] = str(state or "persistent_stale")
+                    merged["retry_after_s"] = int(cooldown_s)
+                    return merged
+            result["retry_after_s"] = int(cooldown_s)
+            result["upstream_status"] = 429
+            result["gateway"] = {
+                "error": f"rate_limited_upstream_429 retry_after {int(cooldown_s)}",
+                "retry_after_s": int(cooldown_s),
+                "cooldown": True,
+            }
+            return result
+
+        list_payload, list_gw = _google_ads_gateway_fetch(
+            ["/api/connectors/googleads/customers"],
+            params=_google_ads_attach_mcc_params({}, login_customer_id),
+            timeout=20,
+        )
+        result["gateway"] = dict(list_gw or {})
+        result["upstream_status"] = int(_mcc_num((list_gw or {}).get("status"), int))
+
+        if _mcc_rate_limited_gateway(list_gw):
+            retry_after = _mcc_gateway_retry_after_seconds(list_gw, default_seconds=20)
+            _mcc_rate_limit_set(upstream_key, retry_after)
+            result["retry_after_s"] = int(retry_after)
+            if use_cache:
+                stale, state = _mcc_pcache_get(conn, pcache_key, allow_stale=True)
+                if isinstance(stale, dict):
+                    merged = _mcc_finalize_probe_result(stale, login_customer_id)
+                    merged["stale_data"] = True
+                    merged["cache_state"] = str(state or "persistent_stale")
+                    merged["retry_after_s"] = int(retry_after)
+                    merged["gateway"] = dict(list_gw or {})
+                    return merged
+            return result
+
+        accessible = _mcc_accessible_customers_from_payload(list_payload)
+        result["accessible_count"] = len(accessible)
+        result["includes_mcc"] = any(str(x.get("customer_id") or "") == str(login_customer_id) for x in accessible)
+        if result["includes_mcc"]:
+            match = next((x for x in accessible if str(x.get("customer_id") or "") == str(login_customer_id)), {})
+            result["mcc_name"] = str((match or {}).get("name") or "")
+
+        mgr_probe, mgr_gw, mgr_payload = _mcc_manager_probe_via_gateway(login_customer_id)
+        result["gaql_gateway"] = dict(mgr_gw or {})
+        result["probe_rows_count"] = int(_mcc_num((mgr_probe or {}).get("rows_count"), int))
+        result["probe_customer_id"] = str((mgr_probe or {}).get("customer_id") or "")
+        result["probe_name"] = str((mgr_probe or {}).get("name") or "")
+        if _mcc_rate_limited_gateway(mgr_gw):
+            retry_after = _mcc_gateway_retry_after_seconds(mgr_gw, default_seconds=20)
+            _mcc_rate_limit_set(upstream_key, retry_after)
+            result["retry_after_s"] = int(retry_after)
+            result["upstream_status"] = 429
+            if use_cache:
+                stale, state = _mcc_pcache_get(conn, pcache_key, allow_stale=True)
+                if isinstance(stale, dict):
+                    merged = _mcc_finalize_probe_result(stale, login_customer_id)
+                    merged["stale_data"] = True
+                    merged["cache_state"] = str(state or "persistent_stale")
+                    merged["retry_after_s"] = int(retry_after)
+                    merged["gateway"] = dict(mgr_gw or {})
+                    return merged
+            return result
+
+        result["mcc_is_manager"] = bool((mgr_probe or {}).get("is_manager"))
+        if (not result["mcc_is_manager"]) and str((mgr_probe or {}).get("customer_id") or "") == str(login_customer_id):
+            result["mcc_is_manager"] = True
+        if not result["mcc_name"]:
+            result["mcc_name"] = str(
+                (mgr_probe or {}).get("name")
+                or (mgr_payload or {}).get("name")
+                or result["mcc_name"]
+            )
+        result = _mcc_finalize_probe_result(result, login_customer_id)
+        result["upstream_status"] = int(_mcc_num((mgr_gw or {}).get("status") or result.get("upstream_status"), int))
+        _mcc_rate_limit_clear(upstream_key)
+        if use_cache:
+            _mcc_cache_set(result, "probe", mcc_slug, login_customer_id)
+            _mcc_pcache_set(conn, pcache_key, result, ttl_seconds=MCC_PROBE_CACHE_TTL_SECONDS)
+        return result
+
+
+def _mcc_fetch_accounts_for_mcc(mcc_cfg, use_cache=True, conn=None):
+    mcc_slug = str((mcc_cfg or {}).get("slug") or "")
+    login_customer_id = _mcc_to_customer_id((mcc_cfg or {}).get("login_customer_id"))
+    upstream_key = _mcc_cache_key("upstream", mcc_slug, login_customer_id)
+    pcache_key = _mcc_pcache_key("accounts", mcc_slug, login_customer_id)
+    diagnostic = {
+        "mcc_slug": mcc_slug,
+        "mcc_customer_id": login_customer_id,
+        "login_customer_id": login_customer_id,
+        "developer_token_present": bool(str(os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")).strip()),
+        "oauth_scope_state": "unknown",
+        "gaql_query": "",
+        "gaql_rows_count": 0,
+        "gaql_gateway": {},
+        "fallback_rows_count": 0,
+        "fallback_gateway": {},
+        "fallback_paths": [],
+        "cooldown_s": 0,
+        "cache_state": "",
+        "stale_cache_used": False,
+    }
+    if has_request_context():
+        diagnostic["oauth_scope_state"] = "ok" if bool(_coolbits_get_request_token()) else "missing"
+    if use_cache:
+        cache_hit = _mcc_cache_get("accounts", mcc_slug, login_customer_id)
+        if isinstance(cache_hit, list):
+            diagnostic["cache_state"] = "memory_fresh"
+            return cache_hit, {"cache": True, "cache_state": "memory_fresh"}, diagnostic
+        pval, pstate = _mcc_pcache_get(conn, pcache_key, allow_stale=False)
+        if isinstance(pval, list):
+            _mcc_cache_set(pval, "accounts", mcc_slug, login_customer_id)
+            diagnostic["cache_state"] = str(pstate or "persistent_fresh")
+            return pval, {"cache": True, "cache_state": str(pstate or "persistent_fresh")}, diagnostic
+    cooldown_s = _mcc_rate_limit_get(upstream_key)
+    if cooldown_s > 0:
+        diagnostic["cooldown_s"] = int(cooldown_s)
+        if use_cache:
+            stale, state = _mcc_pcache_get(conn, pcache_key, allow_stale=True)
+            if isinstance(stale, list) and stale:
+                stale_sorted = sorted(stale, key=lambda x: str((x or {}).get("account_name") or "").lower())
+                _mcc_cache_set(stale_sorted, "accounts", mcc_slug, login_customer_id)
+                diagnostic["cache_state"] = str(state or "persistent_stale")
+                diagnostic["stale_cache_used"] = True
+                return stale_sorted, {
+                    "cache": True,
+                    "stale": True,
+                    "cache_state": str(state or "persistent_stale"),
+                    "retry_after_s": int(cooldown_s),
+                    "cooldown": True,
+                }, diagnostic
+        return [], {
+            "enabled": True,
+            "error": f"rate_limited_upstream_429 retry_after {int(cooldown_s)}",
+            "retry_after_s": int(cooldown_s),
+            "cooldown": True,
+        }, diagnostic
+    lock = _mcc_accounts_key_lock(upstream_key)
+    with lock:
+        if use_cache:
+            cache_hit = _mcc_cache_get("accounts", mcc_slug, login_customer_id)
+            if isinstance(cache_hit, list):
+                diagnostic["cache_state"] = "memory_fresh"
+                return cache_hit, {"cache": True, "singleflight": True, "cache_state": "memory_fresh"}, diagnostic
+            pval, pstate = _mcc_pcache_get(conn, pcache_key, allow_stale=False)
+            if isinstance(pval, list):
+                _mcc_cache_set(pval, "accounts", mcc_slug, login_customer_id)
+                diagnostic["cache_state"] = str(pstate or "persistent_fresh")
+                return pval, {"cache": True, "singleflight": True, "cache_state": str(pstate or "persistent_fresh")}, diagnostic
+        cooldown_s = _mcc_rate_limit_get(upstream_key)
+        if cooldown_s > 0:
+            diagnostic["cooldown_s"] = int(cooldown_s)
+            if use_cache:
+                stale, state = _mcc_pcache_get(conn, pcache_key, allow_stale=True)
+                if isinstance(stale, list) and stale:
+                    stale_sorted = sorted(stale, key=lambda x: str((x or {}).get("account_name") or "").lower())
+                    _mcc_cache_set(stale_sorted, "accounts", mcc_slug, login_customer_id)
+                    diagnostic["cache_state"] = str(state or "persistent_stale")
+                    diagnostic["stale_cache_used"] = True
+                    return stale_sorted, {
+                        "cache": True,
+                        "stale": True,
+                        "cache_state": str(state or "persistent_stale"),
+                        "retry_after_s": int(cooldown_s),
+                        "cooldown": True,
+                        "singleflight": True,
+                    }, diagnostic
+            return [], {
+                "enabled": True,
+                "error": f"rate_limited_upstream_429 retry_after {int(cooldown_s)}",
+                "retry_after_s": int(cooldown_s),
+                "cooldown": True,
+                "singleflight": True,
+            }, diagnostic
+        gw = {"enabled": True}
+        accounts = []
+        if login_customer_id:
+            start, end = _mcc_date_between(30, "UTC")
+            gaql = _mcc_build_gaql("accounts", start, end, 1000)
+            diagnostic["gaql_query"] = gaql
+            rows, gw = _mcc_gaql_fetch(login_customer_id, "", gaql)
+            diagnostic["gaql_rows_count"] = len(rows or [])
+            diagnostic["gaql_gateway"] = dict(gw or {})
+            accounts = _mcc_parse_accounts(rows)
+        if not accounts:
+            params = _google_ads_attach_mcc_params({
+                "include_children": "1",
+                "list_children": "1",
+            }, login_customer_id)
+            fallback_paths = [
+                "/api/connectors/googleads/customers/clients",
+                "/api/connectors/googleads/customers",
+            ]
+            diagnostic["fallback_paths"] = list(fallback_paths)
+            payload, _gw_accounts = _google_ads_gateway_fetch(
+                [
+                    *fallback_paths,
+                ],
+                params=params,
+                timeout=25,
+            )
+            raw_accounts = _google_ads_list_from_payload(payload, ["accounts", "customers", "clients", "items", "data", "results"])
+            diagnostic["fallback_rows_count"] = len(raw_accounts or [])
+            diagnostic["fallback_gateway"] = dict(_gw_accounts or {})
+            mapped = _google_ads_map_accounts(raw_accounts)
+            accounts = []
+            for item in (mapped or []):
+                cid = _mcc_to_customer_id(item.get("id"))
+                if not cid:
+                    continue
+                if str(item.get("type") or "").upper() == "MCC":
+                    continue
+                accounts.append({
+                    "customer_id": cid,
+                    "account_name": str(item.get("name") or f"Account {cid}"),
+                    "currency": str(item.get("currency") or "USD"),
+                    "tz": str(item.get("timezone") or "UTC"),
+                    "status": str(item.get("status") or ""),
+                    "manager": False,
+                    "hidden": False,
+                    "level": 1,
+                })
+            if (not accounts) and isinstance(_gw_accounts, dict):
+                gw = dict(_gw_accounts)
+                gw["error"] = str(_gw_accounts.get("error") or "gateway_unavailable")
+        if not accounts and isinstance(gw, dict) and not gw.get("error"):
+            gw = dict(gw)
+            gw["error"] = "no_accounts_returned"
+        if not accounts and isinstance(gw, dict):
+            err = str(gw.get("error") or "")
+            if "HTTP 429" in err or "429" in err:
+                gw["error"] = "rate_limited_upstream_429"
+        if not accounts and _mcc_rate_limited_gateway(gw):
+            retry_after = _mcc_gateway_retry_after_seconds(gw, default_seconds=20)
+            _mcc_rate_limit_set(upstream_key, retry_after)
+            gw = dict(gw or {})
+            gw["retry_after_s"] = int(retry_after)
+            gw["cooldown"] = True
+            diagnostic["cooldown_s"] = int(retry_after)
+            if use_cache:
+                stale, state = _mcc_pcache_get(conn, pcache_key, allow_stale=True)
+                if isinstance(stale, list) and stale:
+                    accounts = sorted(stale, key=lambda x: str((x or {}).get("account_name") or "").lower())
+                    gw["stale"] = True
+                    gw["cache_state"] = str(state or "persistent_stale")
+                    diagnostic["cache_state"] = str(state or "persistent_stale")
+                    diagnostic["stale_cache_used"] = True
+        elif accounts:
+            _mcc_rate_limit_clear(upstream_key)
+        accounts = sorted(accounts, key=lambda x: str(x.get("account_name") or "").lower())
+        if use_cache:
+            gw_error = str((gw or {}).get("error") or "").strip()
+            # Avoid poisoning cache with empty results when upstream is unhealthy/rate-limited.
+            if accounts or (not gw_error):
+                _mcc_cache_set(accounts, "accounts", mcc_slug, login_customer_id)
+                _mcc_pcache_set(conn, pcache_key, accounts, ttl_seconds=MCC_ACCOUNTS_CACHE_TTL_SECONDS)
+                if not diagnostic.get("cache_state"):
+                    diagnostic["cache_state"] = "write_through"
+        print(
+            "mcc_accounts_diag",
+            json.dumps(
+                {
+                    "mcc_customer_id": diagnostic.get("mcc_customer_id"),
+                    "login_customer_id": diagnostic.get("login_customer_id"),
+                    "developer_token_present": diagnostic.get("developer_token_present"),
+                    "oauth_scope_state": diagnostic.get("oauth_scope_state"),
+                    "gaql_rows_count": diagnostic.get("gaql_rows_count"),
+                    "gaql_gateway": diagnostic.get("gaql_gateway"),
+                    "fallback_rows_count": diagnostic.get("fallback_rows_count"),
+                    "fallback_gateway": diagnostic.get("fallback_gateway"),
+                    "cooldown_s": diagnostic.get("cooldown_s"),
+                    "cache_state": diagnostic.get("cache_state"),
+                    "stale_cache_used": diagnostic.get("stale_cache_used"),
+                },
+                ensure_ascii=True,
+            ),
+        )
+        return accounts, gw, diagnostic
+
+
+def _mcc_fetch_report_rows(mcc_cfg, account, report_name, window, limit):
+    account = account if isinstance(account, dict) else {}
+    mcc_slug = str((mcc_cfg or {}).get("slug") or "")
+    login_customer_id = _mcc_to_customer_id((mcc_cfg or {}).get("login_customer_id"))
+    customer_id = _mcc_to_customer_id(account.get("customer_id"))
+    tz_name = str(account.get("tz") or "UTC")
+    start, end = _mcc_date_between(window, tz_name)
+    safe_limit = _mcc_gaql_limit(limit, 200)
+    cache_hit = _mcc_cache_get("report", mcc_slug, customer_id, report_name, start, end, safe_limit)
+    if isinstance(cache_hit, list):
+        return cache_hit, {"cache": True}
+    gaql = _mcc_build_gaql(report_name, start, end, safe_limit)
+    rows, gw = _mcc_gaql_fetch(login_customer_id, customer_id, gaql)
+    _mcc_cache_set(rows, "report", mcc_slug, customer_id, report_name, start, end, safe_limit)
+    return rows, gw
+
+
+def _mcc_kpis_from_rows(rows):
+    cost = 0.0
+    conv = 0.0
+    value = 0.0
+    for row in (rows or []):
+        if not isinstance(row, dict):
+            continue
+        cost += _mcc_cost_from_micros(_mcc_row_get(row, "metrics.cost_micros") or row.get("cost_micros"))
+        conv += _mcc_num(_mcc_row_get(row, "metrics.conversions") or row.get("conversions"), float)
+        value += _mcc_num(_mcc_row_get(row, "metrics.conversions_value") or row.get("conversions_value"), float)
+    roas = (value / cost) if cost > 0 else 0.0
+    return {
+        "cost": round(cost, 6),
+        "conversions": round(conv, 6),
+        "conv_value": round(value, 6),
+        "roas": round(roas, 6),
+    }
+
+
+def _mcc_flags_for_account(brief):
+    b = brief if isinstance(brief, dict) else {}
+    out = []
+    cost_7d = float(_mcc_num(b.get("cost_7d"), float))
+    cost_30d = float(_mcc_num(b.get("cost_30d"), float))
+    cost_90d = float(_mcc_num(b.get("cost_90d"), float))
+    conv_30d = float(_mcc_num(b.get("conv_30d"), float))
+    value_30d = float(_mcc_num(b.get("value_30d"), float))
+    value_90d = float(_mcc_num(b.get("value_90d"), float))
+    roas_7d = float(_mcc_num(b.get("roas_7d"), float))
+    roas_30d = float(_mcc_num(b.get("roas_30d"), float))
+    roas_90d = float(_mcc_num(b.get("roas_90d"), float))
+    if cost_30d > 0 and value_30d == 0:
+        out.append("SPEND_30D_VALUE_0")
+    if cost_90d > 0 and value_90d == 0:
+        out.append("SPEND_90D_VALUE_0")
+    if conv_30d > 0 and value_30d <= (conv_30d * 2.0):
+        out.append("CONV_GT0_VALUE_~0")
+    if roas_30d >= 30.0:
+        out.append("ROAS_EXTREME")
+    if conv_30d > 0 and value_30d == 0:
+        out.append("ROAS_ZERO_WITH_CONV")
+    if cost_30d > 0 and cost_7d < ((cost_30d / 30.0) * 7.0 * 0.5):
+        out.append("DROP_COST_7D_VS_30D")
+    if cost_7d > 0 and roas_30d > 0 and roas_7d < (roas_30d * 0.5):
+        out.append("DROP_ROAS_7D_VS_30D")
+    if int(_mcc_num(b.get("neg_account_count"), int)) == 0 and int(_mcc_num(b.get("neg_shared_count"), int)) == 0 and int(_mcc_num(b.get("neg_campaign_count"), int)) == 0 and int(_mcc_num(b.get("neg_adgroup_count"), int)) == 0:
+        out.append("NO_NEGATIVES_FOUND")
+    if cost_30d > 0 and int(_mcc_num(b.get("search_terms_count"), int)) == 0:
+        out.append("NO_SEARCH_TERMS")
+    if int(_mcc_num(b.get("campaign_rows_30d"), int)) == 0 and cost_30d == 0:
+        out.append("NO_CAMPAIGNS_ACTIVE")
+    if int(_mcc_num(b.get("auction_rows_30d"), int)) == 0 and float(_mcc_num(b.get("search_cost_30d"), float)) > 0:
+        out.append("AUCTION_NOT_AVAILABLE")
+    if int(_mcc_num(b.get("audience_rows_30d"), int)) == 0:
+        out.append("AUDIENCE_NOT_AVAILABLE")
+    return out
 
 def _google_ads_iso_date_window(days):
     from datetime import datetime, timedelta
@@ -6889,16 +18643,17 @@ def _google_ads_attach_mcc_params(params, mcc_id):
     out["login_customer_id"] = mcc_api
     out["managerCustomerId"] = mcc_api
     out["loginCustomerId"] = mcc_api
+    out["managerId"] = mcc_api
     out["mcc"] = mcc
     out["mccId"] = mcc
     out["manager_id"] = mcc_api
-    out["managerId"] = mcc_api
     out["parent_customer_id"] = mcc_api
     out["parentCustomerId"] = mcc_api
     out["customer_id"] = mcc_api
     out["customerId"] = mcc_api
     out["cid"] = mcc_api
-    out["account_id"] = out.get("account_id") or mcc
+    if out.get("account_id"):
+        out["account_id"] = out.get("account_id")
     out["include_children"] = "1"
     out["children"] = "1"
     out["expand"] = "1"
@@ -7241,7 +18996,8 @@ def google_ads_generate_assets():
             "headline_3": selected_headlines[2] if len(selected_headlines) > 2 else "",
             "description_1": descriptions_pool[0] if descriptions_pool else "",
             "description_2": descriptions_pool[1] if len(descriptions_pool) > 1 else "",
-        }
+        },
+        "source": "mock",
     })
 
 
@@ -7339,7 +19095,12 @@ def google_ads_reports():
                 "Cost/Conv": f"${c['cost_per_conv']:.2f}",
                 "ROAS": f"{c['roas']}x"
             })
-        return jsonify({"report_type": report_type, "rows": rows, "generated_at": __import__('datetime').datetime.now().isoformat()})
+        return jsonify({
+            "report_type": report_type,
+            "rows": rows,
+            "generated_at": __import__('datetime').datetime.now().isoformat(),
+            "source": "mock",
+        })
 
     elif report_type == 'budget_pacing':
         rows = []
@@ -7356,9 +19117,14 @@ def google_ads_reports():
                 "Est. Days Left": days_left,
                 "Status": "🟢 On Track" if pct < 80 else ("🟡 Warning" if pct < 95 else "🔴 Over Budget")
             })
-        return jsonify({"report_type": report_type, "rows": rows, "generated_at": __import__('datetime').datetime.now().isoformat()})
+        return jsonify({
+            "report_type": report_type,
+            "rows": rows,
+            "generated_at": __import__('datetime').datetime.now().isoformat(),
+            "source": "mock",
+        })
 
-    return jsonify({"report_type": report_type, "rows": [], "message": "Unknown report type"})
+    return jsonify({"report_type": report_type, "rows": [], "message": "Unknown report type", "source": "mock"})
 
 
 @app.route("/api/connectors/google-ads/test-call", methods=["POST"])
@@ -7427,7 +19193,8 @@ def google_ads_test_call():
             "body": response_body
         },
         "latency_ms": elapsed,
-        "quota": {"operations_remaining": 14567, "daily_limit": 15000}
+        "quota": {"operations_remaining": 14567, "daily_limit": 15000},
+        "source": "mock",
     })
 
 
@@ -8568,7 +20335,8 @@ def ga4_test_call():
             "body": response_body
         },
         "latency_ms": elapsed,
-        "quota": {"tokens_remaining": 48750, "daily_limit": 50000}
+        "quota": {"tokens_remaining": 48750, "daily_limit": 50000},
+        "source": "mock",
     })
 
 
@@ -8685,64 +20453,245 @@ GSC_MOCK_SITEMAPS = {
 }
 
 
+def _gsc_gateway_fetch(path_candidates, params=None, timeout=25):
+    if not COOLBITS_GATEWAY_ENABLED:
+        return None, {"enabled": False, "reason": "disabled"}
+
+    last_error = None
+    for path in path_candidates:
+        try:
+            status, payload, text = _coolbits_request("GET", path, params=params, timeout=timeout)
+            if 200 <= int(status) < 300:
+                return payload, {"enabled": True, "path": path, "status": int(status)}
+            if int(status) in (400, 401, 403) and isinstance(payload, dict):
+                err_code = str(payload.get("error") or "").strip().lower()
+                if err_code in ("not_connected", "property_not_set", "missing_refresh_token", "invalid_property"):
+                    return payload, {"enabled": True, "path": path, "status": int(status), "error": err_code}
+            last_error = f"{path} -> HTTP {status}"
+            if payload is None and text:
+                last_error += f" ({text[:180]})"
+        except Exception as e:
+            last_error = f"{path} -> {e}"
+    return None, {"enabled": True, "error": last_error or "gateway_unavailable"}
+
+
+def _gsc_list_from_payload(payload, preferred_keys):
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in preferred_keys:
+        v = payload.get(key)
+        if isinstance(v, list):
+            return v
+        if isinstance(v, dict):
+            for nested in ("rows", "items", "list", "results", "data"):
+                nv = v.get(nested)
+                if isinstance(nv, list):
+                    return nv
+    data = payload.get("data")
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for nested in ("rows", "items", "list", "results"):
+            nv = data.get(nested)
+            if isinstance(nv, list):
+                return nv
+    return []
+
+
+def _gsc_dict_from_payload(payload, preferred_keys):
+    if not isinstance(payload, dict):
+        return {}
+    for key in preferred_keys:
+        v = payload.get(key)
+        if isinstance(v, dict):
+            return v
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in preferred_keys:
+            v = data.get(key)
+            if isinstance(v, dict):
+                return v
+    return {}
+
+
 @app.route("/api/connectors/google-search-console/properties", methods=["GET"])
 def gsc_properties():
-    return jsonify({"properties": GSC_MOCK_PROPERTIES})
+    payload, gw = _gsc_gateway_fetch([
+        "/api/connectors/google-search-console/properties",
+        "/api/connectors/gsc/properties",
+        "/api/gsc/properties",
+    ], timeout=20)
+    if payload is not None:
+        properties = _gsc_list_from_payload(payload, ["properties", "sites", "items", "results"])
+        if properties:
+            return jsonify({"properties": properties, "source": "coolbits", "gateway": gw})
+        if isinstance(payload, dict) and payload.get("error") == "not_connected":
+            return jsonify({"properties": [], "source": "coolbits", "gateway": gw, "error": "not_connected"})
+    return jsonify({"properties": GSC_MOCK_PROPERTIES, "source": "mock"})
 
 
 @app.route("/api/connectors/google-search-console/overview", methods=["GET"])
 def gsc_overview():
     prop_id = request.args.get('property_id', 'sc-domain:camarad.ai')
+    payload, gw = _gsc_gateway_fetch([
+        "/api/connectors/google-search-console/overview",
+        "/api/connectors/gsc/overview",
+        "/api/gsc/overview",
+    ], params={"property_id": prop_id, "propertyId": prop_id}, timeout=25)
+    if payload is not None:
+        if isinstance(payload, dict):
+            overview = _gsc_dict_from_payload(payload, ["overview", "summary"])
+            if not overview:
+                direct = {
+                    k: payload.get(k) for k in (
+                        "clicks", "impressions", "ctr", "position",
+                        "clicks_change", "impressions_change", "ctr_change", "position_change",
+                    ) if k in payload
+                }
+                if direct:
+                    overview = direct
+            if overview:
+                return jsonify({"property_id": prop_id, **overview, "source": "coolbits", "gateway": gw})
+            if payload.get("error") == "not_connected":
+                return jsonify({"property_id": prop_id, "source": "coolbits", "gateway": gw, "error": "not_connected"})
     data = GSC_MOCK_OVERVIEW.get(prop_id, GSC_MOCK_OVERVIEW['sc-domain:camarad.ai'])
-    return jsonify({"property_id": prop_id, **data})
+    return jsonify({"property_id": prop_id, **data, "source": "mock"})
 
 
 @app.route("/api/connectors/google-search-console/queries", methods=["GET"])
 def gsc_queries():
     prop_id = request.args.get('property_id', 'sc-domain:camarad.ai')
+    payload, gw = _gsc_gateway_fetch([
+        "/api/connectors/google-search-console/queries",
+        "/api/connectors/gsc/queries",
+        "/api/gsc/queries",
+        "/api/connectors/google-search-console/search-analytics",
+    ], params={"property_id": prop_id, "propertyId": prop_id}, timeout=25)
+    if payload is not None:
+        rows = _gsc_list_from_payload(payload, ["queries", "rows", "items", "results"])
+        if rows:
+            return jsonify({"property_id": prop_id, "queries": rows, "source": "coolbits", "gateway": gw})
+        if isinstance(payload, dict) and payload.get("error") == "not_connected":
+            return jsonify({"property_id": prop_id, "queries": [], "source": "coolbits", "gateway": gw, "error": "not_connected"})
     queries = GSC_MOCK_QUERIES.get(prop_id, GSC_MOCK_QUERIES['sc-domain:camarad.ai'])
-    return jsonify({"property_id": prop_id, "queries": queries})
+    return jsonify({"property_id": prop_id, "queries": queries, "source": "mock"})
 
 
 @app.route("/api/connectors/google-search-console/pages", methods=["GET"])
 def gsc_pages():
     prop_id = request.args.get('property_id', 'sc-domain:camarad.ai')
+    payload, gw = _gsc_gateway_fetch([
+        "/api/connectors/google-search-console/pages",
+        "/api/connectors/gsc/pages",
+        "/api/gsc/pages",
+    ], params={"property_id": prop_id, "propertyId": prop_id}, timeout=25)
+    if payload is not None:
+        rows = _gsc_list_from_payload(payload, ["pages", "rows", "items", "results"])
+        if rows:
+            return jsonify({"property_id": prop_id, "pages": rows, "source": "coolbits", "gateway": gw})
+        if isinstance(payload, dict) and payload.get("error") == "not_connected":
+            return jsonify({"property_id": prop_id, "pages": [], "source": "coolbits", "gateway": gw, "error": "not_connected"})
     pages = GSC_MOCK_PAGES.get(prop_id, GSC_MOCK_PAGES['sc-domain:camarad.ai'])
-    return jsonify({"property_id": prop_id, "pages": pages})
+    return jsonify({"property_id": prop_id, "pages": pages, "source": "mock"})
 
 
 @app.route("/api/connectors/google-search-console/countries", methods=["GET"])
 def gsc_countries():
     prop_id = request.args.get('property_id', 'sc-domain:camarad.ai')
+    payload, gw = _gsc_gateway_fetch([
+        "/api/connectors/google-search-console/countries",
+        "/api/connectors/gsc/countries",
+        "/api/gsc/countries",
+    ], params={"property_id": prop_id, "propertyId": prop_id}, timeout=25)
+    if payload is not None:
+        rows = _gsc_list_from_payload(payload, ["countries", "rows", "items", "results"])
+        if rows:
+            return jsonify({"property_id": prop_id, "countries": rows, "source": "coolbits", "gateway": gw})
+        if isinstance(payload, dict) and payload.get("error") == "not_connected":
+            return jsonify({"property_id": prop_id, "countries": [], "source": "coolbits", "gateway": gw, "error": "not_connected"})
     countries = GSC_MOCK_COUNTRIES.get(prop_id, GSC_MOCK_COUNTRIES['sc-domain:camarad.ai'])
-    return jsonify({"property_id": prop_id, "countries": countries})
+    return jsonify({"property_id": prop_id, "countries": countries, "source": "mock"})
 
 
 @app.route("/api/connectors/google-search-console/devices", methods=["GET"])
 def gsc_devices():
     prop_id = request.args.get('property_id', 'sc-domain:camarad.ai')
+    payload, gw = _gsc_gateway_fetch([
+        "/api/connectors/google-search-console/devices",
+        "/api/connectors/gsc/devices",
+        "/api/gsc/devices",
+    ], params={"property_id": prop_id, "propertyId": prop_id}, timeout=25)
+    if payload is not None:
+        rows = _gsc_list_from_payload(payload, ["devices", "rows", "items", "results"])
+        if rows:
+            return jsonify({"property_id": prop_id, "devices": rows, "source": "coolbits", "gateway": gw})
+        if isinstance(payload, dict) and payload.get("error") == "not_connected":
+            return jsonify({"property_id": prop_id, "devices": [], "source": "coolbits", "gateway": gw, "error": "not_connected"})
     devices = GSC_MOCK_DEVICES.get(prop_id, GSC_MOCK_DEVICES['sc-domain:camarad.ai'])
-    return jsonify({"property_id": prop_id, "devices": devices})
+    return jsonify({"property_id": prop_id, "devices": devices, "source": "mock"})
 
 
 @app.route("/api/connectors/google-search-console/index-coverage", methods=["GET"])
 def gsc_index_coverage():
     prop_id = request.args.get('property_id', 'sc-domain:camarad.ai')
+    payload, gw = _gsc_gateway_fetch([
+        "/api/connectors/google-search-console/index-coverage",
+        "/api/connectors/gsc/index-coverage",
+        "/api/gsc/index-coverage",
+    ], params={"property_id": prop_id, "propertyId": prop_id}, timeout=25)
+    if payload is not None and isinstance(payload, dict):
+        coverage = _gsc_dict_from_payload(payload, ["index_coverage", "coverage", "overview"])
+        if coverage and (
+            isinstance(coverage.get("summary"), dict)
+            or isinstance(coverage.get("errors"), list)
+            or isinstance(coverage.get("warnings"), list)
+            or isinstance(coverage.get("excluded"), list)
+        ):
+            return jsonify({"property_id": prop_id, **coverage, "source": "coolbits", "gateway": gw})
+        direct = {k: payload.get(k) for k in ("summary", "errors", "warnings", "excluded") if k in payload}
+        if direct:
+            return jsonify({"property_id": prop_id, **direct, "source": "coolbits", "gateway": gw})
+        if payload.get("error") == "not_connected":
+            return jsonify({"property_id": prop_id, "source": "coolbits", "gateway": gw, "error": "not_connected"})
     data = GSC_MOCK_INDEX_COVERAGE.get(prop_id, GSC_MOCK_INDEX_COVERAGE['sc-domain:camarad.ai'])
-    return jsonify({"property_id": prop_id, **data})
+    return jsonify({"property_id": prop_id, **data, "source": "mock"})
 
 
 @app.route("/api/connectors/google-search-console/sitemaps", methods=["GET"])
 def gsc_sitemaps():
     prop_id = request.args.get('property_id', 'sc-domain:camarad.ai')
+    payload, gw = _gsc_gateway_fetch([
+        "/api/connectors/google-search-console/sitemaps",
+        "/api/connectors/gsc/sitemaps",
+        "/api/gsc/sitemaps",
+    ], params={"property_id": prop_id, "propertyId": prop_id}, timeout=25)
+    if payload is not None:
+        rows = _gsc_list_from_payload(payload, ["sitemaps", "sitemap", "rows", "items", "results"])
+        if rows:
+            return jsonify({"property_id": prop_id, "sitemaps": rows, "source": "coolbits", "gateway": gw})
+        if isinstance(payload, dict) and payload.get("error") == "not_connected":
+            return jsonify({"property_id": prop_id, "sitemaps": [], "source": "coolbits", "gateway": gw, "error": "not_connected"})
     sitemaps = GSC_MOCK_SITEMAPS.get(prop_id, GSC_MOCK_SITEMAPS['sc-domain:camarad.ai'])
-    return jsonify({"property_id": prop_id, "sitemaps": sitemaps})
+    return jsonify({"property_id": prop_id, "sitemaps": sitemaps, "source": "mock"})
 
 
 @app.route("/api/connectors/google-search-console/timeseries", methods=["GET"])
 def gsc_timeseries():
     prop_id = request.args.get('property_id', 'sc-domain:camarad.ai')
     days = request.args.get('days', 28, type=int)
+    payload, gw = _gsc_gateway_fetch([
+        "/api/connectors/google-search-console/timeseries",
+        "/api/connectors/gsc/timeseries",
+        "/api/gsc/timeseries",
+    ], params={"property_id": prop_id, "propertyId": prop_id, "days": days}, timeout=25)
+    if payload is not None:
+        rows = _gsc_list_from_payload(payload, ["daily", "timeseries", "rows", "items", "results"])
+        if rows:
+            return jsonify({"property_id": prop_id, "days": days, "daily": rows, "source": "coolbits", "gateway": gw})
+        if isinstance(payload, dict) and payload.get("error") == "not_connected":
+            return jsonify({"property_id": prop_id, "days": days, "daily": [], "source": "coolbits", "gateway": gw, "error": "not_connected"})
     import random
     random.seed(99)
     daily = []
@@ -8754,7 +20703,7 @@ def gsc_timeseries():
         base_ctr = round(base_clicks / base_impr * 100, 2)
         base_pos = round(random.uniform(10.5, 15.5), 1)
         daily.append({"date": d, "clicks": base_clicks, "impressions": base_impr, "ctr": base_ctr, "position": base_pos})
-    return jsonify({"property_id": prop_id, "days": days, "daily": daily})
+    return jsonify({"property_id": prop_id, "days": days, "daily": daily, "source": "mock"})
 
 
 @app.route("/api/connectors/google-search-console/test-call", methods=["POST"])
@@ -8813,7 +20762,8 @@ def gsc_test_call():
             "body": response_body
         },
         "latency_ms": elapsed,
-        "quota": {"queries_remaining": 1150, "daily_limit": 1200}
+        "quota": {"queries_remaining": 1150, "daily_limit": 1200},
+        "source": "mock",
     })
 
 
@@ -8947,49 +20897,169 @@ GTM_MOCK_PREVIEW_EVENTS = [
 ]
 
 
+def _gtm_gateway_fetch(path_candidates, params=None, timeout=25):
+    if not COOLBITS_GATEWAY_ENABLED:
+        return None, None
+    for path in path_candidates:
+        try:
+            status, payload, _text = _coolbits_request("GET", path, params=params, timeout=timeout)
+            if 200 <= int(status) < 300:
+                return payload, path
+        except Exception:
+            continue
+    return None, None
+
+
+def _gtm_list_from_payload(payload, keys):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for k in keys:
+            v = payload.get(k)
+            if isinstance(v, list):
+                return v
+            if isinstance(v, dict):
+                nested = v.get("rows") or v.get("items") or v.get("results")
+                if isinstance(nested, list):
+                    return nested
+            if isinstance(v, dict) and isinstance(v.get("data"), list):
+                return v.get("data")
+        data = payload.get("data")
+        if isinstance(data, list):
+            return data
+    return []
+
+
+def _gtm_dict_from_payload(payload, keys):
+    if isinstance(payload, dict):
+        for k in keys:
+            v = payload.get(k)
+            if isinstance(v, dict):
+                return v
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return data
+    return payload if isinstance(payload, dict) else None
+
+
 @app.route("/api/connectors/google-tag-manager/containers", methods=["GET"])
 def gtm_containers():
-    return jsonify({"containers": GTM_MOCK_CONTAINERS})
+    payload, gw = _gtm_gateway_fetch([
+        "/api/connectors/google-tag-manager/containers",
+        "/api/connectors/gtm/containers",
+        "/api/connectors/tagmanager/containers",
+    ], timeout=25)
+    if payload is not None:
+        containers = _gtm_list_from_payload(payload, ["containers", "container", "items", "results"])
+        if isinstance(containers, list):
+            return jsonify({"containers": containers, "source": "coolbits", "gateway": gw})
+    return jsonify({"containers": GTM_MOCK_CONTAINERS, "source": "mock"})
 
 
 @app.route("/api/connectors/google-tag-manager/overview", methods=["GET"])
 def gtm_overview():
     container_id = request.args.get('container_id', 'GTM-WX4R7N2')
+    payload, gw = _gtm_gateway_fetch([
+        "/api/connectors/google-tag-manager/overview",
+        "/api/connectors/gtm/overview",
+        "/api/connectors/tagmanager/overview",
+    ], params={"container_id": container_id, "containerId": container_id}, timeout=25)
+    if payload is not None:
+        data = _gtm_dict_from_payload(payload, ["overview", "summary"])
+        if isinstance(data, dict):
+            out = dict(data)
+            out.setdefault("container_id", container_id)
+            out["source"] = "coolbits"
+            out["gateway"] = gw
+            return jsonify(out)
     data = GTM_MOCK_OVERVIEW.get(container_id, GTM_MOCK_OVERVIEW['GTM-WX4R7N2'])
-    return jsonify({"container_id": container_id, **data})
+    return jsonify({"container_id": container_id, **data, "source": "mock"})
 
 
 @app.route("/api/connectors/google-tag-manager/tags", methods=["GET"])
 def gtm_tags():
     container_id = request.args.get('container_id', 'GTM-WX4R7N2')
+    payload, gw = _gtm_gateway_fetch([
+        "/api/connectors/google-tag-manager/tags",
+        "/api/connectors/gtm/tags",
+        "/api/connectors/tagmanager/tags",
+    ], params={"container_id": container_id, "containerId": container_id}, timeout=25)
+    if payload is not None:
+        tags = _gtm_list_from_payload(payload, ["tags", "tag", "items", "results"])
+        if isinstance(tags, list):
+            return jsonify({"container_id": container_id, "tags": tags, "source": "coolbits", "gateway": gw})
     tags = GTM_MOCK_TAGS.get(container_id, GTM_MOCK_TAGS['GTM-WX4R7N2'])
-    return jsonify({"container_id": container_id, "tags": tags})
+    return jsonify({"container_id": container_id, "tags": tags, "source": "mock"})
 
 
 @app.route("/api/connectors/google-tag-manager/triggers", methods=["GET"])
 def gtm_triggers():
     container_id = request.args.get('container_id', 'GTM-WX4R7N2')
+    payload, gw = _gtm_gateway_fetch([
+        "/api/connectors/google-tag-manager/triggers",
+        "/api/connectors/gtm/triggers",
+        "/api/connectors/tagmanager/triggers",
+    ], params={"container_id": container_id, "containerId": container_id}, timeout=25)
+    if payload is not None:
+        triggers = _gtm_list_from_payload(payload, ["triggers", "trigger", "items", "results"])
+        if isinstance(triggers, list):
+            return jsonify({"container_id": container_id, "triggers": triggers, "source": "coolbits", "gateway": gw})
     triggers = GTM_MOCK_TRIGGERS.get(container_id, GTM_MOCK_TRIGGERS['GTM-WX4R7N2'])
-    return jsonify({"container_id": container_id, "triggers": triggers})
+    return jsonify({"container_id": container_id, "triggers": triggers, "source": "mock"})
 
 
 @app.route("/api/connectors/google-tag-manager/variables", methods=["GET"])
 def gtm_variables():
     container_id = request.args.get('container_id', 'GTM-WX4R7N2')
+    payload, gw = _gtm_gateway_fetch([
+        "/api/connectors/google-tag-manager/variables",
+        "/api/connectors/gtm/variables",
+        "/api/connectors/tagmanager/variables",
+    ], params={"container_id": container_id, "containerId": container_id}, timeout=25)
+    if payload is not None:
+        variables = _gtm_list_from_payload(payload, ["variables", "variable", "items", "results"])
+        if isinstance(variables, list):
+            return jsonify({"container_id": container_id, "variables": variables, "source": "coolbits", "gateway": gw})
     variables = GTM_MOCK_VARIABLES.get(container_id, GTM_MOCK_VARIABLES['GTM-WX4R7N2'])
-    return jsonify({"container_id": container_id, "variables": variables})
+    return jsonify({"container_id": container_id, "variables": variables, "source": "mock"})
 
 
 @app.route("/api/connectors/google-tag-manager/versions", methods=["GET"])
 def gtm_versions():
     container_id = request.args.get('container_id', 'GTM-WX4R7N2')
+    payload, gw = _gtm_gateway_fetch([
+        "/api/connectors/google-tag-manager/versions",
+        "/api/connectors/gtm/versions",
+        "/api/connectors/tagmanager/versions",
+    ], params={"container_id": container_id, "containerId": container_id}, timeout=25)
+    if payload is not None:
+        versions = _gtm_list_from_payload(payload, ["versions", "containerVersion", "items", "results"])
+        if isinstance(versions, list):
+            return jsonify({"container_id": container_id, "versions": versions, "source": "coolbits", "gateway": gw})
     versions = GTM_MOCK_VERSIONS.get(container_id, GTM_MOCK_VERSIONS['GTM-WX4R7N2'])
-    return jsonify({"container_id": container_id, "versions": versions})
+    return jsonify({"container_id": container_id, "versions": versions, "source": "mock"})
 
 
 @app.route("/api/connectors/google-tag-manager/preview", methods=["GET"])
 def gtm_preview():
-    return jsonify({"events": GTM_MOCK_PREVIEW_EVENTS, "mode": "Preview", "debug": True, "container": "GTM-WX4R7N2"})
+    container_id = request.args.get('container_id', 'GTM-WX4R7N2')
+    payload, gw = _gtm_gateway_fetch([
+        "/api/connectors/google-tag-manager/preview",
+        "/api/connectors/gtm/preview",
+        "/api/connectors/tagmanager/preview",
+    ], params={"container_id": container_id, "containerId": container_id}, timeout=20)
+    if payload is not None:
+        events = _gtm_list_from_payload(payload, ["events", "items", "results"])
+        if isinstance(events, list):
+            return jsonify({
+                "events": events,
+                "mode": str((payload or {}).get("mode") or "Preview"),
+                "debug": bool((payload or {}).get("debug", True)),
+                "container": str((payload or {}).get("container") or container_id),
+                "source": "coolbits",
+                "gateway": gw,
+            })
+    return jsonify({"events": GTM_MOCK_PREVIEW_EVENTS, "mode": "Preview", "debug": True, "container": container_id, "source": "mock"})
 
 
 @app.route("/api/connectors/google-tag-manager/test-call", methods=["POST"])
@@ -9058,7 +21128,130 @@ def gtm_test_call():
             "body": response_body
         },
         "latency_ms": elapsed,
-        "quota": {"operations_remaining": 970, "daily_limit": 1000}
+        "quota": {"operations_remaining": 970, "daily_limit": 1000},
+        "source": "mock",
+    })
+
+
+# ─── Additional Google Connectors: Overview APIs (MVP) ──────────────────────
+@app.route("/api/connectors/google-business-profile/overview", methods=["GET"])
+def google_business_profile_overview():
+    return jsonify({
+        "account_name": "Camarad HQ",
+        "locations_total": 3,
+        "locations_verified": 3,
+        "reviews_total": 428,
+        "avg_rating": 4.7,
+        "unanswered_reviews": 6,
+        "calls_30d": 184,
+        "website_clicks_30d": 1293,
+        "direction_requests_30d": 412,
+        "top_locations": [
+            {"name": "Camarad Bucharest", "rating": 4.8, "reviews": 243},
+            {"name": "Camarad Cluj", "rating": 4.6, "reviews": 121},
+            {"name": "Camarad Iasi", "rating": 4.5, "reviews": 64},
+        ],
+        "source": "mock",
+    })
+
+
+@app.route("/api/connectors/google-merchant-center/overview", methods=["GET"])
+def google_merchant_center_overview():
+    return jsonify({
+        "account_id": "MC-2049381",
+        "products_total": 1256,
+        "products_active": 1188,
+        "products_pending": 32,
+        "products_disapproved": 36,
+        "issues_critical": 4,
+        "issues_warning": 17,
+        "clicks_30d": 18234,
+        "impressions_30d": 412908,
+        "ctr_30d": 4.42,
+        "top_issues": [
+            {"issue": "Missing GTIN", "affected_products": 14},
+            {"issue": "Image too small", "affected_products": 11},
+            {"issue": "Price mismatch", "affected_products": 7},
+        ],
+        "source": "mock",
+    })
+
+
+@app.route("/api/connectors/google-calendar/overview", methods=["GET"])
+def google_calendar_overview():
+    return jsonify({
+        "calendars_total": 4,
+        "primary_calendar": "andrei@camarad.ai",
+        "events_today": 6,
+        "events_week": 19,
+        "next_event": {
+            "title": "Connector sync review",
+            "start": "2026-02-21T16:00:00+02:00",
+            "attendees": 5,
+        },
+        "busy_slots_today": [
+            {"start": "10:00", "end": "10:30"},
+            {"start": "12:00", "end": "13:00"},
+            {"start": "16:00", "end": "16:45"},
+        ],
+        "source": "mock",
+    })
+
+
+@app.route("/api/connectors/google-drive/overview", methods=["GET"])
+def google_drive_overview():
+    return jsonify({
+        "files_total": 8742,
+        "docs_total": 1240,
+        "sheets_total": 386,
+        "slides_total": 92,
+        "shared_with_me": 519,
+        "storage_used_gb": 12.4,
+        "storage_limit_gb": 100.0,
+        "recent_files": [
+            {"name": "Q1 Growth Plan", "type": "document", "updated_at": "2026-02-21T10:18:00Z"},
+            {"name": "Ads Budget Tracker", "type": "spreadsheet", "updated_at": "2026-02-21T09:44:00Z"},
+            {"name": "Weekly Ops Notes", "type": "document", "updated_at": "2026-02-20T17:21:00Z"},
+        ],
+        "source": "mock",
+    })
+
+
+@app.route("/api/connectors/google-cloud-platform/overview", methods=["GET"])
+def google_cloud_platform_overview():
+    return jsonify({
+        "projects_total": 5,
+        "active_projects": 4,
+        "services_enabled": 37,
+        "monthly_spend_usd": 842.55,
+        "budget_limit_usd": 1500.0,
+        "budget_utilization": 56.2,
+        "alerts_open": 2,
+        "top_services": [
+            {"service": "Cloud Run", "cost_usd": 311.2},
+            {"service": "Cloud SQL", "cost_usd": 226.5},
+            {"service": "Cloud Storage", "cost_usd": 108.1},
+        ],
+        "source": "mock",
+    })
+
+
+@app.route("/api/connectors/google-gemini/overview", methods=["GET"])
+@app.route("/api/connectors/google-gemini-ai/overview", methods=["GET"])
+def google_gemini_overview():
+    return jsonify({
+        "models_available": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+        "requests_24h": 2831,
+        "tokens_in_24h": 1423000,
+        "tokens_out_24h": 428900,
+        "avg_latency_ms": 812,
+        "error_rate_pct": 0.7,
+        "top_use_cases": [
+            {"name": "ad_copy_generation", "requests": 963},
+            {"name": "seo_briefing", "requests": 711},
+            {"name": "email_drafts", "requests": 482},
+        ],
+        "source": "mock",
     })
 
 
@@ -9818,55 +22011,55 @@ STRIPE_MOCK_OVERVIEW = {
             {"month": "2026-02", "mrr": 4812},
         ],
         "revenue_by_product": [
-            {"product": "Pro Monthly", "revenue": 3920, "subscribers": 80, "pct": 43},
-            {"product": "Basic Monthly", "revenue": 892, "subscribers": 89, "pct": 10},
-            {"product": "Pro Annual", "revenue": 5880, "subscribers": 42, "pct": 34},
-            {"product": "Enterprise", "revenue": 3544, "subscribers": 20, "pct": 13},
+            {"product": "Personal Monthly", "revenue": 2480, "subscribers": 40, "pct": 26},
+            {"product": "Personal Yearly", "revenue": 1996, "subscribers": 4, "pct": 21},
+            {"product": "Business Monthly", "revenue": 2831, "subscribers": 19, "pct": 29},
+            {"product": "Agency Monthly", "revenue": 2388, "subscribers": 12, "pct": 24},
         ],
     }
 }
 
 STRIPE_MOCK_SUBSCRIPTIONS = [
-    {"sub_id": "sub_1N3abc001", "customer_id": "cus_Q1a001", "customer_email": "john@techstart.com", "plan": "Pro Monthly", "amount": 49.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-01-07", "current_period_end": "2026-02-07", "created": "2025-06-15", "cancel_at_period_end": False},
-    {"sub_id": "sub_1N3abc002", "customer_id": "cus_Q1a002", "customer_email": "sarah@designhub.io", "plan": "Pro Annual", "amount": 468.00, "currency": "USD", "status": "active", "interval": "year", "current_period_start": "2025-08-01", "current_period_end": "2026-08-01", "created": "2025-08-01", "cancel_at_period_end": False},
-    {"sub_id": "sub_1N3abc003", "customer_id": "cus_Q1a003", "customer_email": "mike@acmecorp.com", "plan": "Enterprise", "amount": 199.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-01-15", "current_period_end": "2026-02-15", "created": "2025-09-20", "cancel_at_period_end": False},
-    {"sub_id": "sub_1N3abc004", "customer_id": "cus_Q1a004", "customer_email": "lisa@startup.co", "plan": "Basic Monthly", "amount": 9.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-02-01", "current_period_end": "2026-03-01", "created": "2026-01-01", "cancel_at_period_end": False},
-    {"sub_id": "sub_1N3abc005", "customer_id": "cus_Q1a005", "customer_email": "alex@bigcorp.com", "plan": "Pro Monthly", "amount": 49.00, "currency": "USD", "status": "trialing", "interval": "month", "current_period_start": "2026-02-01", "current_period_end": "2026-02-14", "created": "2026-02-01", "cancel_at_period_end": False},
-    {"sub_id": "sub_1N3abc006", "customer_id": "cus_Q1a006", "customer_email": "nina@freelance.dev", "plan": "Pro Monthly", "amount": 49.00, "currency": "USD", "status": "canceled", "interval": "month", "current_period_start": "2026-01-05", "current_period_end": "2026-02-05", "created": "2025-11-05", "cancel_at_period_end": True},
-    {"sub_id": "sub_1N3abc007", "customer_id": "cus_Q1a007", "customer_email": "tom@agency.io", "plan": "Enterprise", "amount": 199.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-01-20", "current_period_end": "2026-02-20", "created": "2025-10-20", "cancel_at_period_end": False},
-    {"sub_id": "sub_1N3abc008", "customer_id": "cus_Q1a008", "customer_email": "emma@consultfirm.com", "plan": "Pro Annual", "amount": 468.00, "currency": "USD", "status": "past_due", "interval": "year", "current_period_start": "2025-12-01", "current_period_end": "2026-12-01", "created": "2025-12-01", "cancel_at_period_end": False},
-    {"sub_id": "sub_1N3abc009", "customer_id": "cus_Q1a009", "customer_email": "dave@devshop.net", "plan": "Basic Monthly", "amount": 9.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-02-03", "current_period_end": "2026-03-03", "created": "2025-07-03", "cancel_at_period_end": False},
-    {"sub_id": "sub_1N3abc010", "customer_id": "cus_Q1a010", "customer_email": "olivia@marketinghq.com", "plan": "Pro Monthly", "amount": 49.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-01-28", "current_period_end": "2026-02-28", "created": "2025-04-28", "cancel_at_period_end": False},
-    {"sub_id": "sub_1N3abc011", "customer_id": "cus_Q1a011", "customer_email": "brad@ecommerce.store", "plan": "Enterprise", "amount": 199.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-02-01", "current_period_end": "2026-03-01", "created": "2025-05-01", "cancel_at_period_end": False},
-    {"sub_id": "sub_1N3abc012", "customer_id": "cus_Q1a012", "customer_email": "grace@analytics.co", "plan": "Basic Monthly", "amount": 9.00, "currency": "USD", "status": "canceled", "interval": "month", "current_period_start": "2026-01-10", "current_period_end": "2026-02-10", "created": "2025-08-10", "cancel_at_period_end": True},
+    {"sub_id": "sub_1N3abc001", "customer_id": "cus_Q1a001", "customer_email": "john@techstart.com", "plan": "Personal Monthly", "amount": 62.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-01-07", "current_period_end": "2026-02-07", "created": "2025-06-15", "cancel_at_period_end": False},
+    {"sub_id": "sub_1N3abc002", "customer_id": "cus_Q1a002", "customer_email": "sarah@designhub.io", "plan": "Business Yearly", "amount": 1499.00, "currency": "USD", "status": "active", "interval": "year", "current_period_start": "2025-08-01", "current_period_end": "2026-08-01", "created": "2025-08-01", "cancel_at_period_end": False},
+    {"sub_id": "sub_1N3abc003", "customer_id": "cus_Q1a003", "customer_email": "mike@acmecorp.com", "plan": "Agency Monthly", "amount": 199.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-01-15", "current_period_end": "2026-02-15", "created": "2025-09-20", "cancel_at_period_end": False},
+    {"sub_id": "sub_1N3abc004", "customer_id": "cus_Q1a004", "customer_email": "lisa@startup.co", "plan": "Personal Monthly", "amount": 62.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-02-01", "current_period_end": "2026-03-01", "created": "2026-01-01", "cancel_at_period_end": False},
+    {"sub_id": "sub_1N3abc005", "customer_id": "cus_Q1a005", "customer_email": "alex@bigcorp.com", "plan": "Business Monthly", "amount": 149.00, "currency": "USD", "status": "trialing", "interval": "month", "current_period_start": "2026-02-01", "current_period_end": "2026-02-14", "created": "2026-02-01", "cancel_at_period_end": False},
+    {"sub_id": "sub_1N3abc006", "customer_id": "cus_Q1a006", "customer_email": "nina@freelance.dev", "plan": "Business Monthly", "amount": 149.00, "currency": "USD", "status": "canceled", "interval": "month", "current_period_start": "2026-01-05", "current_period_end": "2026-02-05", "created": "2025-11-05", "cancel_at_period_end": True},
+    {"sub_id": "sub_1N3abc007", "customer_id": "cus_Q1a007", "customer_email": "tom@agency.io", "plan": "Agency Monthly", "amount": 199.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-01-20", "current_period_end": "2026-02-20", "created": "2025-10-20", "cancel_at_period_end": False},
+    {"sub_id": "sub_1N3abc008", "customer_id": "cus_Q1a008", "customer_email": "emma@consultfirm.com", "plan": "Business Yearly", "amount": 1499.00, "currency": "USD", "status": "past_due", "interval": "year", "current_period_start": "2025-12-01", "current_period_end": "2026-12-01", "created": "2025-12-01", "cancel_at_period_end": False},
+    {"sub_id": "sub_1N3abc009", "customer_id": "cus_Q1a009", "customer_email": "dave@devshop.net", "plan": "Personal Monthly", "amount": 62.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-02-03", "current_period_end": "2026-03-03", "created": "2025-07-03", "cancel_at_period_end": False},
+    {"sub_id": "sub_1N3abc010", "customer_id": "cus_Q1a010", "customer_email": "olivia@marketinghq.com", "plan": "Business Monthly", "amount": 149.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-01-28", "current_period_end": "2026-02-28", "created": "2025-04-28", "cancel_at_period_end": False},
+    {"sub_id": "sub_1N3abc011", "customer_id": "cus_Q1a011", "customer_email": "brad@ecommerce.store", "plan": "Agency Monthly", "amount": 199.00, "currency": "USD", "status": "active", "interval": "month", "current_period_start": "2026-02-01", "current_period_end": "2026-03-01", "created": "2025-05-01", "cancel_at_period_end": False},
+    {"sub_id": "sub_1N3abc012", "customer_id": "cus_Q1a012", "customer_email": "grace@analytics.co", "plan": "Personal Yearly", "amount": 499.00, "currency": "USD", "status": "canceled", "interval": "year", "current_period_start": "2026-01-10", "current_period_end": "2027-01-10", "created": "2025-08-10", "cancel_at_period_end": True},
 ]
 
 STRIPE_MOCK_PAYMENTS = [
-    {"payment_id": "ch_3P1abc001", "amount": 49.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a001", "customer_email": "john@techstart.com", "description": "Pro Monthly subscription", "created": "2026-02-07T09:15:00", "payment_method": "card", "card_last4": "4242"},
-    {"payment_id": "ch_3P1abc002", "amount": 199.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a003", "customer_email": "mike@acmecorp.com", "description": "Enterprise subscription", "created": "2026-02-06T14:30:00", "payment_method": "card", "card_last4": "5555"},
-    {"payment_id": "ch_3P1abc003", "amount": 468.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a002", "customer_email": "sarah@designhub.io", "description": "Pro Annual subscription", "created": "2026-02-05T11:00:00", "payment_method": "card", "card_last4": "1234"},
-    {"payment_id": "ch_3P1abc004", "amount": 49.00, "currency": "USD", "status": "refunded", "customer_id": "cus_Q1a006", "customer_email": "nina@freelance.dev", "description": "Pro Monthly — refund", "created": "2026-02-05T08:45:00", "payment_method": "card", "card_last4": "9876"},
-    {"payment_id": "ch_3P1abc005", "amount": 9.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a004", "customer_email": "lisa@startup.co", "description": "Basic Monthly subscription", "created": "2026-02-04T16:20:00", "payment_method": "card", "card_last4": "0000"},
-    {"payment_id": "ch_3P1abc006", "amount": 199.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a007", "customer_email": "tom@agency.io", "description": "Enterprise subscription", "created": "2026-02-03T10:00:00", "payment_method": "card", "card_last4": "3333"},
-    {"payment_id": "ch_3P1abc007", "amount": 49.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a010", "customer_email": "olivia@marketinghq.com", "description": "Pro Monthly subscription", "created": "2026-02-02T13:30:00", "payment_method": "card", "card_last4": "7777"},
-    {"payment_id": "ch_3P1abc008", "amount": 468.00, "currency": "USD", "status": "failed", "customer_id": "cus_Q1a008", "customer_email": "emma@consultfirm.com", "description": "Pro Annual — payment failed", "created": "2026-02-01T09:00:00", "payment_method": "card", "card_last4": "6666"},
-    {"payment_id": "ch_3P1abc009", "amount": 199.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a011", "customer_email": "brad@ecommerce.store", "description": "Enterprise subscription", "created": "2026-02-01T07:00:00", "payment_method": "card", "card_last4": "8888"},
-    {"payment_id": "ch_3P1abc010", "amount": 9.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a009", "customer_email": "dave@devshop.net", "description": "Basic Monthly subscription", "created": "2026-01-31T15:45:00", "payment_method": "card", "card_last4": "2222"},
+    {"payment_id": "ch_3P1abc001", "amount": 62.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a001", "customer_email": "john@techstart.com", "description": "Personal Monthly subscription", "created": "2026-02-07T09:15:00", "payment_method": "card", "card_last4": "4242"},
+    {"payment_id": "ch_3P1abc002", "amount": 199.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a003", "customer_email": "mike@acmecorp.com", "description": "Agency Monthly subscription", "created": "2026-02-06T14:30:00", "payment_method": "card", "card_last4": "5555"},
+    {"payment_id": "ch_3P1abc003", "amount": 1499.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a002", "customer_email": "sarah@designhub.io", "description": "Business Yearly subscription", "created": "2026-02-05T11:00:00", "payment_method": "card", "card_last4": "1234"},
+    {"payment_id": "ch_3P1abc004", "amount": 149.00, "currency": "USD", "status": "refunded", "customer_id": "cus_Q1a006", "customer_email": "nina@freelance.dev", "description": "Business Monthly — refund", "created": "2026-02-05T08:45:00", "payment_method": "card", "card_last4": "9876"},
+    {"payment_id": "ch_3P1abc005", "amount": 62.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a004", "customer_email": "lisa@startup.co", "description": "Personal Monthly subscription", "created": "2026-02-04T16:20:00", "payment_method": "card", "card_last4": "0000"},
+    {"payment_id": "ch_3P1abc006", "amount": 199.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a007", "customer_email": "tom@agency.io", "description": "Agency Monthly subscription", "created": "2026-02-03T10:00:00", "payment_method": "card", "card_last4": "3333"},
+    {"payment_id": "ch_3P1abc007", "amount": 149.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a010", "customer_email": "olivia@marketinghq.com", "description": "Business Monthly subscription", "created": "2026-02-02T13:30:00", "payment_method": "card", "card_last4": "7777"},
+    {"payment_id": "ch_3P1abc008", "amount": 1499.00, "currency": "USD", "status": "failed", "customer_id": "cus_Q1a008", "customer_email": "emma@consultfirm.com", "description": "Business Yearly — payment failed", "created": "2026-02-01T09:00:00", "payment_method": "card", "card_last4": "6666"},
+    {"payment_id": "ch_3P1abc009", "amount": 199.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a011", "customer_email": "brad@ecommerce.store", "description": "Agency Monthly subscription", "created": "2026-02-01T07:00:00", "payment_method": "card", "card_last4": "8888"},
+    {"payment_id": "ch_3P1abc010", "amount": 499.00, "currency": "USD", "status": "succeeded", "customer_id": "cus_Q1a012", "customer_email": "grace@analytics.co", "description": "Personal Yearly subscription", "created": "2026-01-31T15:45:00", "payment_method": "card", "card_last4": "2222"},
 ]
 
 STRIPE_MOCK_CUSTOMERS = [
-    {"customer_id": "cus_Q1a001", "email": "john@techstart.com", "name": "John Mitchell", "created": "2025-06-15", "status": "active", "ltv": 490.00, "total_spent": 490.00, "subscriptions": 1, "plan": "Pro Monthly", "country": "US"},
-    {"customer_id": "cus_Q1a002", "email": "sarah@designhub.io", "name": "Sarah Chen", "created": "2025-08-01", "status": "active", "ltv": 468.00, "total_spent": 468.00, "subscriptions": 1, "plan": "Pro Annual", "country": "US"},
-    {"customer_id": "cus_Q1a003", "email": "mike@acmecorp.com", "name": "Mike Rodriguez", "created": "2025-09-20", "status": "active", "ltv": 995.00, "total_spent": 995.00, "subscriptions": 1, "plan": "Enterprise", "country": "US"},
-    {"customer_id": "cus_Q1a004", "email": "lisa@startup.co", "name": "Lisa Park", "created": "2026-01-01", "status": "active", "ltv": 18.00, "total_spent": 18.00, "subscriptions": 1, "plan": "Basic Monthly", "country": "CA"},
-    {"customer_id": "cus_Q1a005", "email": "alex@bigcorp.com", "name": "Alex Thompson", "created": "2026-02-01", "status": "trialing", "ltv": 0, "total_spent": 0, "subscriptions": 1, "plan": "Pro Monthly", "country": "US"},
-    {"customer_id": "cus_Q1a006", "email": "nina@freelance.dev", "name": "Nina Kowalski", "created": "2025-11-05", "status": "canceled", "ltv": 147.00, "total_spent": 147.00, "subscriptions": 0, "plan": "Pro Monthly", "country": "DE"},
-    {"customer_id": "cus_Q1a007", "email": "tom@agency.io", "name": "Tom Barnes", "created": "2025-10-20", "status": "active", "ltv": 796.00, "total_spent": 796.00, "subscriptions": 1, "plan": "Enterprise", "country": "UK"},
-    {"customer_id": "cus_Q1a008", "email": "emma@consultfirm.com", "name": "Emma Davis", "created": "2025-12-01", "status": "past_due", "ltv": 468.00, "total_spent": 468.00, "subscriptions": 1, "plan": "Pro Annual", "country": "US"},
-    {"customer_id": "cus_Q1a009", "email": "dave@devshop.net", "name": "Dave Wilson", "created": "2025-07-03", "status": "active", "ltv": 63.00, "total_spent": 63.00, "subscriptions": 1, "plan": "Basic Monthly", "country": "US"},
-    {"customer_id": "cus_Q1a010", "email": "olivia@marketinghq.com", "name": "Olivia Martinez", "created": "2025-04-28", "status": "active", "ltv": 490.00, "total_spent": 490.00, "subscriptions": 1, "plan": "Pro Monthly", "country": "US"},
-    {"customer_id": "cus_Q1a011", "email": "brad@ecommerce.store", "name": "Brad Johnson", "created": "2025-05-01", "status": "active", "ltv": 1791.00, "total_spent": 1791.00, "subscriptions": 1, "plan": "Enterprise", "country": "US"},
-    {"customer_id": "cus_Q1a012", "email": "grace@analytics.co", "name": "Grace Kim", "created": "2025-08-10", "status": "canceled", "ltv": 54.00, "total_spent": 54.00, "subscriptions": 0, "plan": "Basic Monthly", "country": "KR"},
+    {"customer_id": "cus_Q1a001", "email": "john@techstart.com", "name": "John Mitchell", "created": "2025-06-15", "status": "active", "ltv": 620.00, "total_spent": 620.00, "subscriptions": 1, "plan": "Personal Monthly", "country": "US"},
+    {"customer_id": "cus_Q1a002", "email": "sarah@designhub.io", "name": "Sarah Chen", "created": "2025-08-01", "status": "active", "ltv": 1499.00, "total_spent": 1499.00, "subscriptions": 1, "plan": "Business Yearly", "country": "US"},
+    {"customer_id": "cus_Q1a003", "email": "mike@acmecorp.com", "name": "Mike Rodriguez", "created": "2025-09-20", "status": "active", "ltv": 995.00, "total_spent": 995.00, "subscriptions": 1, "plan": "Agency Monthly", "country": "US"},
+    {"customer_id": "cus_Q1a004", "email": "lisa@startup.co", "name": "Lisa Park", "created": "2026-01-01", "status": "active", "ltv": 124.00, "total_spent": 124.00, "subscriptions": 1, "plan": "Personal Monthly", "country": "CA"},
+    {"customer_id": "cus_Q1a005", "email": "alex@bigcorp.com", "name": "Alex Thompson", "created": "2026-02-01", "status": "trialing", "ltv": 0, "total_spent": 0, "subscriptions": 1, "plan": "Business Monthly", "country": "US"},
+    {"customer_id": "cus_Q1a006", "email": "nina@freelance.dev", "name": "Nina Kowalski", "created": "2025-11-05", "status": "canceled", "ltv": 447.00, "total_spent": 447.00, "subscriptions": 0, "plan": "Business Monthly", "country": "DE"},
+    {"customer_id": "cus_Q1a007", "email": "tom@agency.io", "name": "Tom Barnes", "created": "2025-10-20", "status": "active", "ltv": 796.00, "total_spent": 796.00, "subscriptions": 1, "plan": "Agency Monthly", "country": "UK"},
+    {"customer_id": "cus_Q1a008", "email": "emma@consultfirm.com", "name": "Emma Davis", "created": "2025-12-01", "status": "past_due", "ltv": 1499.00, "total_spent": 1499.00, "subscriptions": 1, "plan": "Business Yearly", "country": "US"},
+    {"customer_id": "cus_Q1a009", "email": "dave@devshop.net", "name": "Dave Wilson", "created": "2025-07-03", "status": "active", "ltv": 186.00, "total_spent": 186.00, "subscriptions": 1, "plan": "Personal Monthly", "country": "US"},
+    {"customer_id": "cus_Q1a010", "email": "olivia@marketinghq.com", "name": "Olivia Martinez", "created": "2025-04-28", "status": "active", "ltv": 1490.00, "total_spent": 1490.00, "subscriptions": 1, "plan": "Business Monthly", "country": "US"},
+    {"customer_id": "cus_Q1a011", "email": "brad@ecommerce.store", "name": "Brad Johnson", "created": "2025-05-01", "status": "active", "ltv": 1791.00, "total_spent": 1791.00, "subscriptions": 1, "plan": "Agency Monthly", "country": "US"},
+    {"customer_id": "cus_Q1a012", "email": "grace@analytics.co", "name": "Grace Kim", "created": "2025-08-10", "status": "canceled", "ltv": 499.00, "total_spent": 499.00, "subscriptions": 0, "plan": "Personal Yearly", "country": "KR"},
 ]
 
 STRIPE_MOCK_BUDGET_PACING = {
@@ -9885,10 +22078,10 @@ STRIPE_MOCK_BUDGET_PACING = {
         "monthly_burn": 8200,
         "cash_balance": 147600,
         "products": [
-            {"name": "Pro Monthly", "goal": 5000, "current": 3920, "pacing": "ON_TRACK", "daily_avg": 560.00},
-            {"name": "Basic Monthly", "goal": 1500, "current": 892, "pacing": "UNDERPACING", "daily_avg": 127.43},
-            {"name": "Pro Annual", "goal": 7000, "current": 5880, "pacing": "AHEAD", "daily_avg": 840.00},
-            {"name": "Enterprise", "goal": 4500, "current": 3544, "pacing": "ON_TRACK", "daily_avg": 506.29},
+            {"name": "Personal Monthly", "goal": 3200, "current": 2480, "pacing": "ON_TRACK", "daily_avg": 354.29},
+            {"name": "Personal Yearly", "goal": 2400, "current": 1996, "pacing": "AHEAD", "daily_avg": 285.14},
+            {"name": "Business Monthly", "goal": 3400, "current": 2831, "pacing": "ON_TRACK", "daily_avg": 404.43},
+            {"name": "Agency Monthly", "goal": 3000, "current": 2388, "pacing": "ON_TRACK", "daily_avg": 341.14},
         ]
     }
 }
@@ -9924,7 +22117,7 @@ def _stripe_billing_summary():
 
 
 def _stripe_currency_from_summary(summary):
-    return "EUR"
+    return "USD"
 
 
 def _stripe_account_id_from_summary(summary):
@@ -9961,7 +22154,7 @@ def _stripe_overview_from_summary(summary):
     price = plan.get("price") if isinstance(plan.get("price"), dict) else {}
     stripe = summary.get("stripe") if isinstance(summary.get("stripe"), dict) else {}
     usage = summary.get("usage") if isinstance(summary.get("usage"), dict) else {}
-    mrr = _amount_to_eur(price.get("amount") or 0, price.get("currency"))
+    mrr = _amount_to_usd(price.get("amount") or 0, price.get("currency"))
     arr = round(mrr * 12, 2)
     status = str(stripe.get("status") or "").strip().lower()
     has_sub = status in ("active", "trialing", "past_due", "incomplete")
@@ -10022,7 +22215,7 @@ def _stripe_subscriptions_from_summary(summary):
         "customer_id": customer_id,
         "customer_email": COOLBITS_GATEWAY_EMAIL,
         "plan": str(plan.get("label") or "Plan"),
-        "amount": _amount_to_eur(price.get("amount") or 0, price.get("currency")),
+        "amount": _amount_to_usd(price.get("amount") or 0, price.get("currency")),
         "currency": _stripe_currency_from_summary(summary),
         "status": status or "active",
         "interval": str((price.get("interval") or "month")).strip().lower() or "month",
@@ -10040,7 +22233,7 @@ def _stripe_customers_from_summary(summary):
     price = plan.get("price") if isinstance(plan.get("price"), dict) else {}
     stripe = summary.get("stripe") if isinstance(summary.get("stripe"), dict) else {}
     customer_id = _stripe_account_id_from_summary(summary)
-    amount = _amount_to_eur(price.get("amount") or 0, price.get("currency"))
+    amount = _amount_to_usd(price.get("amount") or 0, price.get("currency"))
     status = str(stripe.get("status") or "inactive").strip().lower() or "inactive"
     return [{
         "customer_id": customer_id,
@@ -10062,7 +22255,7 @@ def _stripe_payments_from_summary(summary):
     plan = summary.get("plan") if isinstance(summary.get("plan"), dict) else {}
     price = plan.get("price") if isinstance(plan.get("price"), dict) else {}
     stripe = summary.get("stripe") if isinstance(summary.get("stripe"), dict) else {}
-    amount = _amount_to_eur(price.get("amount") or 0, price.get("currency"))
+    amount = _amount_to_usd(price.get("amount") or 0, price.get("currency"))
     if amount <= 0:
         return []
     status = str(stripe.get("status") or "").strip().lower()
@@ -10117,7 +22310,7 @@ def _stripe_report_rows_from_summary(summary):
         return []
     plan = summary.get("plan") if isinstance(summary.get("plan"), dict) else {}
     price = plan.get("price") if isinstance(plan.get("price"), dict) else {}
-    amount = _amount_to_eur(price.get("amount") or 0, price.get("currency"))
+    amount = _amount_to_usd(price.get("amount") or 0, price.get("currency"))
     if amount <= 0:
         return []
     from datetime import date, timedelta
@@ -10139,15 +22332,29 @@ def _stripe_report_rows_from_summary(summary):
     return rows
 
 
-def _billing_payload_to_eur(payload):
+def _billing_payload_to_usd(payload):
     if not isinstance(payload, dict):
         return payload
     out = copy.deepcopy(payload)
     plan = out.get("plan") if isinstance(out.get("plan"), dict) else None
-    if plan and isinstance(plan.get("price"), dict):
-        price = plan.get("price")
-        price["amount"] = _amount_to_eur(price.get("amount") or 0, price.get("currency"))
-        price["currency"] = "eur"
+    if plan is not None:
+        normalized_code = _normalize_plan_code(plan.get("code"))
+        normalized_interval = _normalize_plan_interval(((plan.get("price") or {}).get("interval")) if isinstance(plan.get("price"), dict) else None)
+        catalog_plan = _pricing_plan_entry(normalized_code)
+        if catalog_plan:
+            catalog_price = _pricing_plan_price(catalog_plan, normalized_interval)
+            plan["code"] = normalized_code
+            plan["label"] = str(catalog_plan.get("label") or normalized_code.title())
+            plan["price"] = {
+                "currency": str(catalog_price.get("currency") or "USD").lower(),
+                "amount": float(catalog_price.get("amount") or 0),
+                "interval": str(catalog_price.get("interval") or ("year" if normalized_interval == "yearly" else "month")),
+                "price_id": str(catalog_price.get("price_id") or ""),
+            }
+        elif isinstance(plan.get("price"), dict):
+            price = plan.get("price")
+            price["amount"] = _amount_to_usd(price.get("amount") or 0, price.get("currency"))
+            price["currency"] = "usd"
     return out
 
 
@@ -10164,8 +22371,6 @@ def _stripe_subscription_active(summary):
 
 def _apply_economy_preset(conn, user_id, preset_code):
     preset = _normalize_plan_code(preset_code)
-    if preset == "starter":
-        preset = "free"
     if preset not in VALID_ECONOMY_PRESETS:
         raise ValueError("invalid_preset")
     current = _load_user_settings(conn, user_id)
@@ -10211,20 +22416,20 @@ def stripe_overview():
     })
     mock_overview = dict(data)
     for k in ("mrr", "arr", "revenue_today", "revenue_this_month", "revenue_last_month", "net_revenue", "gross_volume", "refunds", "fees", "average_revenue_per_user", "lifetime_value", "cac", "monthly_burn", "cash_balance"):
-        mock_overview[k] = _amount_to_eur(mock_overview.get(k) or 0, "USD")
+        mock_overview[k] = _amount_to_usd(mock_overview.get(k) or 0, "USD")
     if isinstance(mock_overview.get("mrr_trend"), list):
         mock_overview["mrr_trend"] = [
-            {**m, "mrr": _amount_to_eur((m or {}).get("mrr") or 0, "USD")}
+            {**m, "mrr": _amount_to_usd((m or {}).get("mrr") or 0, "USD")}
             for m in mock_overview.get("mrr_trend")
             if isinstance(m, dict)
         ]
     if isinstance(mock_overview.get("revenue_by_product"), list):
         mock_overview["revenue_by_product"] = [
-            {**p, "revenue": _amount_to_eur((p or {}).get("revenue") or 0, "USD")}
+            {**p, "revenue": _amount_to_usd((p or {}).get("revenue") or 0, "USD")}
             for p in mock_overview.get("revenue_by_product")
             if isinstance(p, dict)
         ]
-    return jsonify({"account_id": acct, "overview": mock_overview, "source": "mock", "currency": "EUR"})
+    return jsonify({"account_id": acct, "overview": mock_overview, "source": "mock", "currency": "USD"})
 
 
 @app.route("/api/connectors/stripe/subscriptions", methods=["GET"])
@@ -10234,7 +22439,7 @@ def stripe_subscriptions():
     plan = request.args.get("plan", "")
     summary, gw = _stripe_billing_summary()
     source = "mock"
-    subs = _stripe_subscriptions_to_eur(STRIPE_MOCK_SUBSCRIPTIONS)
+    subs = _stripe_subscriptions_to_usd(STRIPE_MOCK_SUBSCRIPTIONS)
     if summary is not None:
         source = "coolbits"
         subs = _stripe_subscriptions_from_summary(summary)
@@ -10254,7 +22459,7 @@ def stripe_payments():
     status = request.args.get("status", "")
     summary, gw = _stripe_billing_summary()
     source = "mock"
-    payments = _stripe_payments_to_eur(STRIPE_MOCK_PAYMENTS)
+    payments = _stripe_payments_to_usd(STRIPE_MOCK_PAYMENTS)
     if summary is not None:
         source = "coolbits"
         payments = _stripe_payments_from_summary(summary)
@@ -10299,19 +22504,19 @@ def stripe_budget_pacing():
     data = STRIPE_MOCK_BUDGET_PACING.get(acct, STRIPE_MOCK_BUDGET_PACING["acct_1J7xQR2eZvKYlo2C"])
     pacing = dict(data)
     for k in ("monthly_revenue_goal", "current_revenue", "projected_revenue", "daily_run_rate", "needed_daily_rate", "monthly_burn", "cash_balance"):
-        pacing[k] = _amount_to_eur(pacing.get(k) or 0, "USD")
+        pacing[k] = _amount_to_usd(pacing.get(k) or 0, "USD")
     if isinstance(pacing.get("products"), list):
         pacing["products"] = [
             {
                 **p,
-                "goal": _amount_to_eur((p or {}).get("goal") or 0, "USD"),
-                "current": _amount_to_eur((p or {}).get("current") or 0, "USD"),
-                "daily_avg": _amount_to_eur((p or {}).get("daily_avg") or 0, "USD"),
+                "goal": _amount_to_usd((p or {}).get("goal") or 0, "USD"),
+                "current": _amount_to_usd((p or {}).get("current") or 0, "USD"),
+                "daily_avg": _amount_to_usd((p or {}).get("daily_avg") or 0, "USD"),
             }
             for p in pacing.get("products")
             if isinstance(p, dict)
         ]
-    return jsonify({"account_id": acct, "pacing": pacing, "source": "mock", "currency": "EUR"})
+    return jsonify({"account_id": acct, "pacing": pacing, "source": "mock", "currency": "USD"})
 
 
 @app.route("/api/connectors/stripe/reports", methods=["GET"])
@@ -10328,9 +22533,9 @@ def stripe_reports():
             return jsonify({"account_id": live_acct, "rows": rows, "total_rows": len(rows), "source": "coolbits", "gateway": gw})
     rows = []
     base = datetime.date(2026, 1, 1)
-    plans = ["Pro Monthly", "Basic Monthly", "Pro Annual", "Enterprise"]
-    plan_mrrs = {"Pro Monthly": 3920, "Basic Monthly": 892, "Pro Annual": 5880, "Enterprise": 3544}
-    plan_subs = {"Pro Monthly": 80, "Basic Monthly": 89, "Pro Annual": 42, "Enterprise": 20}
+    plans = ["Personal Monthly", "Personal Yearly", "Business Monthly", "Agency Monthly"]
+    plan_mrrs = {"Personal Monthly": 2480, "Personal Yearly": 1996, "Business Monthly": 2831, "Agency Monthly": 2388}
+    plan_subs = {"Personal Monthly": 40, "Personal Yearly": 4, "Business Monthly": 19, "Agency Monthly": 12}
     for i in range(31):
         d = base + datetime.timedelta(days=i)
         for plan in plans:
@@ -10350,15 +22555,15 @@ def stripe_reports():
                 "refunds": round(daily_rev * random.uniform(0, 0.05), 2),
                 "net_revenue": round(daily_rev * 0.97, 2),
             })
-    rows_eur = []
+    rows_usd = []
     for r in rows:
         if not isinstance(r, dict):
             continue
         x = dict(r)
         for k in ("revenue", "refunds", "net_revenue"):
-            x[k] = _amount_to_eur(x.get(k) or 0, "USD")
-        rows_eur.append(x)
-    return jsonify({"account_id": acct, "rows": rows_eur, "total_rows": len(rows_eur), "source": "mock", "currency": "EUR"})
+            x[k] = _amount_to_usd(x.get(k) or 0, "USD")
+        rows_usd.append(x)
+    return jsonify({"account_id": acct, "rows": rows_usd, "total_rows": len(rows_usd), "source": "mock", "currency": "USD"})
 
 
 @app.route("/api/connectors/stripe/test-call", methods=["POST"])
@@ -13167,6 +25372,11 @@ def api_conversations():
                (SELECT content FROM messages WHERE conv_id = c.id ORDER BY timestamp DESC LIMIT 1) as last_message,
                (SELECT MAX(timestamp) FROM messages WHERE conv_id = c.id) as last_activity,
                (SELECT COUNT(*) FROM messages WHERE conv_id = c.id) as msg_count,
+               c.brief_objective,
+               c.brief_current_status,
+               c.brief_next_step,
+               c.brief_blocked_by,
+               c.brief_updated_at,
                ac.custom_name,
                ac.avatar_base64
         FROM conversations c
@@ -13199,7 +25409,7 @@ def api_conversations():
         if not ws_name:
             ws_name = ws_slug.replace("-", " ").title()
 
-        custom_name = (r[9] or "").strip() if len(r) > 9 else ""
+        custom_name = (r["custom_name"] or "").strip()
         try:
             default_agent_name = get_agent_name(ws_slug, agent_slug)
         except Exception:
@@ -13210,7 +25420,17 @@ def api_conversations():
 
         last_msg = (r[6] or "").strip()
         if len(last_msg) > 140:
-            last_msg = last_msg[:140] + "…"
+            last_msg = last_msg[:140] + "..."
+
+        brief = {
+            "objective": str(r["brief_objective"] or "").strip(),
+            "current_status": str(r["brief_current_status"] or "").strip(),
+            "next_step": str(r["brief_next_step"] or "").strip(),
+            "blocked_by": str(r["brief_blocked_by"] or "").strip(),
+            "updated_at": r["brief_updated_at"],
+        }
+        has_brief = any(brief.get(key) for key in ("objective", "current_status", "next_step", "blocked_by"))
+        brief_signal = _build_conversation_brief_signal(brief) if has_brief else None
 
         convs.append({
             "id": r[0],
@@ -13226,8 +25446,11 @@ def api_conversations():
             "last_message_at": r[7] or r[4],
             "msg_count": int(r[8] or 0),
             "unread": 0,
-            "has_photo": bool(r[10]),
-            "avatar_base64": r[10] or None,
+            "has_photo": bool(r["avatar_base64"]),
+            "avatar_base64": r["avatar_base64"] or None,
+            "has_brief": has_brief,
+            "brief": brief,
+            "brief_signal": brief_signal,
         })
 
     return jsonify(convs)
@@ -13360,6 +25583,46 @@ def api_conversation_messages(conv_id):
     messages = get_messages(conv_id)
     conn.close()
     return jsonify(messages)
+
+
+@app.route("/api/conversations/<int:conv_id>/brief", methods=["GET", "POST", "PATCH"])
+def api_conversation_brief(conv_id):
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    conn = get_db()
+    _ensure_client_tables(conn)
+
+    if cid is not None and not _client_owned(conn, uid, cid):
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+
+    row = _get_owned_conversation_row(conn, uid, conv_id, cid)
+    if not row:
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+
+    if request.method == "GET":
+        brief = _conversation_brief_from_row(row)
+        conn.close()
+        return jsonify({"success": True, "conv_id": conv_id, "brief": brief})
+
+    conn.close()
+    data = request.get_json(force=True, silent=True) or {}
+    updated = update_conversation_brief(
+        conv_id,
+        objective=data.get("objective", ""),
+        current_status=data.get("current_status", ""),
+        next_step=data.get("next_step", ""),
+        blocked_by=data.get("blocked_by", ""),
+    )
+    if not updated:
+        return jsonify({"error": "Not found"}), 404
+
+    return jsonify({
+        "success": True,
+        "conv_id": conv_id,
+        "brief": get_conversation_brief(conv_id),
+    })
 
 
 @app.route("/api/clients", methods=["GET", "POST"])
@@ -13750,6 +26013,7 @@ def api_user_settings():
     uid = get_current_user_id()
     conn = get_db()
     _ensure_user_settings_table(conn)
+    _ensure_settings_audit_table(conn)
 
     current = _load_user_settings(conn, uid)
 
@@ -13762,6 +26026,61 @@ def api_user_settings():
         payload = {}
 
     payload = copy.deepcopy(payload)
+    change_source = str(payload.pop("_source", "") or "").strip().lower()
+    change_reason = str(payload.pop("_reason", "") or "").strip()[:240]
+    permissions_patch = payload.get("permissions")
+    if permissions_patch is not None:
+        if not isinstance(permissions_patch, dict):
+            conn.close()
+            return jsonify({"success": False, "error": "invalid_permissions_payload"}), 400
+
+        clean_permissions = {}
+        if "workspace_role" in permissions_patch or "role" in permissions_patch:
+            incoming_role = str(
+                permissions_patch.get("workspace_role")
+                or permissions_patch.get("role")
+                or ""
+            ).strip().lower()
+            allowed_roles = {"owner", "admin", "member", "guest"}
+            if incoming_role and incoming_role not in allowed_roles:
+                conn.close()
+                return jsonify({
+                    "success": False,
+                    "error": "invalid_workspace_role",
+                    "allowed_roles": sorted(list(allowed_roles)),
+                }), 400
+            if incoming_role:
+                clean_permissions["workspace_role"] = incoming_role
+
+        if "scopes" in permissions_patch:
+            raw_scopes = permissions_patch.get("scopes")
+            if isinstance(raw_scopes, str):
+                raw_scopes = [x.strip() for x in re.split(r"[,\n;]+", raw_scopes) if str(x).strip()]
+            if raw_scopes is None:
+                raw_scopes = []
+            if not isinstance(raw_scopes, list):
+                conn.close()
+                return jsonify({"success": False, "error": "invalid_scopes_payload"}), 400
+            normalized = []
+            for s in raw_scopes:
+                v = str(s or "").strip().lower()
+                if v:
+                    normalized.append(v)
+            normalized = sorted(list(dict.fromkeys(normalized)))[:200]
+            allowed_scopes = set(_tool_registry_scope_catalog())
+            invalid_scopes = [s for s in normalized if s not in allowed_scopes]
+            if invalid_scopes:
+                conn.close()
+                return jsonify({
+                    "success": False,
+                    "error": "invalid_scopes",
+                    "invalid_scopes": invalid_scopes,
+                    "allowed_scopes": sorted(list(allowed_scopes)),
+                }), 400
+            clean_permissions["scopes"] = normalized
+
+        payload["permissions"] = clean_permissions
+
     economy_patch = payload.get("economy") if isinstance(payload.get("economy"), dict) else {}
     economy_patch = copy.deepcopy(economy_patch) if isinstance(economy_patch, dict) else {}
 
@@ -13770,11 +26089,8 @@ def api_user_settings():
             economy_patch[key] = payload.pop(key)
 
     incoming_preset = str(economy_patch.get("preset") or "").strip().lower()
-    if incoming_preset == "starter":
-        incoming_preset = "free"
-        economy_patch["preset"] = "free"
     if incoming_preset in VALID_ECONOMY_PRESETS:
-        if incoming_preset in ("pro", "enterprise"):
+        if incoming_preset in ("personal", "business", "agency"):
             summary, _gw = _stripe_billing_summary()
             if not _stripe_subscription_active(summary):
                 conn.close()
@@ -13793,8 +26109,26 @@ def api_user_settings():
     if economy_patch:
         payload["economy"] = economy_patch
 
+    before_permissions = copy.deepcopy((current.get("permissions") or {}))
     merged = _deep_merge_dict(current, payload if isinstance(payload, dict) else {})
     saved = _save_user_settings(conn, uid, merged)
+    after_permissions = copy.deepcopy((saved.get("permissions") or {}))
+
+    if before_permissions != after_permissions:
+        action = "permissions_update"
+        if change_source == "suggested_scopes_apply":
+            action = "permissions_apply_suggested_scopes"
+        _log_settings_audit(
+            conn,
+            user_id=uid,
+            action=action,
+            payload={
+                "source": change_source or "settings_ui",
+                "reason": change_reason,
+                "before": before_permissions,
+                "after": after_permissions,
+            },
+        )
     conn.commit()
     conn.close()
     return jsonify({"success": True, "settings": saved})
@@ -13805,19 +26139,33 @@ def api_settings_billing_plan():
     uid = get_current_user_id()
     data = request.get_json(force=True, silent=True) or {}
     target_plan = _normalize_plan_code(data.get("plan"))
-    if target_plan == "starter":
-        target_plan = "free"
     if target_plan not in VALID_ECONOMY_PRESETS:
         return jsonify({"success": False, "error": "invalid_plan"}), 400
+    if target_plan == "developer":
+        return jsonify({
+            "success": False,
+            "error": "coming_soon",
+            "message": "Developer plan is not available for checkout yet.",
+        }), 409
 
-    if target_plan in ("pro", "enterprise"):
+    if target_plan in ("personal", "business", "agency"):
         summary, gw = _stripe_billing_summary()
         if not _stripe_subscription_active(summary):
             checkout_url = None
             if COOLBITS_GATEWAY_ENABLED:
                 for path in ("/api/billing/upgrade", "/api/billing/checkout-session", "/api/billing/checkout", "/api/billing/subscribe"):
                     try:
-                        status, payload, _text = _coolbits_request("POST", path, body={"plan": target_plan}, timeout=20)
+                        selected_price = _pricing_plan_price(target_plan, data.get("interval"))
+                        status, payload, _text = _coolbits_request(
+                            "POST",
+                            path,
+                            body={
+                                "plan": target_plan,
+                                "interval": _normalize_plan_interval(data.get("interval")),
+                                "price_id": str(selected_price.get("price_id") or ""),
+                            },
+                            timeout=20,
+                        )
                         if 200 <= int(status) < 300 and isinstance(payload, dict):
                             checkout_url = payload.get("url") or payload.get("checkout_url") or payload.get("checkoutUrl")
                             if checkout_url:
@@ -13848,20 +26196,45 @@ def api_settings_billing_plan():
 @app.route("/api/settings/billing/checkout", methods=["POST"])
 def api_settings_billing_checkout():
     data = request.get_json(force=True, silent=True) or {}
-    plan = str(data.get("plan") or "pro").strip().lower()
-    if plan not in ("starter", "pro", "enterprise", "free"):
-        plan = "pro"
+    plan = _normalize_plan_code(data.get("plan") or "personal")
+    interval_key = _normalize_plan_interval(data.get("interval") or "monthly")
+    if plan == "developer":
+        return jsonify({
+            "success": False,
+            "error": "coming_soon",
+            "message": "Developer plan is not available for checkout yet.",
+        }), 409
+    if plan not in ("personal", "business", "agency"):
+        plan = "personal"
+    selected_price = _pricing_plan_price(plan, interval_key)
     if not COOLBITS_GATEWAY_ENABLED:
         return jsonify({"success": False, "error": "gateway_disabled"}), 400
 
     last_error = None
     for path in ("/api/billing/upgrade", "/api/billing/checkout-session", "/api/billing/checkout", "/api/billing/subscribe"):
         try:
-            status, payload, text = _coolbits_request("POST", path, body={"plan": plan}, timeout=25)
+            status, payload, text = _coolbits_request(
+                "POST",
+                path,
+                body={
+                    "plan": plan,
+                    "interval": interval_key,
+                    "price_id": str(data.get("price_id") or selected_price.get("price_id") or ""),
+                },
+                timeout=25,
+            )
             if 200 <= int(status) < 300 and isinstance(payload, dict):
                 checkout_url = payload.get("checkoutUrl") or payload.get("checkout_url") or payload.get("url")
                 if checkout_url:
-                    return jsonify({"success": True, "url": checkout_url, "source": "coolbits", "path": path})
+                    return jsonify({
+                        "success": True,
+                        "url": checkout_url,
+                        "source": "coolbits",
+                        "path": path,
+                        "plan": plan,
+                        "interval": interval_key,
+                        "price_id": str(selected_price.get("price_id") or ""),
+                    })
                 last_error = f"{path}: missing checkout url"
                 continue
             last_error = f"{path}: http_{status}"
@@ -13983,29 +26356,36 @@ def api_settings_billing():
 
     payload, gw = _stripe_billing_summary()
     if isinstance(payload, dict):
-        eur_payload = _billing_payload_to_eur(payload)
-        plan = eur_payload.get("plan") if isinstance(eur_payload.get("plan"), dict) else {}
+        billing_payload = _billing_payload_to_usd(payload)
+        plan = billing_payload.get("plan") if isinstance(billing_payload.get("plan"), dict) else {}
         current_code = _normalize_plan_code(plan.get("code"))
         return jsonify({
             "success": True,
             "source": "coolbits",
             "gateway": gw,
-            "billing": eur_payload,
+            "billing": billing_payload,
             "runtime": runtime,
             "plans": PRICING_PLAN_CATALOG,
             "current_plan_code": current_code,
         })
 
     current_code = _normalize_plan_code(runtime.get("economy_preset") or runtime.get("plan"))
+    current_plan = _pricing_plan_entry(current_code) or _pricing_plan_entry("personal") or {}
+    current_price = _pricing_plan_price(current_plan, "monthly")
     return jsonify({
         "success": True,
         "source": "mock",
         "gateway": gw,
         "billing": {
             "plan": {
-                "code": str(runtime.get("economy_preset") or "free"),
-                "label": "CoolBits Starter",
-                "price": {"currency": "eur", "amount": 6, "interval": "month"},
+                "code": str(current_code or "free"),
+                "label": str(current_plan.get("label") or "Camarad Personal"),
+                "price": {
+                    "currency": str(current_price.get("currency") or "usd").lower(),
+                    "amount": float(current_price.get("amount") or 0),
+                    "interval": str(current_price.get("interval") or "month"),
+                    "price_id": str(current_price.get("price_id") or ""),
+                },
             },
             "limits": {
                 "tokensPerMonth": int(runtime.get("ct_monthly_limit") or 0),
@@ -14298,8 +26678,9 @@ def api_billing_plan_recommendations():
         daily_p95 = float(ws_daily_billable_dist.get("p95") or daily_p90 or 0)
 
         free_cost = max(0.0005, min(cost_p90, (cost_p95 / 2.0 if cost_p95 > 0 else cost_p90)) * multiplier)
-        standard_cost = max(free_cost, cost_p95 * multiplier)
-        pro_cost = max(standard_cost, cost_p99 * multiplier)
+        personal_cost = max(free_cost, cost_p95 * multiplier)
+        business_cost = max(personal_cost, cost_p99 * multiplier)
+        agency_cost = max(business_cost, cost_p99 * multiplier * 1.35)
 
         recommendations = {
             "free": {
@@ -14307,15 +26688,20 @@ def api_billing_plan_recommendations():
                 "max_output_tokens": max(80, out_p90),
                 "daily_burn_cap_usd": round(max(0.25, daily_p90 * 0.25), 6),
             },
-            "standard": {
-                "max_cost_per_request_usd": round(standard_cost, 6),
+            "personal": {
+                "max_cost_per_request_usd": round(personal_cost, 6),
                 "max_output_tokens": max(120, out_p95),
                 "daily_burn_cap_usd": round(max(1.0, daily_p95 * 0.75), 6),
             },
-            "pro": {
-                "max_cost_per_request_usd": round(pro_cost, 6),
+            "business": {
+                "max_cost_per_request_usd": round(business_cost, 6),
                 "max_output_tokens": max(180, out_p99),
                 "daily_burn_cap_usd": round(max(2.0, daily_p95 * 1.5), 6),
+            },
+            "agency": {
+                "max_cost_per_request_usd": round(agency_cost, 6),
+                "max_output_tokens": max(240, int(round(out_p99 * 1.2)) if out_p99 > 0 else 240),
+                "daily_burn_cap_usd": round(max(4.0, daily_p95 * 2.25), 6),
             },
         }
 
@@ -14959,6 +27345,10 @@ def api_user_spend():
     _ensure_client_tables(conn)
     _ensure_usage_ledger_table(conn)
 
+    if event_type == "run_flow" and cid is None:
+        conn.close()
+        return jsonify({"error": "Client scope required", "code": "CLIENT_SCOPE_REQUIRED"}), 400
+
     if cid is not None and not _client_owned(conn, uid, cid):
         conn.close()
         return jsonify({"error": "Client not found or not owned"}), 404
@@ -14979,6 +27369,7 @@ def api_user_spend():
             region="unknown",
             model_class="auto",
             cost_estimate_usd=0.0,
+            is_billable_event=False,
             meta={"shadow_mode": True, "source": "api_user_spend", "requested_amount": amount},
         )
     except Exception as shadow_err:
@@ -15146,7 +27537,7 @@ def export_all():
 
     # Agents config
     agent_sql = """
-        SELECT agent_slug, custom_name, avatar_base64, llm_provider, llm_model, api_key,
+        SELECT agent_slug, custom_name, avatar_base64, llm_provider, llm_model,
                temperature, max_tokens, rag_enabled, status, client_id
         FROM agents_config
         WHERE user_id = ?
@@ -15158,18 +27549,21 @@ def export_all():
 
     agents = []
     for r in _safe_rows(agent_sql, tuple(agent_params)):
+        provider_slug = _normalize_llm_provider_slug(r[3]) or _infer_llm_provider_from_model(r[4])
+        provider_credential = _lookup_provider_credential(uid, provider_slug, agent_slug=r[0], client_id=r[9])
         agents.append({
             "agent_slug": r[0],
             "custom_name": r[1],
             "avatar_base64": r[2],
             "llm_provider": r[3],
             "llm_model": r[4],
-            "api_key": r[5],
-            "temperature": r[6],
-            "max_tokens": r[7],
-            "rag_enabled": bool(r[8]),
-            "status": r[9],
-            "client_id": r[10],
+            "has_api_key": bool((provider_credential or {}).get("api_key")),
+            "api_key_masked": _mask_provider_secret((provider_credential or {}).get("api_key")),
+            "temperature": r[5],
+            "max_tokens": r[6],
+            "rag_enabled": bool(r[7]),
+            "status": r[8],
+            "client_id": r[9],
         })
 
     # Connectors config
@@ -15411,8 +27805,8 @@ def import_all():
 
         cursor.execute("""
             INSERT OR REPLACE INTO agents_config
-            (user_id, client_id, agent_slug, custom_name, avatar_base64, llm_provider, llm_model, api_key, temperature, max_tokens, rag_enabled, status, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            (user_id, client_id, agent_slug, custom_name, avatar_base64, llm_provider, llm_model, temperature, max_tokens, rag_enabled, status, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         """, (
             uid,
             agent_client_id,
@@ -15421,12 +27815,25 @@ def import_all():
             a.get("avatar_base64"),
             a.get("llm_provider"),
             a.get("llm_model"),
-            a.get("api_key"),
             a.get("temperature", 0.7),
             a.get("max_tokens", 2048),
             1 if a.get("rag_enabled") else 0,
             a.get("status", "Active"),
         ))
+        import_api_key = str(a.get("api_key") or "").strip()
+        import_provider = _normalize_llm_provider_slug(a.get("llm_provider")) or _infer_llm_provider_from_model(a.get("llm_model"))
+        if import_provider and import_api_key:
+            _upsert_provider_credential(
+                conn,
+                user_id=uid,
+                client_id=agent_client_id,
+                workspace_slug=_workspace_slug_for_agent(a.get("agent_slug")),
+                provider_slug=import_provider,
+                api_key=import_api_key,
+                mode="byok",
+                status="active",
+                metadata={"imported_from": "backup", "agent_slug": a.get("agent_slug")},
+            )
         counts["agents"] += 1
 
     # Import connectors
@@ -15731,7 +28138,7 @@ BOARDROOM_AGENTS = [
     {"slug": "backend-architect",     "name": "Backend Architect",         "ws": "development", "icon": "bi-server",           "color": "#f0883e"},
     {"slug": "frontend-uiux",         "name": "Frontend / UI-UX",          "ws": "development", "icon": "bi-window-desktop",   "color": "#d2a8ff"},
     {"slug": "security-quality",      "name": "Security & QA",             "ws": "development", "icon": "bi-shield-check",     "color": "#f85149"},
-    {"slug": "life-coach",            "name": "Personal Assistant",        "ws": "personal",    "icon": "bi-heart-pulse",      "color": "#f778ba"},
+    {"slug": "life-coach",            "name": "Life Coach",               "ws": "personal",    "icon": "bi-heart-pulse",      "color": "#f778ba"},
     {"slug": "psychologist",          "name": "Psychologist",              "ws": "personal",    "icon": "bi-brain",            "color": "#8957e5"},
     {"slug": "personal-mentor",       "name": "Personal Mentor",           "ws": "personal",    "icon": "bi-mortarboard",      "color": "#ffa657"},
     {"slug": "fitness-wellness",      "name": "Fitness & Wellness",        "ws": "personal",    "icon": "bi-activity",         "color": "#3fb950"},
@@ -16526,14 +28933,3 @@ def active_context():
 
 if __name__ == '__main__':
     app.run(debug=Config.DEBUG, host=Config.HOST, port=Config.PORT)
-
-
-
-
-
-
-
-
-
-
-

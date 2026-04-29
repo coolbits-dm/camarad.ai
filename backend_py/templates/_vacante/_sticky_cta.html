@@ -1,0 +1,68 @@
+{# Sticky mobile CTA bar for vacanteinteligente.com.
+   Shown only on viewports <= 768px after 400px scroll.
+   Requires `mwr_referral_url` in context. #}
+<div id="vac-sticky" class="vac-sticky" hidden aria-hidden="true">
+  <a class="vac-sticky__btn"
+     href="{{ mwr_referral_url }}"
+     target="_blank"
+     rel="noopener noreferrer"
+     data-outbound="mwr"
+     data-cta="sticky_mobile">
+    Descopera platforma
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
+      <path d="M7 17 17 7M9 7h8v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </a>
+</div>
+<style>
+  .vac-sticky{
+    position:fixed;left:0;right:0;bottom:0;z-index:50;
+    padding:12px 16px calc(14px + env(safe-area-inset-bottom,0px));
+    background:linear-gradient(180deg,rgba(245,239,229,0) 0%,rgba(245,239,229,.96) 42%,#f5efe5 100%);
+    display:none;pointer-events:none;
+  }
+  .vac-sticky[data-visible="1"]{display:block;pointer-events:auto;}
+  .vac-sticky__btn{
+    display:flex;align-items:center;justify-content:center;gap:.55rem;
+    width:100%;min-height:52px;border-radius:999px;
+    background:linear-gradient(180deg,#23384d 0%,#162636 100%);color:#fffaf4;
+    font-family:"Manrope","Segoe UI",sans-serif;font-weight:700;font-size:1rem;
+    letter-spacing:-.01em;text-decoration:none;
+    box-shadow:0 14px 34px rgba(17,34,54,.28);
+  }
+  .vac-sticky__btn:active{transform:translateY(1px);}
+  @media (min-width:769px){
+    .vac-sticky{display:none !important;}
+  }
+  /* Keep room for sticky bar so it doesn't overlap footer content at scroll end */
+  @media (max-width:768px){
+    body.has-vac-sticky footer{padding-bottom:96px;}
+  }
+</style>
+<script>
+(function(){
+  var el=document.getElementById('vac-sticky');if(!el)return;
+  if(window.matchMedia && !window.matchMedia('(max-width: 768px)').matches) return;
+  document.body.classList.add('has-vac-sticky');
+  var shown=false;
+  function apply(){
+    var y=window.scrollY||document.documentElement.scrollTop||0;
+    var wantShow=y>400;
+    if(wantShow!==shown){
+      shown=wantShow;
+      if(shown){el.hidden=false;el.setAttribute('data-visible','1');el.setAttribute('aria-hidden','false');}
+      else{el.hidden=true;el.removeAttribute('data-visible');el.setAttribute('aria-hidden','true');}
+    }
+  }
+  window.addEventListener('scroll',apply,{passive:true});
+  window.addEventListener('resize',function(){
+    if(!window.matchMedia('(max-width: 768px)').matches){
+      el.hidden=true;el.removeAttribute('data-visible');shown=false;
+      document.body.classList.remove('has-vac-sticky');
+    } else {
+      document.body.classList.add('has-vac-sticky');
+    }
+  },{passive:true});
+  apply();
+})();
+</script>

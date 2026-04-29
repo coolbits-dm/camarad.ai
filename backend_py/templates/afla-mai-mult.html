@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="ro">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  {% if google_site_verification %}
+  <meta name="google-site-verification" content="{{ google_site_verification }}">
+  {% endif %}
+  {% include "_vacante/_consent_head.html" %}
+  {% if gtm_container_id %}
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','{{ gtm_container_id }}');</script>
+  <!-- End Google Tag Manager -->
+  {% endif %}
+  <title>Afla mai mult | MWR Travel</title>
+  <meta name="description" content="Informatii clare despre membershipul de calatorie MWR: cum functioneaza, pentru cine este si ce nu promite." />
+  <meta name="robots" content="index,follow" />
+  <meta property="og:type" content="article" />
+  <meta property="og:title" content="Afla mai mult despre membershipul de calatorie MWR" />
+  <meta property="og:description" content="Un ghid transparent despre MWR Travel membership, conceput pentru calatorii care vor claritate si flexibilitate." />
+  <meta property="og:url" content="{{ canonical_url }}" />
+  <meta property="og:image" content="{{ vacante_og_image_url }}" />
+  <meta property="og:site_name" content="Vacante Inteligente" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Afla mai mult despre membershipul de calatorie MWR" />
+  <meta name="twitter:description" content="Intrebari, clarificari si context util inainte sa deschizi platforma MWR." />
+  <meta name="twitter:image" content="{{ vacante_og_image_url }}" />
+  <link rel="canonical" href="{{ canonical_url }}" />
+  {% include "_vacante/_structured_data_faq.html" %}
+  <link rel="icon" type="image/x-icon" href="/static/brand/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/brand/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/brand/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/brand/apple-touch-icon.png">
+  <link rel="manifest" href="/static/brand/site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --page: #f5efe5;
+      --text: #1f2b37;
+      --muted: #696d75;
+      --surface: #ffffff;
+      --surface-strong: #f8f2ea;
+      --accent: #163f57;
+      --accent-soft: rgba(35, 57, 82, 0.08);
+      --border: rgba(35, 57, 82, 0.12);
+      --shadow: 0 20px 50px rgba(23, 32, 40, 0.08);
+      --radius: 24px;
+      --container: min(1160px, calc(100% - 2rem));
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Manrope", "Segoe UI", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top left, rgba(143, 178, 200, 0.2), transparent 32%),
+                  radial-gradient(circle at bottom right, rgba(166, 125, 66, 0.12), transparent 30%),
+                  linear-gradient(180deg, #f8f2ea 0%, #f5efe5 100%);
+    }
+    img { display: block; max-width: 100%; }
+    a { color: inherit; text-decoration: none; }
+    .container { width: var(--container); margin: 0 auto; }
+    header { padding: 1.5rem 0 0; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+    .brand { display: inline-flex; align-items: center; gap: 0.85rem; color: var(--text); }
+    .brand strong { font-size: 1rem; letter-spacing: 0.02em; }
+    .brand small { display: block; color: var(--muted); font-size: 0.84rem; line-height: 1.4; }
+    .hero { padding: 3rem 0 2.2rem; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 0.6rem; text-transform: uppercase; letter-spacing: 0.18em; color: #5f7486; font-size: 0.82rem; }
+    .hero-title { margin: 1rem 0 0.85rem; font-size: clamp(2.5rem, 5vw, 3.5rem); line-height: 1.02; letter-spacing: -0.04em; }
+    .hero-copy { max-width: 44rem; }
+    .hero-subtitle { margin: 1rem 0 0; max-width: 35rem; line-height: 1.75; color: var(--muted); font-size: 1.03rem; }
+    .hero-actions { margin-top: 2rem; display: grid; gap: 1rem; }
+    .hero-buttons { display: flex; flex-direction: column; gap: 1rem; }
+    @media (min-width: 760px) { .hero-buttons { flex-direction: row; } }
+    .button { display: inline-flex; align-items: center; justify-content: center; gap: 0.75rem; min-height: 3.7rem; padding: 0.95rem 1.4rem; border-radius: 999px; font-weight: 700; letter-spacing: -0.01em; transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease; }
+    .button-primary { background: linear-gradient(180deg, #23384d 0%, #163045 100%); color: white; box-shadow: 0 18px 38px rgba(17, 34, 54, 0.18); }
+    .button-primary:hover { transform: translateY(-1px); }
+    .button-secondary { background: #ffffff; color: #163045; border: 1px solid rgba(22, 55, 75, 0.18); box-shadow: 0 14px 28px rgba(23, 32, 40, 0.07); }
+    .button-secondary:hover { transform: translateY(-1px); }
+    .section { padding: 3rem 0; }
+    .section-headline { max-width: 52rem; margin-bottom: 1.5rem; }
+    .section-title { margin: 0; font-size: clamp(2rem, 4vw, 2.8rem); line-height: 1.05; }
+    .section-text { margin: 1rem 0 0; color: var(--muted); line-height: 1.9; font-size: 1.02rem; }
+    .card-grid { display: grid; gap: 1.5rem; }
+    @media (min-width: 860px) { .card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    .card { border-radius: var(--radius); background: rgba(255,255,255,0.88); border: 1px solid var(--border); box-shadow: var(--shadow); padding: 1.7rem; }
+    .card h2 { margin-top: 0; font-size: 1.25rem; }
+    .card p { margin: 0.85rem 0 0; color: var(--muted); line-height: 1.8; }
+    .section-visual-grid { display: grid; gap: 2rem; align-items: center; }
+    @media (min-width: 860px) { .section-visual-grid { grid-template-columns: 1.1fr 0.9fr; } }
+    .section-visual-copy { max-width: 40rem; }
+    .section-visual-copy p { margin: 1rem 0 0; }
+    .section-visual-list { margin: 1.5rem 0 0; padding-left: 1.1rem; color: var(--muted); }
+    .section-visual-list li { margin: 0.75rem 0; line-height: 1.75; }
+    .section-visual-img { border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); border: 1px solid rgba(35,57,82,0.12); }
+    .section-visual-img img { display: block; width: 100%; height: auto; }
+    .divider { height: 1px; margin: 2rem 0; background: var(--border); border: none; }
+    .comparison-grid { display: grid; gap: 1.25rem; }
+    @media (min-width: 860px) { .comparison-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    .comparison-card {
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.88);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      padding: 1.65rem;
+    }
+    .comparison-card h3 { margin: 0; font-size: 1.2rem; }
+    .comparison-card p { margin: 0.8rem 0 0; color: var(--muted); line-height: 1.8; }
+    .comparison-list { margin: 1.1rem 0 0; padding-left: 1.1rem; color: var(--muted); }
+    .comparison-list li { margin: 0.6rem 0; line-height: 1.75; }
+    .comparison-note {
+      margin-top: 1rem;
+      padding: 0.95rem 1rem;
+      border-radius: 18px;
+      background: rgba(22, 63, 87, 0.05);
+      border: 1px solid rgba(22, 63, 87, 0.10);
+      color: #425068;
+      line-height: 1.75;
+      font-size: 0.96rem;
+    }
+    .faq-list { display: grid; gap: 0.9rem; }
+    .faq-item {
+      border-radius: 22px;
+      background: rgba(255,255,255,0.9);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      padding: 0 1.2rem;
+    }
+    .faq-item > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 1.1rem 2.3rem 1.1rem 0;
+      position: relative;
+      font-weight: 700;
+      line-height: 1.45;
+    }
+    .faq-item > summary::-webkit-details-marker { display: none; }
+    .faq-item > summary::after {
+      content: "+";
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 1.9rem;
+      height: 1.9rem;
+      border-radius: 999px;
+      display: inline-grid;
+      place-items: center;
+      background: rgba(22, 63, 87, 0.08);
+      color: #163f57;
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+    .faq-item[open] > summary::after { content: "–"; }
+    .faq-answer {
+      margin: 0;
+      padding: 0 0 1.2rem;
+      color: var(--muted);
+      line-height: 1.82;
+    }
+    .faq-link-row {
+      margin-top: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.85rem;
+      align-items: center;
+    }
+    .faq-link-row a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.82rem 1rem;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.88);
+      border: 1px solid rgba(35,57,82,0.12);
+      color: #163045;
+      font-weight: 700;
+      box-shadow: 0 14px 28px rgba(23, 32, 40, 0.07);
+    }
+    .contact-grid { display: grid; gap: 1.5rem; }
+    @media (min-width: 860px) { .contact-grid { grid-template-columns: 1.3fr 1fr; } }
+    .contact-panel { border-radius: var(--radius); background: rgba(255,255,255,0.92); border: 1px solid rgba(35,57,82,0.12); padding: 1.8rem; box-shadow: var(--shadow); }
+    .contact-panel h3 { margin-top: 0; font-size: 1.4rem; }
+    .contact-panel p { margin: 0.85rem 0 0; color: var(--muted); line-height: 1.75; }
+    .contact-grid-links { display: grid; gap: 1rem; margin-top: 1.2rem; }
+    .contact-badges { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.15rem; }
+    .contact-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.58rem 0.8rem;
+      border-radius: 999px;
+      background: rgba(35, 57, 82, 0.06);
+      border: 1px solid rgba(35, 57, 82, 0.08);
+      color: #425068;
+      font-size: 0.86rem;
+      font-weight: 700;
+    }
+    .contact-button { display: inline-flex; align-items: center; justify-content: center; gap: 0.65rem; padding: 0.92rem 1.1rem; border-radius: 999px; background: #23384d; color: #fff; font-weight: 700; }
+    .contact-form { display: grid; gap: 1rem; margin-top: 1rem; }
+    .field { display: grid; gap: 0.45rem; }
+    .field--honeypot {
+      position: absolute !important;
+      left: -9999px !important;
+      width: 1px !important;
+      height: 1px !important;
+      overflow: hidden !important;
+    }
+    .field label { font-size: 0.95rem; color: #41515e; }
+    .field input, .field textarea { width: 100%; border-radius: 16px; border: 1px solid rgba(35, 57, 82, 0.14); padding: 0.95rem 1rem; font: inherit; color: var(--text); background: #fbfbfb; }
+    .field textarea { min-height: 160px; resize: vertical; }
+    .contact-status {
+      margin: 0;
+      padding: 0.9rem 1rem;
+      border-radius: 16px;
+      font-size: 0.95rem;
+      line-height: 1.65;
+    }
+    .contact-status[data-state="error"] {
+      background: rgba(171, 65, 54, 0.08);
+      border: 1px solid rgba(171, 65, 54, 0.18);
+      color: #8a342c;
+    }
+    .form-note { margin-top: 0.5rem; color: var(--muted); font-size: 0.95rem; }
+    .footer { padding: 2rem 0 3.5rem; }
+    .footer-nav { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; justify-content: center; }
+    .footer-nav a { color: #425068; }
+  </style>
+</head>
+<body data-vac-page="{{ vacante_page_type|default('explainer') }}">
+  {% if gtm_container_id %}
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ gtm_container_id }}"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+  {% endif %}
+  <header class="container">
+    <div class="topbar">
+      <a class="brand" href="/" aria-label="Inapoi la pagina principala">
+        <strong>MWR Travel</strong>
+        <small>Membership de calatorie</small>
+      </a>
+      <div class="top-link">
+        <a class="button button-secondary" href="{{ mwr_referral_url }}" target="_blank" rel="noopener noreferrer">Deschide platforma</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <p class="eyebrow">Claritate. Transparenta. Calatorie mai simpla.</p>
+      <h1 class="hero-title">Ce este membershipul MWR si cum functioneaza.</h1>
+      <p class="hero-subtitle">O explicatie scurta, in limba romana, inainte sa deschizi platforma. Fara marketing agresiv, fara promisiuni de castig si fara presiune. Folosim un link de recomandare — iti spunem mai jos exact cum functioneaza asta.</p>
+      <div class="hero-actions">
+        <div class="hero-buttons">
+          <a class="button button-primary" href="{{ mwr_referral_url }}" target="_blank" rel="noopener noreferrer" data-outbound="mwr" data-cta="afla_hero">Descopera platforma</a>
+          {% if mwr_whatsapp_url %}
+          <a class="button button-secondary" href="{{ mwr_whatsapp_url }}" target="_blank" rel="noopener noreferrer" data-cta="afla_hero_whatsapp">Intreaba pe WhatsApp</a>
+          {% else %}
+          <a class="button button-secondary" href="mailto:{{ mwr_contact_email }}" data-cta="afla_hero_email">Scrie-ne pe email</a>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-headline">
+        <h2 class="section-title">Ce este acest membership?</h2>
+        <p class="section-text">MWR Travel este o pagina de prezentare pentru un membership de calatorie care ofera acces la produse si servicii de vacanta intr-un mod mai centralizat. Este construit pentru persoane care doresc sa vada optiunile clar si sa ia decizii informate, cu mai putin efort.</p>
+      </div>
+      <div class="card-grid">
+        <div class="card">
+          <h2>Claritate peste promisiuni</h2>
+          <p>Prezentam beneficiile membershipului fara exagerari. Accentul este pe explicatii simple si transparente, nu pe rezultate garantate.</p>
+        </div>
+        <div class="card">
+          <h2>Flexibilitate reala</h2>
+          <p>Accesul poate include oferte la cazare, city break-uri si excursii, in functie de ce ofera platforma partenera.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-headline">
+        <h2 class="section-title">Cum functioneaza</h2>
+        <p class="section-text">Vezi oferta externa MWR, compari optiunile disponibile si decizi daca acest membership se potriveste stilului tau de calatorie.</p>
+      </div>
+      <div class="card-grid">
+        <div class="card">
+          <h2>1. Vizitezi platforma</h2>
+          <p>Urmeaza linkul si vezi in ce conditii este oferit membershipul.</p>
+        </div>
+        <div class="card">
+          <h2>2. Alegi informativ</h2>
+          <p>Informeaza-te despre beneficii, costuri si modul in care sunt prezentate ofertele.</p>
+        </div>
+        <div class="card">
+          <h2>3. Contactezi sau aplici</h2>
+          <p>Daca ai intrebari, foloseste emailul, WhatsApp-ul sau formularul de contact din aceasta pagina.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-headline">
+        <h2 class="section-title">Fara un punct clar de plecare vs. cu un membership de travel</h2>
+        <p class="section-text">Nu este o promisiune ca fiecare rezervare va fi automat mai buna. Este mai degraba o diferenta de proces, claritate si mod de comparare.</p>
+      </div>
+      <div class="comparison-grid">
+        <article class="comparison-card">
+          <h3>Fara un cadru clar</h3>
+          <p>Varianta clasica inseamna sa cauti separat, sa compari manual si sa tot schimbi taburi pana te convingi.</p>
+          <ul class="comparison-list">
+            <li>Sari intre site-uri, filtre si conditii diferite.</li>
+            <li>Verifici separat ofertele, taxele si pagina de suport.</li>
+            <li>Iti faci singur traseul informational, uneori cu mult zgomot.</li>
+          </ul>
+        </article>
+        <article class="comparison-card">
+          <h3>Cu un membership de travel</h3>
+          <p>Ai un punct de pornire mai ordonat, in care poti evalua optiunile intr-un singur ecosistem, apoi decizi daca iti place.</p>
+          <ul class="comparison-list">
+            <li>Vezi oferta intr-o platforma dedicata membershipului.</li>
+            <li>Compari mai usor daca stilul de utilizare ti se potriveste.</li>
+            <li>Poti cere clarificari inainte sa faci orice pas concret.</li>
+          </ul>
+        </article>
+      </div>
+      <div class="comparison-note">Important: membershipul nu garanteaza automat cel mai bun pret in orice situatie. Ideea lui este sa ofere un proces mai centralizat si o experienta mai simpla pentru cei carora li se potriveste.</div>
+    </section>
+
+    <section class="section">
+      <div class="section-visual-grid">
+        <div class="section-visual-copy">
+          <h2 class="section-title">Un fit bun pentru cei care prefera ordine, claritate si un parcurs mai elegant</h2>
+          <p class="section-text">Aceasta pagina este pentru cei care nu cauta exagerari, ci informatii curate si o perspectiva calma asupra unui membership de calatorie.</p>
+          <ul class="section-visual-list">
+            <li>Persoane care calatoresc de 1-2 ori pe an</li>
+            <li>Cei care vor sa economiseasca timp si sa evite cautarile aglomerate</li>
+            <li>Cei care prefera solutii simple si transparente</li>
+          </ul>
+        </div>
+        <div class="section-visual-img">
+          <img src="/static/images/mwr/mwr-suite.webp" alt="Suita premium intr-un decor calm si luminos" loading="lazy" />
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-headline">
+        <h2 class="section-title">Ce nu promite</h2>
+        <p class="section-text">Nu promitem venituri, nu garantam experiente premium de lux, si nu sustinem ideea ca este potrivit pentru toata lumea.</p>
+      </div>
+      <div class="card-grid">
+        <div class="card">
+          <h2>Nu este un plan financiar</h2>
+          <p>Nu promitem economii magice si nu facem estimari de castig.</p>
+        </div>
+        <div class="card">
+          <h2>Nu este o solutie pentru toti</h2>
+          <p>Daca iti doresti libertate de calatorie fara niciun angajament, poate nu este cea mai buna alegere.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="transparency">
+      <div class="section-headline">
+        <h2 class="section-title">Transparenta comerciala</h2>
+        <p class="section-text">Preferam sa iti spunem asta aici, in clar, nu ingropat in pagina de termeni.</p>
+      </div>
+      <div class="card-grid">
+        <div class="card">
+          <h2>Folosim un link de recomandare</h2>
+          <p>Butoanele „Descopera platforma" folosesc un link de recomandare MWR (<code>/Stefaniatravel04/join</code>). Daca creezi cont pe MWR prin acest link, este posibil sa primim un comision din partea MWR Life.</p>
+        </div>
+        <div class="card">
+          <h2>Pretul pentru tine ramane acelasi</h2>
+          <p>Costul pe care il platesti pe MWR este exact acelasi ca atunci cand accesezi platforma direct. Linkul de recomandare nu adauga taxe, marje ascunse sau alte costuri.</p>
+        </div>
+        <div class="card">
+          <h2>Plata se face direct pe MWR</h2>
+          <p>Nu colectam plati pe acest site. Datele cardului, contractul si factura sunt gestionate integral de MWR Life, pe platforma oficiala.</p>
+        </div>
+        <div class="card">
+          <h2>Nu promitem castig sau economii garantate</h2>
+          <p>Pe aceasta pagina nu prezentam niciun program de venituri. Preturile si beneficiile concrete pentru membri sunt afisate pe MWR, pot varia si nu le garantam.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="faq-long">
+      <div class="section-headline">
+        <h2 class="section-title">Intrebari frecvente</h2>
+        <p class="section-text">Raspunsuri directe la intrebarile pe care le primim cel mai des inainte ca cineva sa deschida platforma.</p>
+      </div>
+      <div class="faq-list">
+        {% for item in vacante_faq_items %}
+        <details class="faq-item">
+          <summary>{{ item.question }}</summary>
+          <p class="faq-answer">{{ item.answer }}</p>
+        </details>
+        {% endfor %}
+      </div>
+      <div class="faq-link-row">
+        <a href="/intrebari-frecvente" data-cta="afla_faq_page">Deschide pagina FAQ dedicata</a>
+      </div>
+    </section>
+
+    <section class="section contact-grid" id="contact">
+      <div class="contact-panel">
+        <h3>Contact</h3>
+        <p>Daca ai intrebari, lasa-ne un mesaj si revenim pe email. Poti folosi si optiunile directe de mai jos daca preferi o discutie mai scurta.</p>
+        <div class="contact-grid-links">
+          {% if mwr_contact_email %}
+          <a class="contact-button" href="mailto:{{ mwr_contact_email }}" data-cta="contact_email">Email: {{ mwr_contact_email }}</a>
+          {% endif %}
+          {% if mwr_whatsapp_url %}
+          <a class="contact-button" href="{{ mwr_whatsapp_url }}" target="_blank" rel="noopener noreferrer" data-cta="contact_whatsapp">WhatsApp</a>
+          {% endif %}
+        </div>
+        <div class="contact-badges" aria-label="Detalii contact">
+          <span class="contact-badge">Raspuns in 24h lucratoare</span>
+          <span class="contact-badge">Fara spam</span>
+          <span class="contact-badge">Fara apeluri nesolicitate</span>
+        </div>
+      </div>
+      <form id="contact-form" class="contact-form" method="post" action="{{ mwr_contact_form_endpoint }}">
+        <input type="hidden" name="source_path" value="{{ request.path }}">
+        <div class="field field--honeypot" aria-hidden="true">
+          <label for="contact-website">Website</label>
+          <input id="contact-website" name="website" type="text" tabindex="-1" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="contact-name">Nume</label>
+          <input id="contact-name" name="name" type="text" autocomplete="name" placeholder="Numele tau" required />
+        </div>
+        <div class="field">
+          <label for="contact-email">Email</label>
+          <input id="contact-email" name="email" type="email" autocomplete="email" placeholder="exemplu@domeniu.com" required />
+        </div>
+        <div class="field">
+          <label for="contact-phone">Telefon (optional)</label>
+          <input id="contact-phone" name="phone" type="text" autocomplete="tel" placeholder="07xx xxx xxx" />
+        </div>
+        <div class="field">
+          <label for="contact-message">Mesaj</label>
+          <textarea id="contact-message" name="message" placeholder="Scrie aici intrebarea sau interesul tau" required></textarea>
+        </div>
+        <p id="contact-form-status" class="contact-status" hidden aria-live="polite"></p>
+        <button type="submit" class="button button-primary" data-cta="contact_submit">Trimite mesaj</button>
+        <p class="form-note">Mesajul ajunge in inboxul nostru intern si revenim pe email. Nu colectam plati si nu folosim datele in scopuri nerelevante.</p>
+      </form>
+    </section>
+
+    <section class="section">
+      <div class="section-headline">
+        <h2 class="section-title">Urmeaza pasul urmator</h2>
+        <p class="section-text">Daca vrei sa vezi oferta MWR, poti deschide platforma externa in tab nou. Daca preferi o conversatie directa, alege email sau WhatsApp.</p>
+      </div>
+      <a class="button button-primary" href="{{ mwr_referral_url }}" target="_blank" rel="noopener noreferrer" data-outbound="mwr" data-cta="afla_final">Vezi platforma MWR</a>
+    </section>
+  </main>
+
+  <footer class="container footer">
+    <div class="footer-nav">
+      <a href="/" data-cta="afla_footer_home">Pagina principala</a>
+      <a href="/intrebari-frecvente" data-cta="afla_footer_faq">Intrebari frecvente</a>
+      <a href="#contact" data-cta="afla_footer_contact">Contact</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="mailto:{{ mwr_contact_email }}" data-cta="afla_footer_email">Email: {{ mwr_contact_email }}</a>
+      {% if mwr_whatsapp_url %}<a href="{{ mwr_whatsapp_url }}" target="_blank" rel="noopener noreferrer" data-cta="afla_footer_whatsapp">WhatsApp</a>{% endif %}
+      <a href="{{ mwr_referral_url }}" target="_blank" rel="noopener noreferrer" data-outbound="mwr" data-cta="afla_footer_mwr">Platforma externa</a>
+    </div>
+    {% include "_vacante/_footer_disclosure.html" %}
+  </footer>
+
+  {% include "_vacante/_sticky_cta.html" %}
+  {% include "_vacante/_whatsapp_float.html" %}
+  {% include "_vacante/_cookie_banner.html" %}
+  {% include "_vacante/_analytics.html" %}
+
+  {% if mwr_live_chat_snippet %}
+    {{ mwr_live_chat_snippet | safe }}
+  {% else %}
+    <!-- Live chat widget placeholder: populate MWR_LIVE_CHAT_SNIPPET env var with a Crisp/Tawk script tag. -->
+  {% endif %}
+</body>
+</html>

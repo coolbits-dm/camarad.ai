@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="ro">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  {% if google_site_verification %}
+  <meta name="google-site-verification" content="{{ google_site_verification }}">
+  {% endif %}
+  {% include "_vacante/_consent_head.html" %}
+  {% if gtm_container_id %}
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','{{ gtm_container_id }}');</script>
+  <!-- End Google Tag Manager -->
+  {% endif %}
+  <title>Intrebari frecvente | Vacante Inteligente</title>
+  <meta name="description" content="Raspunsuri clare la intrebarile frecvente despre membershipul de calatorie MWR: costuri, proces, transparenta si contact." />
+  <meta name="robots" content="index,follow" />
+  <meta property="og:type" content="article" />
+  <meta property="og:title" content="Intrebari frecvente despre membershipul de calatorie MWR" />
+  <meta property="og:description" content="O pagina dedicata pentru intrebarile frecvente, fara presiune si fara promisiuni exagerate." />
+  <meta property="og:url" content="{{ canonical_url }}" />
+  <meta property="og:image" content="{{ vacante_og_image_url }}" />
+  <meta property="og:site_name" content="Vacante Inteligente" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Intrebari frecvente despre membershipul de calatorie MWR" />
+  <meta name="twitter:description" content="Intrebari, raspunsuri si claritate inainte sa deschizi platforma MWR." />
+  <meta name="twitter:image" content="{{ vacante_og_image_url }}" />
+  <link rel="canonical" href="{{ canonical_url }}" />
+  {% include "_vacante/_structured_data_faq.html" %}
+  <link rel="icon" type="image/x-icon" href="/static/brand/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/brand/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/brand/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/brand/apple-touch-icon.png">
+  <link rel="manifest" href="/static/brand/site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Cormorant+Garamond:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --page: #f5efe5;
+      --text: #1f2b37;
+      --muted: #696d75;
+      --surface: rgba(255, 255, 255, 0.9);
+      --surface-soft: rgba(255, 250, 244, 0.92);
+      --accent: #163f57;
+      --border: rgba(35, 57, 82, 0.12);
+      --shadow: 0 20px 50px rgba(23, 32, 40, 0.08);
+      --radius: 24px;
+      --container: min(1140px, calc(100% - 2rem));
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Manrope", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(143, 178, 200, 0.2), transparent 32%),
+        radial-gradient(circle at bottom right, rgba(166, 125, 66, 0.12), transparent 30%),
+        linear-gradient(180deg, #f8f2ea 0%, #f5efe5 100%);
+    }
+    img { display: block; max-width: 100%; }
+    a { color: inherit; text-decoration: none; }
+    .container { width: var(--container); margin: 0 auto; }
+    header { padding: 1.5rem 0 0; }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+    .brand { display: inline-flex; align-items: center; gap: 0.85rem; color: var(--text); }
+    .brand strong { font-size: 1rem; letter-spacing: 0.02em; }
+    .brand small { display: block; color: var(--muted); font-size: 0.84rem; line-height: 1.4; }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.7rem;
+      min-height: 3.6rem;
+      padding: 0.95rem 1.35rem;
+      border-radius: 999px;
+      font-weight: 700;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
+    }
+    .button-primary {
+      background: linear-gradient(180deg, #23384d 0%, #163045 100%);
+      color: white;
+      box-shadow: 0 18px 38px rgba(17, 34, 54, 0.18);
+    }
+    .button-secondary {
+      background: #ffffff;
+      color: #163045;
+      border: 1px solid rgba(22, 55, 75, 0.18);
+      box-shadow: 0 14px 28px rgba(23, 32, 40, 0.07);
+    }
+    .button:hover { transform: translateY(-1px); }
+    .hero {
+      padding: 3rem 0 2rem;
+      display: grid;
+      gap: 1.8rem;
+      align-items: center;
+    }
+    @media (min-width: 920px) {
+      .hero { grid-template-columns: 1.05fr 0.95fr; }
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: #5f7486;
+      font-size: 0.82rem;
+    }
+    .hero-title {
+      margin: 1rem 0 0.85rem;
+      font-family: "Cormorant Garamond", serif;
+      font-size: clamp(3rem, 6vw, 4.6rem);
+      line-height: 0.94;
+      letter-spacing: -0.05em;
+      font-weight: 600;
+      max-width: 10.5ch;
+    }
+    .hero-subtitle {
+      margin: 1rem 0 0;
+      max-width: 36rem;
+      line-height: 1.8;
+      color: var(--muted);
+      font-size: 1.03rem;
+    }
+    .hero-actions {
+      margin-top: 1.6rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    .hero-visual {
+      border-radius: 32px;
+      overflow: hidden;
+      border: 1px solid rgba(35,57,82,0.12);
+      box-shadow: var(--shadow);
+      background: var(--surface-soft);
+    }
+    .hero-visual img {
+      width: 100%;
+      height: 100%;
+      min-height: 18rem;
+      object-fit: cover;
+    }
+    .section { padding: 2rem 0 3rem; }
+    .intro-grid {
+      display: grid;
+      gap: 1rem;
+    }
+    @media (min-width: 860px) {
+      .intro-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    .intro-card,
+    .faq-item,
+    .aside-card {
+      border-radius: var(--radius);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+    .intro-card {
+      padding: 1.4rem;
+    }
+    .intro-card h2 {
+      margin: 0;
+      font-size: 1.08rem;
+    }
+    .intro-card p {
+      margin: 0.75rem 0 0;
+      color: var(--muted);
+      line-height: 1.75;
+    }
+    .section-grid {
+      display: grid;
+      gap: 1.4rem;
+    }
+    @media (min-width: 980px) {
+      .section-grid { grid-template-columns: minmax(0, 1.35fr) minmax(19rem, 0.65fr); }
+    }
+    .section-headline {
+      margin-bottom: 1.25rem;
+      max-width: 48rem;
+    }
+    .section-title {
+      margin: 0;
+      font-size: clamp(2rem, 4vw, 2.8rem);
+      line-height: 1.04;
+      letter-spacing: -0.04em;
+    }
+    .section-text {
+      margin: 0.9rem 0 0;
+      color: var(--muted);
+      line-height: 1.85;
+    }
+    .faq-list {
+      display: grid;
+      gap: 0.95rem;
+    }
+    .faq-item {
+      padding: 0 1.2rem;
+    }
+    .faq-item > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 1.15rem 2.35rem 1.15rem 0;
+      position: relative;
+      font-weight: 700;
+      line-height: 1.45;
+    }
+    .faq-item > summary::-webkit-details-marker { display: none; }
+    .faq-item > summary::after {
+      content: "+";
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 1.9rem;
+      height: 1.9rem;
+      border-radius: 999px;
+      display: inline-grid;
+      place-items: center;
+      background: rgba(22, 63, 87, 0.08);
+      color: #163f57;
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+    .faq-item[open] > summary::after { content: "–"; }
+    .faq-answer {
+      margin: 0;
+      padding: 0 0 1.2rem;
+      color: var(--muted);
+      line-height: 1.82;
+    }
+    .aside-stack {
+      display: grid;
+      gap: 1rem;
+      align-content: start;
+    }
+    .aside-card {
+      padding: 1.35rem;
+    }
+    .aside-card h3 {
+      margin: 0;
+      font-size: 1.1rem;
+    }
+    .aside-card p {
+      margin: 0.8rem 0 0;
+      color: var(--muted);
+      line-height: 1.75;
+    }
+    .aside-list {
+      margin: 1rem 0 0;
+      padding-left: 1.1rem;
+      color: var(--muted);
+    }
+    .aside-list li {
+      margin: 0.6rem 0;
+      line-height: 1.7;
+    }
+    .aside-actions {
+      display: grid;
+      gap: 0.8rem;
+      margin-top: 1rem;
+    }
+    .footer {
+      padding: 1.5rem 0 3.25rem;
+    }
+    .footer-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      align-items: center;
+      justify-content: center;
+    }
+    .footer-nav a { color: #425068; }
+  </style>
+</head>
+<body data-vac-page="{{ vacante_page_type|default('faq') }}">
+  {% if gtm_container_id %}
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ gtm_container_id }}"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+  {% endif %}
+
+  <header class="container">
+    <div class="topbar">
+      <a class="brand" href="/" aria-label="Inapoi la pagina principala">
+        <strong>MWR Travel</strong>
+        <small>Vacante Inteligente</small>
+      </a>
+      <a class="button button-secondary" href="/afla-mai-mult" data-cta="faq_top_explainer">Afla mai mult</a>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">FAQ dedicat. Transparenta. Fara presiune.</p>
+        <h1 class="hero-title">Raspunsuri clare, inainte sa deschizi platforma.</h1>
+        <p class="hero-subtitle">Pagina asta strange la un loc intrebarile frecvente despre membershipul de calatorie MWR. Daca vrei context mai larg, intra pe pagina explicativa. Daca vrei direct platforma, o poti deschide in tab nou.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="{{ mwr_referral_url }}" target="_blank" rel="noopener noreferrer" data-outbound="mwr" data-cta="faq_hero_primary">Deschide platforma</a>
+          <a class="button button-secondary" href="/afla-mai-mult#contact" data-cta="faq_hero_contact">Pune o intrebare</a>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <img src="/static/images/mwr/mwr-lounge.webp" alt="Lounge premium cu vedere spre pista" loading="eager" />
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="intro-grid">
+        <article class="intro-card">
+          <h2>Fara plati pe acest site</h2>
+          <p>Orice pas legat de cont, factura sau plata se intampla pe platforma oficiala MWR, nu aici.</p>
+        </article>
+        <article class="intro-card">
+          <h2>Fara promisiuni exagerate</h2>
+          <p>Nu promitem economii garantate si nu prezentam acest membership ca pe o solutie universala.</p>
+        </article>
+        <article class="intro-card">
+          <h2>Fara presiune sa decizi acum</h2>
+          <p>Poti citi, intreba si compara in ritmul tau inainte sa faci orice pas mai departe.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-grid">
+        <div>
+          <div class="section-headline">
+            <h2 class="section-title">Intrebari frecvente</h2>
+            <p class="section-text">Am pastrat raspunsurile cat mai directe, ca sa poti evalua repede daca vrei sa mergi mai departe sau preferi sa ceri clarificari.</p>
+          </div>
+          <div class="faq-list">
+            {% for item in vacante_faq_items %}
+            <details class="faq-item">
+              <summary>{{ item.question }}</summary>
+              <p class="faq-answer">{{ item.answer }}</p>
+            </details>
+            {% endfor %}
+          </div>
+        </div>
+
+        <aside class="aside-stack">
+          <article class="aside-card">
+            <h3>Daca vrei contextul complet</h3>
+            <p>Pagina „Afla mai mult” explica mai clar cum arata procesul, ce nu promitem si cum poti lua o decizie informata.</p>
+            <div class="aside-actions">
+              <a class="button button-secondary" href="/afla-mai-mult" data-cta="faq_sidebar_explainer">Vezi pagina explicativa</a>
+            </div>
+          </article>
+          <article class="aside-card">
+            <h3>Daca preferi contact direct</h3>
+            <p>Foloseste varianta care iti este mai comoda. Nu trimitem spam si nu facem apeluri nesolicitate.</p>
+            <ul class="aside-list">
+              <li>Formular cu raspuns pe email in maximum 24h lucratoare.</li>
+              {% if mwr_whatsapp_url %}<li>WhatsApp pentru intrebari scurte si clarificari rapide.</li>{% endif %}
+              <li>Platforma externa MWR se deschide separat, in tab nou.</li>
+            </ul>
+            <div class="aside-actions">
+              <a class="button button-primary" href="/afla-mai-mult#contact" data-cta="faq_sidebar_contact">Contact</a>
+              {% if mwr_whatsapp_url %}
+              <a class="button button-secondary" href="{{ mwr_whatsapp_url }}" target="_blank" rel="noopener noreferrer" data-cta="faq_sidebar_whatsapp">WhatsApp</a>
+              {% else %}
+              <a class="button button-secondary" href="mailto:{{ mwr_contact_email }}" data-cta="faq_sidebar_email">Email</a>
+              {% endif %}
+            </div>
+          </article>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <footer class="container footer">
+    <div class="footer-nav">
+      <a href="/" data-cta="faq_footer_home">Pagina principala</a>
+      <a href="/afla-mai-mult" data-cta="faq_footer_explainer">Afla mai mult</a>
+      <a href="/afla-mai-mult#contact" data-cta="faq_footer_contact">Contact</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="mailto:{{ mwr_contact_email }}" data-cta="faq_footer_email">Email: {{ mwr_contact_email }}</a>
+      {% if mwr_whatsapp_url %}<a href="{{ mwr_whatsapp_url }}" target="_blank" rel="noopener noreferrer" data-cta="faq_footer_whatsapp">WhatsApp</a>{% endif %}
+    </div>
+    {% include "_vacante/_footer_disclosure.html" %}
+  </footer>
+
+  {% include "_vacante/_sticky_cta.html" %}
+  {% include "_vacante/_whatsapp_float.html" %}
+  {% include "_vacante/_cookie_banner.html" %}
+  {% include "_vacante/_analytics.html" %}
+
+  {% if mwr_live_chat_snippet %}
+    {{ mwr_live_chat_snippet | safe }}
+  {% endif %}
+</body>
+</html>
