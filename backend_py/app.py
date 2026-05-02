@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify, g, redirect, url_for, make_response, has_request_context, Response, stream_with_context, send_file, session
 from config import Config
-from database import init_db, get_db, save_message, get_messages, get_daily_message_count, is_user_premium, get_recent_conversations, get_conversation_context, create_new_conversation, get_or_create_conversation, update_conversation_title, search_conversations, get_conversation_brief, update_conversation_brief, ensure_flow_drafts_table
+from database import init_db, get_db, save_message, get_messages, get_daily_message_count, is_user_premium, get_recent_conversations, get_conversation_context, create_new_conversation, get_or_create_conversation, update_conversation_title, search_conversations, get_conversation_brief, update_conversation_brief, ensure_flow_drafts_table, ensure_flow_approvals_table, ensure_execution_type_column
 from models import workspaces, AGENT_REGISTRY_BY_SLUG, get_agent_name, get_agent_display_name, get_agent_role_label, get_agent_category, simulate_response, detect_handover, enhance_context, get_llm_response, get_api_docs_context
 from ai.provider_policy import is_ai_available, safe_provider_status, setup_required_payload
 from rag_store import (
@@ -12535,11 +12535,22 @@ def flows_draft_promote(draft_id):
         except Exception:
             flow_obj = {}
 
+        # Upgrade safety metadata: promoted flows use promoted_safe mode, not draft_only
+        flow_obj["safety"] = {
+            "mode": "promoted_safe",
+            "requires_human_approval": True,
+            "external_actions_enabled": False,
+            "dry_run_enabled": True,
+        }
+        flow_obj["version"] = flow_obj.get("version", "draft_v1")
+        flow_obj["draft"] = False
+        promoted_flow_json = json.dumps(flow_obj)
+
         _migrate_flows_table(conn)
         cur = conn.execute(
             """INSERT INTO flows (name, user_id, client_id, flow_json, category, description, is_template, updated_at)
                VALUES (?, ?, ?, ?, 'Draft Promoted', ?, 0, datetime('now'))""",
-            (row[3], uid, row[2], row[5], row[4] or ""),
+            (row[3], uid, row[2], promoted_flow_json, row[4] or ""),
         )
         flow_id = cur.lastrowid
 
@@ -12562,8 +12573,531 @@ def flows_draft_promote(draft_id):
         "draft_id": draft_id,
         "flow_id": flow_id,
         "status": "promoted",
-        "message": "Draft promoted to saved flow. Open in Orchestrator to review before running.",
+        "message": "Draft promoted to saved flow. Open in Orchestrator to review, then request approval and dry-run.",
         "orchestrator_url": f"/orchestrator?flow_id={flow_id}",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Flows v2: Approval + Dry-Run Gate
+# ---------------------------------------------------------------------------
+
+def _approval_row_to_dict(row):
+    """Convert a flow_approvals DB row (by column index) to a safe dict."""
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "client_id": row[2],
+        "flow_id": row[3],
+        "draft_id": row[4],
+        "status": row[5],
+        "requested_by": row[6],
+        "approved_by": row[7],
+        "rejected_by": row[8],
+        "reason": row[9],
+        "risk_level": row[10],
+        "approval_scope": row[11],
+        "created_at": row[12],
+        "updated_at": row[13],
+        "approved_at": row[14],
+        "rejected_at": row[15],
+    }
+
+
+@app.route("/api/flows/<int:flow_id>/approval/request", methods=["POST"])
+def flow_approval_request(flow_id):
+    """Request approval for a flow. Returns existing pending approval if one already exists."""
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+    payload = request.get_json(force=True, silent=True) or {}
+    scope = str(payload.get("approval_scope") or "dry_run").strip().lower()
+    if scope not in ("dry_run", "manual_run"):
+        scope = "dry_run"
+    reason = str(payload.get("reason") or "").strip()[:500]
+
+    conn = get_db()
+    try:
+        ensure_flow_approvals_table(conn)
+
+        # Verify flow ownership
+        row = conn.execute(
+            "SELECT id FROM flows WHERE id = ? AND user_id = ?", (flow_id, uid)
+        ).fetchone()
+        if not row:
+            return jsonify({"success": False, "error": "flow_not_found"}), 404
+
+        # Idempotent: return existing pending approval if present
+        existing = conn.execute(
+            """SELECT id, user_id, client_id, flow_id, draft_id, status, requested_by,
+                      approved_by, rejected_by, reason, risk_level, approval_scope,
+                      created_at, updated_at, approved_at, rejected_at
+               FROM flow_approvals
+               WHERE user_id = ? AND COALESCE(client_id, 0) = ? AND flow_id = ?
+                 AND approval_scope = ? AND status = 'pending'
+               ORDER BY id DESC LIMIT 1""",
+            (uid, cid or 0, flow_id, scope),
+        ).fetchone()
+        if existing:
+            conn.close()
+            return jsonify({
+                "success": True,
+                "already_pending": True,
+                "approval": _approval_row_to_dict(existing),
+            })
+
+        cur = conn.execute(
+            """INSERT INTO flow_approvals
+               (user_id, client_id, flow_id, status, requested_by, reason, risk_level,
+                approval_scope, created_at, updated_at)
+               VALUES (?, ?, ?, 'pending', ?, ?, 'low', ?, datetime('now'), datetime('now'))""",
+            (uid, cid, flow_id, str(uid), reason, scope),
+        )
+        approval_id = cur.lastrowid
+        conn.commit()
+
+        new_row = conn.execute(
+            """SELECT id, user_id, client_id, flow_id, draft_id, status, requested_by,
+                      approved_by, rejected_by, reason, risk_level, approval_scope,
+                      created_at, updated_at, approved_at, rejected_at
+               FROM flow_approvals WHERE id = ?""",
+            (approval_id,),
+        ).fetchone()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        return jsonify({"success": False, "error": "approval_request_failed"}), 500
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return jsonify({
+        "success": True,
+        "approval": _approval_row_to_dict(new_row),
+    })
+
+
+@app.route("/api/flows/<int:flow_id>/approval/status", methods=["GET"])
+def flow_approval_status(flow_id):
+    """Return current approval status for a flow."""
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+
+    conn = get_db()
+    try:
+        ensure_flow_approvals_table(conn)
+
+        row = conn.execute(
+            "SELECT id FROM flows WHERE id = ? AND user_id = ?", (flow_id, uid)
+        ).fetchone()
+        if not row:
+            return jsonify({"success": False, "error": "flow_not_found"}), 404
+
+        # Get latest approval for this flow (most recent, any status)
+        approval_row = conn.execute(
+            """SELECT id, user_id, client_id, flow_id, draft_id, status, requested_by,
+                      approved_by, rejected_by, reason, risk_level, approval_scope,
+                      created_at, updated_at, approved_at, rejected_at
+               FROM flow_approvals
+               WHERE user_id = ? AND COALESCE(client_id, 0) = ? AND flow_id = ?
+               ORDER BY id DESC LIMIT 1""",
+            (uid, cid or 0, flow_id),
+        ).fetchone()
+
+        # Get flow safety metadata
+        flow_row = conn.execute(
+            "SELECT flow_json FROM flows WHERE id = ?", (flow_id,)
+        ).fetchone()
+        flow_obj = {}
+        if flow_row:
+            try:
+                flow_obj = json.loads(flow_row[0]) or {}
+            except Exception:
+                pass
+        safety = flow_obj.get("safety", {})
+        requires_approval = bool(safety.get("requires_human_approval", True))
+        dry_run_enabled = bool(safety.get("dry_run_enabled", False))
+
+        approval_dict = _approval_row_to_dict(approval_row) if approval_row else None
+        can_dry_run = (
+            dry_run_enabled
+            and approval_dict is not None
+            and approval_dict.get("status") == "approved"
+            and approval_dict.get("approval_scope") in ("dry_run", "manual_run")
+        )
+
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": "approval_status_failed"}), 500
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return jsonify({
+        "success": True,
+        "flow_id": flow_id,
+        "approval_required": requires_approval,
+        "approval": approval_dict,
+        "can_dry_run": can_dry_run,
+        "can_manual_run": False,  # v2: manual run not enabled
+    })
+
+
+@app.route("/api/flows/approvals/<int:approval_id>/approve", methods=["POST"])
+def flow_approval_approve(approval_id):
+    """Approve a pending flow approval."""
+    uid = get_current_user_id()
+    payload = request.get_json(force=True, silent=True) or {}
+    reason = str(payload.get("reason") or "").strip()[:500]
+
+    conn = get_db()
+    try:
+        ensure_flow_approvals_table(conn)
+
+        row = conn.execute(
+            "SELECT id, user_id, status FROM flow_approvals WHERE id = ?", (approval_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({"success": False, "error": "approval_not_found"}), 404
+        if row[1] != uid:
+            return jsonify({"success": False, "error": "not_authorized"}), 403
+        if row[2] not in ("pending", "rejected"):
+            return jsonify({"success": False, "error": "approval_not_pending", "status": row[2]}), 409
+
+        conn.execute(
+            """UPDATE flow_approvals
+               SET status='approved', approved_by=?, reason=COALESCE(NULLIF(?, ''), reason),
+                   approved_at=datetime('now'), updated_at=datetime('now')
+               WHERE id=?""",
+            (str(uid), reason, approval_id),
+        )
+        conn.commit()
+
+        updated = conn.execute(
+            """SELECT id, user_id, client_id, flow_id, draft_id, status, requested_by,
+                      approved_by, rejected_by, reason, risk_level, approval_scope,
+                      created_at, updated_at, approved_at, rejected_at
+               FROM flow_approvals WHERE id=?""",
+            (approval_id,),
+        ).fetchone()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        return jsonify({"success": False, "error": "approve_failed"}), 500
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return jsonify({"success": True, "approval": _approval_row_to_dict(updated)})
+
+
+@app.route("/api/flows/approvals/<int:approval_id>/reject", methods=["POST"])
+def flow_approval_reject(approval_id):
+    """Reject a pending flow approval."""
+    uid = get_current_user_id()
+    payload = request.get_json(force=True, silent=True) or {}
+    reason = str(payload.get("reason") or "").strip()[:500]
+
+    conn = get_db()
+    try:
+        ensure_flow_approvals_table(conn)
+
+        row = conn.execute(
+            "SELECT id, user_id, status FROM flow_approvals WHERE id = ?", (approval_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({"success": False, "error": "approval_not_found"}), 404
+        if row[1] != uid:
+            return jsonify({"success": False, "error": "not_authorized"}), 403
+        if row[2] not in ("pending", "approved"):
+            return jsonify({"success": False, "error": "cannot_reject", "status": row[2]}), 409
+
+        conn.execute(
+            """UPDATE flow_approvals
+               SET status='rejected', rejected_by=?, reason=COALESCE(NULLIF(?, ''), reason),
+                   rejected_at=datetime('now'), updated_at=datetime('now')
+               WHERE id=?""",
+            (str(uid), reason, approval_id),
+        )
+        conn.commit()
+
+        updated = conn.execute(
+            """SELECT id, user_id, client_id, flow_id, draft_id, status, requested_by,
+                      approved_by, rejected_by, reason, risk_level, approval_scope,
+                      created_at, updated_at, approved_at, rejected_at
+               FROM flow_approvals WHERE id=?""",
+            (approval_id,),
+        ).fetchone()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        return jsonify({"success": False, "error": "reject_failed"}), 500
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return jsonify({"success": True, "approval": _approval_row_to_dict(updated)})
+
+
+@app.route("/api/orchestrator/dry-run", methods=["POST"])
+def orchestrator_dry_run():
+    """
+    Dry-run: simulate flow execution without external calls or data mutation.
+
+    Requirements:
+    - flow_id must be provided (raw draft flows cannot be dry-run).
+    - An approved dry_run approval must exist for the flow.
+    - No LLM calls.
+    - No external HTTP/connector mutations.
+    - Trace stored with execution_type='dry_run'.
+    - Returns deterministic simulated steps.
+    """
+    import time as _time
+    from datetime import datetime, timezone
+
+    payload = request.get_json(force=True, silent=True) or {}
+    flow_id_raw = payload.get("flow_id")
+    approval_id_raw = payload.get("approval_id")
+    uid = get_current_user_id()
+    cid = get_current_client_id()
+
+    # flow_id is required for v2 dry-run
+    if flow_id_raw is None:
+        return jsonify({
+            "success": False,
+            "error": "flow_id_required",
+            "message": "flow_id is required for dry-run. Promote a draft first.",
+        }), 400
+
+    try:
+        flow_id = int(flow_id_raw)
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "invalid_flow_id"}), 400
+
+    conn = get_db()
+    try:
+        ensure_flow_approvals_table(conn)
+        ensure_execution_type_column(conn)
+
+        # Verify flow ownership
+        flow_row = conn.execute(
+            "SELECT id, flow_json, name FROM flows WHERE id = ? AND user_id = ?",
+            (flow_id, uid),
+        ).fetchone()
+        if not flow_row:
+            conn.close()
+            return jsonify({"success": False, "error": "flow_not_found"}), 404
+
+        try:
+            flow_obj = json.loads(flow_row[1]) if flow_row[1] else {}
+        except Exception:
+            flow_obj = {}
+
+        # Block draft flows explicitly
+        if isinstance(flow_obj.get("safety"), dict) and flow_obj["safety"].get("mode") == "draft_only":
+            conn.close()
+            return jsonify({
+                "success": False,
+                "error": "draft_not_executable",
+                "message": "Draft flows cannot be dry-run. Promote the draft first.",
+            }), 400
+
+        # Check for approved dry_run approval
+        approval_row = conn.execute(
+            """SELECT id, status, approval_scope FROM flow_approvals
+               WHERE user_id = ? AND COALESCE(client_id, 0) = ? AND flow_id = ?
+                 AND status = 'approved' AND approval_scope = 'dry_run'
+               ORDER BY id DESC LIMIT 1""",
+            (uid, cid or 0, flow_id),
+        ).fetchone()
+
+        if not approval_row:
+            conn.close()
+            return jsonify({
+                "success": False,
+                "error": "approval_required",
+                "message": "An approved dry_run approval is required before dry-run. Call POST /api/flows/<flow_id>/approval/request first.",
+            }), 403
+
+        effective_approval_id = approval_row[0]
+        flow_name = flow_row[2] or "Unnamed Flow"
+        nodes = flow_obj.get("nodes", [])
+        connections = flow_obj.get("connections", [])
+        safety = flow_obj.get("safety", {})
+
+        # Simulate each node deterministically
+        steps = []
+        started_at = datetime.now(timezone.utc).isoformat()
+        t_start = _time.monotonic()
+        step_no = 0
+
+        def _sim_duration():
+            # Deterministic: vary by step index to avoid uniform-looking traces
+            return round(8.0 + (step_no % 5) * 2.1, 1)
+
+        for node in nodes:
+            if not isinstance(node, dict) or not node.get("id"):
+                continue
+            step_no += 1
+            ntype = str(node.get("type") or "unknown").lower()
+            nid = str(node.get("id"))
+            label = str(node.get("label") or nid)
+            slug = str(node.get("slug") or "")
+            dur = _sim_duration()
+
+            if ntype == "trigger":
+                step = {
+                    "node_id": nid,
+                    "node_type": ntype,
+                    "label": label,
+                    "status": "success",
+                    "dry_run": True,
+                    "duration_ms": dur,
+                    "output": {"triggered": True, "source": "dry_run_manual"},
+                    "external_action_executed": False,
+                }
+            elif ntype == "connector":
+                step = {
+                    "node_id": nid,
+                    "node_type": ntype,
+                    "label": label,
+                    "slug": slug,
+                    "status": "warning",
+                    "dry_run": True,
+                    "duration_ms": dur,
+                    "output": {
+                        "simulated": True,
+                        "message": "Simulated connector read. No external action executed.",
+                        "data": {"external_action_executed": False},
+                    },
+                    "external_action_executed": False,
+                }
+            elif ntype == "agent":
+                step = {
+                    "node_id": nid,
+                    "node_type": ntype,
+                    "label": label,
+                    "slug": slug,
+                    "status": "success",
+                    "dry_run": True,
+                    "duration_ms": dur,
+                    "output": {
+                        "simulated": True,
+                        "message": f"[Dry Run] Agent '{label}' would process inputs and produce recommendations.",
+                        "llm_called": False,
+                    },
+                    "external_action_executed": False,
+                }
+            elif ntype == "condition":
+                step = {
+                    "node_id": nid,
+                    "node_type": ntype,
+                    "label": label,
+                    "status": "success",
+                    "dry_run": True,
+                    "duration_ms": dur,
+                    "output": {
+                        "simulated": True,
+                        "evaluated": True,
+                        "result": "dry_run_placeholder",
+                        "message": "Condition evaluated with placeholder result.",
+                    },
+                    "external_action_executed": False,
+                }
+            else:
+                # output / unknown
+                step = {
+                    "node_id": nid,
+                    "node_type": ntype,
+                    "label": label,
+                    "status": "success",
+                    "dry_run": True,
+                    "duration_ms": dur,
+                    "output": {"simulated": True, "message": f"[Dry Run] '{label}' output complete."},
+                    "external_action_executed": False,
+                }
+            steps.append(step)
+
+        elapsed_ms = round((_time.monotonic() - t_start) * 1000, 1)
+        finished_at = datetime.now(timezone.utc).isoformat()
+
+        # Persist dry-run trace in executions table
+        try:
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS executions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    flow_id INTEGER,
+                    user_id INTEGER NOT NULL,
+                    client_id INTEGER,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    steps_json TEXT NOT NULL
+                )"""
+            )
+            try:
+                conn.execute("ALTER TABLE executions ADD COLUMN execution_type TEXT DEFAULT 'real'")
+            except Exception:
+                pass
+            conn.execute(
+                """INSERT INTO executions
+                   (flow_id, user_id, client_id, started_at, finished_at, status, steps_json, execution_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'dry_run')""",
+                (flow_id, uid, cid, started_at, finished_at, "dry_run_completed", json.dumps(steps)),
+            )
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": "dry_run_failed"}), 500
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    external_actions = sum(1 for s in steps if s.get("external_action_executed"))
+    return jsonify({
+        "success": True,
+        "status": "dry_run_completed",
+        "dry_run": True,
+        "flow_id": flow_id,
+        "flow_name": flow_name,
+        "approval_id": effective_approval_id,
+        "steps_executed": len(steps),
+        "external_actions_executed": external_actions,
+        "elapsed_ms": elapsed_ms,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "results": [s.get("output") for s in steps],
+        "steps": steps,
     })
 
 
@@ -12793,6 +13327,35 @@ def orchestrator_execute():
             "error": "draft_not_executable",
             "message": "Draft flows must be reviewed and promoted before execution. Open the flow in Orchestrator to review and promote it.",
         }), 400
+
+    # Approval guard: promoted flows with requires_human_approval must have an approved dry_run approval
+    if isinstance(_flow_safety, dict) and _flow_safety.get("requires_human_approval"):
+        _exec_flow_id = None
+        try:
+            if payload.get("flow_id") not in (None, "", "null"):
+                _exec_flow_id = int(payload.get("flow_id"))
+        except Exception:
+            _exec_flow_id = None
+        if _exec_flow_id is not None:
+            _appr_conn = get_db()
+            try:
+                ensure_flow_approvals_table(_appr_conn)
+                ensure_execution_type_column(_appr_conn)
+                _appr = _appr_conn.execute(
+                    """SELECT id FROM flow_approvals
+                       WHERE user_id = ? AND flow_id = ? AND status = 'approved'
+                         AND approval_scope = 'dry_run'
+                       ORDER BY id DESC LIMIT 1""",
+                    (uid, _exec_flow_id),
+                ).fetchone()
+            finally:
+                _appr_conn.close()
+            if not _appr:
+                return jsonify({
+                    "success": False,
+                    "error": "approval_required",
+                    "message": "This flow requires an approved dry-run before execution. Request approval first.",
+                }), 403
 
     scope_conn = get_db()
     _ensure_client_tables(scope_conn)

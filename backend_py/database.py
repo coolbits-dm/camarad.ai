@@ -718,3 +718,48 @@ def ensure_flow_drafts_table(conn):
         pass
     conn.commit()
 
+
+def ensure_flow_approvals_table(conn):
+    """Idempotent: create flow_approvals table for the approval gate."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS flow_approvals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            client_id INTEGER,
+            flow_id INTEGER,
+            draft_id INTEGER,
+            conversation_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'pending',
+            requested_by TEXT,
+            approved_by TEXT,
+            rejected_by TEXT,
+            reason TEXT,
+            risk_level TEXT NOT NULL DEFAULT 'low',
+            approval_scope TEXT NOT NULL DEFAULT 'dry_run',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            approved_at TEXT,
+            rejected_at TEXT
+        )
+    """)
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_approvals_user_flow ON flow_approvals(user_id, flow_id, status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_approvals_user_scope ON flow_approvals(user_id, approval_scope, status)"
+        )
+    except Exception:
+        pass
+    conn.commit()
+
+
+def ensure_execution_type_column(conn):
+    """Idempotent: add execution_type column to executions table for dry-run tracking."""
+    for table in ("executions", "flow_executions"):
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN execution_type TEXT DEFAULT 'real'")
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+

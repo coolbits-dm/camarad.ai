@@ -494,6 +494,24 @@
     </button>
   </div>
 
+  <!-- Approval Banner (hidden by default; shown when a promoted flow with approval gate is loaded) -->
+  <div id="approval-banner" style="display:none;position:fixed;top:100px;left:0;right:0;z-index:1490;
+       background:linear-gradient(90deg,#1d4ed8 0%,#1e40af 100%);color:#fff;
+       padding:8px 18px;font-size:0.85rem;text-align:center;box-shadow:0 2px 6px rgba(0,0,0,.4);">
+    <i class="bi bi-clipboard-check me-2"></i>
+    <strong>Approval Required</strong> &mdash; Request and approve before running.
+    <span id="approval-banner-status" style="margin-left:10px;opacity:.85;"></span>
+    <button id="approval-request-btn" onclick="window.requestApprovalForFlow()" class="btn btn-sm btn-light ms-3" style="font-size:0.78rem;padding:2px 10px;">
+      <i class="bi bi-send me-1"></i>Request Approval
+    </button>
+    <button id="approval-approve-btn" onclick="window.approveFlow()" class="btn btn-sm btn-success ms-2" style="display:none;font-size:0.78rem;padding:2px 10px;">
+      <i class="bi bi-check-circle me-1"></i>Approve
+    </button>
+    <button id="approval-dryrun-btn" onclick="window.runDryRun()" class="btn btn-sm btn-warning ms-2" style="display:none;font-size:0.78rem;padding:2px 10px;">
+      <i class="bi bi-play-circle me-1"></i>Dry Run
+    </button>
+  </div>
+
   <!-- Load Flows Modal -->
   <div class="modal fade" id="loadFlowsModal" tabindex="-1" aria-labelledby="loadFlowsModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
@@ -3783,6 +3801,142 @@ window.promoteDraftToFlow = function() {
     }
     if (typeof _origRunFlow === 'function') _origRunFlow.apply(this, arguments);
   };
+})();
+
+// ---------------------------------------------------------------------------
+// Flows v2: Approval + Dry-Run Gate
+// ---------------------------------------------------------------------------
+(function () {
+  'use strict';
+
+  // State
+  let _approvalFlowId = null;
+  let _approvalId = null;
+  let _approvalStatus = null;
+
+  function _showApprovalBanner(flowId, approval, canDryRun) {
+    _approvalFlowId = flowId;
+    _approvalId = approval ? approval.id : null;
+    _approvalStatus = approval ? approval.status : null;
+
+    var banner = document.getElementById('approval-banner');
+    var statusEl = document.getElementById('approval-banner-status');
+    var reqBtn = document.getElementById('approval-request-btn');
+    var appBtn = document.getElementById('approval-approve-btn');
+    var dryBtn = document.getElementById('approval-dryrun-btn');
+    if (!banner) return;
+
+    banner.style.display = 'block';
+
+    if (!approval) {
+      statusEl.textContent = 'No approval requested yet.';
+      reqBtn.style.display = '';
+      appBtn.style.display = 'none';
+      dryBtn.style.display = 'none';
+    } else if (approval.status === 'pending') {
+      statusEl.textContent = 'Pending approval.';
+      reqBtn.style.display = 'none';
+      appBtn.style.display = '';
+      dryBtn.style.display = 'none';
+    } else if (approval.status === 'approved') {
+      statusEl.textContent = 'Approved. Ready to Dry Run.';
+      reqBtn.style.display = 'none';
+      appBtn.style.display = 'none';
+      dryBtn.style.display = canDryRun ? '' : 'none';
+    } else if (approval.status === 'rejected') {
+      statusEl.textContent = 'Rejected. Re-request to try again.';
+      reqBtn.style.display = '';
+      appBtn.style.display = 'none';
+      dryBtn.style.display = 'none';
+    }
+  }
+
+  function _checkApprovalOnLoad(flowId) {
+    if (!flowId) return;
+    fetch('/api/flows/' + flowId + '/approval/status')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.success) return;
+        if (data.approval_required) {
+          _showApprovalBanner(flowId, data.approval, data.can_dry_run);
+        }
+      })
+      .catch(function () {});
+  }
+
+  window.requestApprovalForFlow = function () {
+    if (!_approvalFlowId) return;
+    fetch('/api/flows/' + _approvalFlowId + '/approval/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approval_scope: 'dry_run' }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.success) {
+          _showApprovalBanner(_approvalFlowId, data.approval, false);
+        } else {
+          alert('Could not request approval: ' + (data.error || 'unknown error'));
+        }
+      })
+      .catch(function () { alert('Network error requesting approval.'); });
+  };
+
+  window.approveFlow = function () {
+    if (!_approvalId) return;
+    fetch('/api/flows/approvals/' + _approvalId + '/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.success) {
+          _showApprovalBanner(_approvalFlowId, data.approval, true);
+        } else {
+          alert('Could not approve: ' + (data.error || 'unknown error'));
+        }
+      })
+      .catch(function () { alert('Network error approving flow.'); });
+  };
+
+  window.runDryRun = function () {
+    if (!_approvalFlowId || !_approvalId) return;
+    var dryBtn = document.getElementById('approval-dryrun-btn');
+    if (dryBtn) { dryBtn.disabled = true; dryBtn.textContent = 'Running…'; }
+    fetch('/api/orchestrator/dry-run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ flow_id: _approvalFlowId, approval_id: _approvalId }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (dryBtn) { dryBtn.disabled = false; dryBtn.innerHTML = '<i class="bi bi-play-circle me-1"></i>Dry Run'; }
+        if (data.success) {
+          var msg = '✅ Dry Run Completed\n\nSteps: ' + data.steps_executed
+            + '\nExternal actions: ' + data.external_actions_executed
+            + '\nElapsed: ' + data.elapsed_ms + 'ms'
+            + '\n\nSee console for full trace.';
+          console.log('[DryRun result]', data);
+          alert(msg);
+        } else {
+          alert('Dry Run failed: ' + (data.message || data.error || 'unknown error'));
+        }
+      })
+      .catch(function () {
+        if (dryBtn) { dryBtn.disabled = false; dryBtn.innerHTML = '<i class="bi bi-play-circle me-1"></i>Dry Run'; }
+        alert('Network error during dry-run.');
+      });
+  };
+
+  // On page load, check if a flow_id is in the URL
+  (function () {
+    var params = new URLSearchParams(window.location.search);
+    var fid = parseInt(params.get('flow_id'), 10);
+    if (fid && !isNaN(fid)) {
+      _checkApprovalOnLoad(fid);
+    }
+  })();
 })();
 </script>
 {% endblock %}
