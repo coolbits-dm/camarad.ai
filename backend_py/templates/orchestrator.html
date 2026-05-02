@@ -479,6 +479,21 @@
     <div class="zoom-label" id="zoom-label">100%</div>
   </div>
 
+  <!-- Draft Mode Banner (hidden by default; shown when a draft is loaded) -->
+  <div id="draft-mode-banner" style="display:none;position:fixed;top:60px;left:0;right:0;z-index:1500;
+       background:linear-gradient(90deg,#d29922 0%,#b45309 100%);color:#fff;
+       padding:8px 18px;font-size:0.85rem;text-align:center;box-shadow:0 2px 6px rgba(0,0,0,.4);">
+    <i class="bi bi-shield-exclamation me-2"></i>
+    <strong>Draft Mode</strong> &mdash; Human approval required before execution.
+    <span id="draft-mode-name" style="margin-left:10px;opacity:.85;"></span>
+    <button onclick="promoteDraftToFlow()" class="btn btn-sm btn-light ms-3" style="font-size:0.78rem;padding:2px 10px;">
+      <i class="bi bi-arrow-up-circle me-1"></i>Save as Flow
+    </button>
+    <button onclick="clearDraftMode()" class="btn btn-sm btn-outline-light ms-2" style="font-size:0.78rem;padding:2px 10px;">
+      Dismiss
+    </button>
+  </div>
+
   <!-- Load Flows Modal -->
   <div class="modal fade" id="loadFlowsModal" tabindex="-1" aria-labelledby="loadFlowsModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
@@ -3648,6 +3663,126 @@
     console.warn('flow_id query parse error:', e);
   }
 
+  // --- draft_id query param: load draft from /api/flows/drafts/<id> ---
+  try {
+    var qp2 = new URLSearchParams(window.location.search || '');
+    var draftIdFromUrl = parseInt(qp2.get('draft_id') || '', 10);
+    if (Number.isFinite(draftIdFromUrl) && draftIdFromUrl > 0) {
+      setTimeout(function() {
+        fetch('/api/flows/drafts/' + draftIdFromUrl)
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (!data.success || !data.draft) {
+              showToast('Draft not found: ' + draftIdFromUrl, 'warning');
+              return;
+            }
+            var draft = data.draft;
+            var flow = draft.flow || {};
+
+            // Load into canvas using same logic as loadFlowFromDb
+            clearFlow();
+            activeFlowId = null; // draft is not a saved flow yet
+            window._activeDraftId = draftIdFromUrl;
+            window._activeDraftMode = true;
+            window._activeDraftData = draft;
+
+            if (flow.nodes && flow.nodes.length) {
+              flow.nodes.forEach(function(n) {
+                addNode(n.type, n.slug || '', n.label || '', n.status || '', n.workspace || '');
+                var node = layer.lastElementChild;
+                node.style.left = (n.x || 80) + 'px';
+                node.style.top = (n.y || 140) + 'px';
+                if (n.label) {
+                  var lbl = node.querySelector('.node-label') || node.querySelector('.node-desc');
+                  if (lbl) lbl.textContent = n.label;
+                }
+                if (n.config) {
+                  if (node.dataset.type === 'trigger') { applyTriggerNodeConfig(node, n.config); }
+                  else if (node.dataset.type === 'condition') { applyConditionNodeConfig(node, n.config); }
+                  else if (node.dataset.type === 'output') { applyOutputNodeConfig(node, n.config); }
+                }
+              });
+              setTimeout(function() {
+                if (flow.connections) {
+                  flow.connections.forEach(function(c) {
+                    var from = document.getElementById(c.from);
+                    var to = document.getElementById(c.to);
+                    if (from && to) {
+                      try {
+                        var line = new LeaderLine(from, to, {
+                          color: '#d29922', size: 2, path: 'fluid',
+                          startSocket: 'right', endSocket: 'left',
+                          startPlug: 'behind', endPlug: 'arrow1'
+                        });
+                        line._startNode = from;
+                        line._endNode = to;
+                        lines.push(line);
+                      } catch(e) {}
+                    }
+                  });
+                }
+              }, 120);
+            }
+
+            // Show draft banner
+            var banner = document.getElementById('draft-mode-banner');
+            var nameEl = document.getElementById('draft-mode-name');
+            if (banner) banner.style.display = 'block';
+            if (nameEl) nameEl.textContent = '\u201c' + (draft.name || 'Draft') + '\u201d';
+            showToast('Draft loaded: \u201c' + (draft.name || 'Draft') + '\u201d \u2014 Review before running.', 'info');
+          })
+          .catch(function(e) { showToast('Draft load error: ' + e.message, 'warning'); });
+      }, 280);
+    }
+  } catch (e) {
+    console.warn('draft_id query parse error:', e);
+  }
+
+})();
+
+// Draft mode helpers
+window._activeDraftMode = false;
+window._activeDraftId = null;
+window._activeDraftData = null;
+
+window.clearDraftMode = function() {
+  window._activeDraftMode = false;
+  window._activeDraftId = null;
+  window._activeDraftData = null;
+  var banner = document.getElementById('draft-mode-banner');
+  if (banner) banner.style.display = 'none';
+};
+
+window.promoteDraftToFlow = function() {
+  var draftId = window._activeDraftId;
+  if (!draftId) { showToast('No active draft to promote.', 'warning'); return; }
+  fetch('/api/flows/drafts/' + draftId + '/promote', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.success) { showToast((data.error || 'Promote failed'), 'warning'); return; }
+      var flowId = data.flow_id;
+      clearDraftMode();
+      showToast('Draft saved as flow #' + flowId + '. You can now review and run it.', 'success');
+      if (flowId) {
+        setTimeout(function() { loadFlowFromDb(flowId); }, 400);
+      }
+    })
+    .catch(function(e) { showToast('Promote error: ' + e.message, 'warning'); });
+};
+
+// Patch runFlow to block draft execution
+(function() {
+  var _origRunFlow = window.runFlow;
+  window.runFlow = function() {
+    if (window._activeDraftMode) {
+      showToast(
+        '\u26A0\uFE0F Draft Mode — Save as Flow first before running. Click \u201cSave as Flow\u201d in the banner above.',
+        'warning'
+      );
+      return;
+    }
+    if (typeof _origRunFlow === 'function') _origRunFlow.apply(this, arguments);
+  };
 })();
 </script>
 {% endblock %}

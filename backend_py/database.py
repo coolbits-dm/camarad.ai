@@ -684,3 +684,37 @@ def is_user_premium(user_id):
     db.close()
     return row[0] if row else False
 
+
+def ensure_flow_drafts_table(conn):
+    """Idempotent: create flow_drafts table for safe draft-mode flows."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS flow_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            client_id INTEGER,
+            conversation_id INTEGER,
+            source_message_id INTEGER,
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            prompt TEXT NOT NULL,
+            flow_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            safety_level TEXT NOT NULL DEFAULT 'draft_only',
+            created_by_agent_slug TEXT,
+            source TEXT DEFAULT 'chat_generate_flow',
+            promoted_flow_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_drafts_user ON flow_drafts(user_id, status, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_drafts_user_client ON flow_drafts(user_id, client_id, status)"
+        )
+    except Exception:
+        pass
+    conn.commit()
+

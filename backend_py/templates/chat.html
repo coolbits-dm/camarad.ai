@@ -483,25 +483,46 @@ var msgAvatarCounter = 0;
     loadSuggestions();
 
     async function composeFlowFromPrompt() {
+        // Take composer text first; fall back to last user message if empty.
         var prompt = userInput.value.trim();
-        if (!prompt) return;
+        if (!prompt) {
+          var lastUserMsg = chatHistory ? chatHistory.querySelector('.user-msg:last-of-type') : null;
+          if (lastUserMsg) prompt = lastUserMsg.textContent.trim();
+        }
+        if (!prompt) {
+          if (window.showToast) window.showToast('Generate Flow', 'Type a prompt first.', 'warning');
+          return;
+        }
         if (composeFlowBtn) composeFlowBtn.disabled = true;
         try {
-          var res = await fetch('/api/orchestrator/compose', {
+          var body = { prompt: prompt };
+          if (window.convId) body.conversation_id = window.convId;
+          var res = await fetch('/api/flows/drafts/generate', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({prompt: prompt})
+            body: JSON.stringify(body)
           });
           var data = await res.json();
           if (!res.ok || !data.success) {
             var msg = (data && (data.error || data.message)) || ('HTTP ' + res.status);
-            if (window.showToast) window.showToast('Flow Compose Error', msg, 'error');
+            if (window.showToast) window.showToast('Generate Flow Error', msg, 'error');
             return;
           }
-          if (window.showToast) window.showToast('Flow generated. Opening orchestrator...', 'success');
-          window.location.href = '/orchestrator?flow_id=' + encodeURIComponent(data.flow_id);
+          // Show toast with link to Orchestrator — do NOT auto-navigate.
+          var draftUrl = data.orchestrator_url || ('/orchestrator?draft_id=' + data.draft_id);
+          var draftName = data.name || 'Flow Draft';
+          var toastMsg = 'Draft created: \u201c' + draftName + '\u201d \u2014 <a href="' + draftUrl + '" class="alert-link">Open in Orchestrator</a>';
+          if (window.showToast) {
+            window.showToast('Flow Draft Created', toastMsg, 'success');
+          } else {
+            // Fallback: insert system note in chat
+            var noteEl = document.createElement('div');
+            noteEl.className = 'alert alert-info mt-2 small';
+            noteEl.innerHTML = '&#x1F4CB; ' + toastMsg;
+            if (chatHistory) chatHistory.appendChild(noteEl);
+          }
         } catch (err) {
-          if (window.showToast) window.showToast('Flow Compose Error', err.message || String(err), 'error');
+          if (window.showToast) window.showToast('Generate Flow Error', err.message || String(err), 'error');
         } finally {
           if (composeFlowBtn) composeFlowBtn.disabled = false;
         }
@@ -514,6 +535,7 @@ var msgAvatarCounter = 0;
       if (headerAvEl) {
         window.CamaradAvatars.render(headerAvEl, window.agentSlug, { size: 48, expression: 'smile', animate: true });
         var profile = window.CamaradAvatars.getProfile(window.agentSlug);
+
         if (profile) headerAvEl.style.setProperty('--avatar-accent', profile.accentColor);
         // Status color
         var statusEl = document.getElementById('chat-agent-status');

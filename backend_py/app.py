@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify, g, redirect, url_for, make_response, has_request_context, Response, stream_with_context, send_file, session
 from config import Config
-from database import init_db, get_db, save_message, get_messages, get_daily_message_count, is_user_premium, get_recent_conversations, get_conversation_context, create_new_conversation, get_or_create_conversation, update_conversation_title, search_conversations, get_conversation_brief, update_conversation_brief
+from database import init_db, get_db, save_message, get_messages, get_daily_message_count, is_user_premium, get_recent_conversations, get_conversation_context, create_new_conversation, get_or_create_conversation, update_conversation_title, search_conversations, get_conversation_brief, update_conversation_brief, ensure_flow_drafts_table
 from models import workspaces, AGENT_REGISTRY_BY_SLUG, get_agent_name, get_agent_display_name, get_agent_role_label, get_agent_category, simulate_response, detect_handover, enhance_context, get_llm_response, get_api_docs_context
 from ai.provider_policy import is_ai_available, safe_provider_status, setup_required_payload
 from rag_store import (
@@ -12143,6 +12143,430 @@ def _normalize_composed_flow(flow_obj):
     return {"nodes": out_nodes, "connections": out_connections}, None
 
 
+# ---------------------------------------------------------------------------
+# Flow Drafts — safe draft-mode flow generation (no LLM, no CT spend)
+# ---------------------------------------------------------------------------
+
+def _generate_flow_draft_from_prompt(prompt, *, client_id=None, conversation_id=None, agent_slug=None):
+    """
+    Deterministic draft flow generator.
+
+    Uses keyword heuristics — no OpenAI call, no CT spend, no external actions.
+    Always returns a safe draft flow with:
+      - version: "draft_v1"
+      - draft: true
+      - safety.mode: "draft_only"
+      - safety.requires_human_approval: true
+      - safety.external_actions_enabled: false
+    """
+    import html as _html
+    import re as _re
+
+    prompt_safe = str(prompt or "").strip()
+    prompt_lower = prompt_safe.lower()
+
+    def _esc(s):
+        return _html.escape(str(s or "")[:80])
+
+    # --- Keyword classification ---
+    _kw_ppc = any(k in prompt_lower for k in ("ppc", "google ads", "paid search", "adwords", "campaign", "roas", "cpc", "ctr", "ad spend"))
+    _kw_social = any(k in prompt_lower for k in ("linkedin", "facebook", "meta ads", "instagram", "social", "twitter", "x ads"))
+    _kw_gmail = any(k in prompt_lower for k in ("gmail", "email", "inbox", "mail"))
+    _kw_analytics = any(k in prompt_lower for k in ("analytics", "ga4", "google analytics", "traffic", "sessions", "pageviews"))
+    _kw_docs = any(k in prompt_lower for k in ("google docs", "docs", "document", "spreadsheet", "sheet", "slides"))
+    _kw_hubspot = any(k in prompt_lower for k in ("hubspot", "crm", "contact", "deal", "pipeline"))
+    _kw_salesforce = any(k in prompt_lower for k in ("salesforce", "sfdc", "opportunity", "lead"))
+    _kw_report = any(k in prompt_lower for k in ("report", "summary", "brief", "weekly", "daily", "monthly", "overview", "digest"))
+    _kw_seo = any(k in prompt_lower for k in ("seo", "search console", "gsc", "organic", "ranking", "keyword"))
+
+    # --- Pick name ---
+    if _kw_ppc and _kw_report:
+        name = "PPC Performance Report"
+        description = "Draft: weekly PPC performance report with Google Ads data."
+        agent = "ppc-specialist"
+    elif _kw_ppc:
+        name = "PPC Analysis Draft"
+        description = "Draft: PPC campaign analysis flow."
+        agent = "ppc-specialist"
+    elif _kw_analytics and _kw_report:
+        name = "Analytics Summary Draft"
+        description = "Draft: website analytics summary flow."
+        agent = "cmo-growth"
+    elif _kw_gmail and _kw_report:
+        name = "Email Summary Draft"
+        description = "Draft: Gmail digest summary flow."
+        agent = "assistant"
+    elif _kw_seo and _kw_report:
+        name = "SEO Report Draft"
+        description = "Draft: SEO performance report."
+        agent = "seo-specialist"
+    elif _kw_hubspot:
+        name = "CRM Pipeline Draft"
+        description = "Draft: HubSpot CRM pipeline review."
+        agent = "cfo-advisor"
+    elif _kw_report:
+        name = "Summary Report Draft"
+        description = "Draft: auto-generated summary report."
+        agent = agent_slug or "assistant"
+    else:
+        name = _esc(prompt_safe[:60]) or "Flow Draft"
+        description = f"Draft: auto-generated from prompt."
+        agent = agent_slug or "assistant"
+
+    # --- Nodes ---
+    nodes = []
+    connections = []
+
+    nodes.append({
+        "id": "trigger_1",
+        "type": "trigger",
+        "x": 80, "y": 140,
+        "label": "Manual Start",
+        "config": {"trigger_type": "manual"},
+    })
+    last_id = "trigger_1"
+    x = 320
+
+    # Connector placeholder nodes (safe, not executable)
+    connector_nodes = []
+    if _kw_ppc:
+        connector_nodes.append(("connector_gads", "google-ads", "Google Ads [placeholder]", x))
+        x += 240
+    elif _kw_analytics:
+        connector_nodes.append(("connector_ga4", "google-analytics", "Google Analytics [placeholder]", x))
+        x += 240
+    elif _kw_gmail:
+        connector_nodes.append(("connector_gmail", "gmail", "Gmail [placeholder]", x))
+        x += 240
+    elif _kw_docs:
+        connector_nodes.append(("connector_docs", "google-docs", "Google Docs [placeholder]", x))
+        x += 240
+    elif _kw_hubspot:
+        connector_nodes.append(("connector_hubspot", "hubspot", "HubSpot [placeholder]", x))
+        x += 240
+    elif _kw_salesforce:
+        connector_nodes.append(("connector_sf", "salesforce", "Salesforce [placeholder]", x))
+        x += 240
+    elif _kw_social:
+        connector_nodes.append(("connector_social", "linkedin-ads", "Social Ads [placeholder]", x))
+        x += 240
+    elif _kw_seo:
+        connector_nodes.append(("connector_gsc", "google-search-console", "Search Console [placeholder]", x))
+        x += 240
+
+    for cnode_id, cslug, clabel, cx in connector_nodes:
+        nodes.append({
+            "id": cnode_id,
+            "type": "connector",
+            "x": cx, "y": 140,
+            "label": _esc(clabel),
+            "slug": cslug,
+            "config": {
+                "external_action": False,
+                "draft_placeholder": True,
+                "note": "Connector placeholder — requires review before activation.",
+            },
+        })
+        connections.append({"from": last_id, "to": cnode_id})
+        last_id = cnode_id
+
+    # Agent node
+    nodes.append({
+        "id": "agent_1",
+        "type": "agent",
+        "x": x, "y": 140,
+        "label": _esc(name),
+        "slug": agent,
+        "config": {"task": _esc(prompt_safe[:200])},
+    })
+    connections.append({"from": last_id, "to": "agent_1"})
+    x += 240
+
+    # Output node
+    output_label = "Draft Report" if _kw_report else "Draft Output"
+    nodes.append({
+        "id": "output_1",
+        "type": "output",
+        "x": x, "y": 140,
+        "label": output_label,
+        "config": {"output_type": "summary"},
+    })
+    connections.append({"from": "agent_1", "to": "output_1"})
+
+    flow_obj = {
+        "version": "draft_v1",
+        "draft": True,
+        "safety": {
+            "mode": "draft_only",
+            "requires_human_approval": True,
+            "external_actions_enabled": False,
+        },
+        "nodes": nodes,
+        "connections": connections,
+        "meta": {
+            "prompt": prompt_safe[:500],
+            "source": "chat_generate_flow",
+            "agent_slug": agent,
+        },
+    }
+
+    return {
+        "name": name,
+        "description": description,
+        "flow": flow_obj,
+        "agent": agent,
+    }
+
+
+@app.route("/api/flows/drafts/generate", methods=["POST"])
+def flows_draft_generate():
+    """Generate a safe draft flow from a prompt. No LLM, no CT spend, no external actions."""
+    payload = request.get_json(force=True, silent=True) or {}
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        return jsonify({"success": False, "error": "prompt_required", "message": "Prompt is required."}), 400
+    if len(prompt) > 4000:
+        prompt = prompt[:4000]
+
+    uid = get_current_user_id()
+    cid = payload.get("client_id") or get_current_client_id()
+    conv_id = payload.get("conversation_id")
+    src_msg_id = payload.get("source_message_id")
+    agent_slug = str(payload.get("agent_slug") or "").strip() or None
+
+    if cid is not None:
+        try:
+            cid = int(cid)
+        except Exception:
+            cid = None
+
+    try:
+        draft_info = _generate_flow_draft_from_prompt(
+            prompt,
+            client_id=cid,
+            conversation_id=conv_id,
+            agent_slug=agent_slug,
+        )
+    except Exception as e:
+        return jsonify({"success": False, "error": "generate_failed", "message": "Draft generation failed."}), 500
+
+    conn = get_db()
+    try:
+        ensure_flow_drafts_table(conn)
+        cur = conn.execute(
+            """
+            INSERT INTO flow_drafts
+              (user_id, client_id, conversation_id, source_message_id,
+               name, description, prompt, flow_json,
+               status, safety_level, created_by_agent_slug, source,
+               created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'draft_only', ?, 'chat_generate_flow',
+                    datetime('now'), datetime('now'))
+            """,
+            (
+                uid, cid, conv_id, src_msg_id,
+                draft_info["name"], draft_info["description"], prompt,
+                json.dumps(draft_info["flow"]),
+                draft_info["agent"],
+            ),
+        )
+        draft_id = cur.lastrowid
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": "db_error", "message": "Failed to save draft."}), 500
+    finally:
+        conn.close()
+
+    return jsonify({
+        "success": True,
+        "draft_id": draft_id,
+        "name": draft_info["name"],
+        "status": "draft",
+        "flow": draft_info["flow"],
+        "orchestrator_url": f"/orchestrator?draft_id={draft_id}",
+    })
+
+
+@app.route("/api/flows/drafts", methods=["GET"])
+def flows_draft_list():
+    """List all draft flows for current user (optionally filtered by client_id)."""
+    uid = get_current_user_id()
+    cid = request.args.get("client_id")
+    limit = min(int(request.args.get("limit", 20) or 20), 100)
+
+    if cid is not None:
+        try:
+            cid = int(cid)
+        except Exception:
+            cid = None
+
+    conn = get_db()
+    try:
+        ensure_flow_drafts_table(conn)
+        if cid is not None:
+            rows = conn.execute(
+                """SELECT id, user_id, client_id, name, description, status, safety_level,
+                          source, promoted_flow_id, created_at, updated_at
+                   FROM flow_drafts
+                   WHERE user_id = ? AND COALESCE(client_id, 0) = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (uid, cid, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT id, user_id, client_id, name, description, status, safety_level,
+                          source, promoted_flow_id, created_at, updated_at
+                   FROM flow_drafts
+                   WHERE user_id = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (uid, limit),
+            ).fetchall()
+    finally:
+        conn.close()
+
+    drafts = []
+    for r in rows:
+        drafts.append({
+            "id": r[0],
+            "user_id": r[1],
+            "client_id": r[2],
+            "name": r[3],
+            "description": r[4],
+            "status": r[5],
+            "safety_level": r[6],
+            "source": r[7],
+            "promoted_flow_id": r[8],
+            "created_at": r[9],
+            "updated_at": r[10],
+            "orchestrator_url": f"/orchestrator?draft_id={r[0]}",
+        })
+
+    return jsonify({"success": True, "drafts": drafts})
+
+
+@app.route("/api/flows/drafts/<int:draft_id>", methods=["GET"])
+def flows_draft_get(draft_id):
+    """Get a single draft flow by ID. Only returns drafts owned by the current user."""
+    uid = get_current_user_id()
+
+    conn = get_db()
+    try:
+        ensure_flow_drafts_table(conn)
+        row = conn.execute(
+            """SELECT id, user_id, client_id, conversation_id, source_message_id,
+                      name, description, prompt, flow_json,
+                      status, safety_level, created_by_agent_slug, source,
+                      promoted_flow_id, created_at, updated_at
+               FROM flow_drafts WHERE id = ? AND user_id = ?""",
+            (draft_id, uid),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return jsonify({"success": False, "error": "draft_not_found"}), 404
+
+    try:
+        flow_obj = json.loads(row[8]) if row[8] else {}
+    except Exception:
+        flow_obj = {}
+
+    return jsonify({
+        "success": True,
+        "draft": {
+            "id": row[0],
+            "user_id": row[1],
+            "client_id": row[2],
+            "conversation_id": row[3],
+            "source_message_id": row[4],
+            "name": row[5],
+            "description": row[6],
+            "prompt": row[7],
+            "flow": flow_obj,
+            "status": row[9],
+            "safety_level": row[10],
+            "created_by_agent_slug": row[11],
+            "source": row[12],
+            "promoted_flow_id": row[13],
+            "created_at": row[14],
+            "updated_at": row[15],
+            "orchestrator_url": f"/orchestrator?draft_id={row[0]}",
+        },
+    })
+
+
+@app.route("/api/flows/drafts/<int:draft_id>/promote", methods=["POST"])
+def flows_draft_promote(draft_id):
+    """
+    Promote a draft flow to a saved flow in the flows table.
+    Sets draft status to 'promoted'. Does NOT execute the flow.
+    """
+    uid = get_current_user_id()
+
+    conn = get_db()
+    try:
+        ensure_flow_drafts_table(conn)
+        row = conn.execute(
+            "SELECT id, user_id, client_id, name, description, flow_json, status FROM flow_drafts WHERE id = ? AND user_id = ?",
+            (draft_id, uid),
+        ).fetchone()
+
+        if not row:
+            return jsonify({"success": False, "error": "draft_not_found"}), 404
+
+        if row[6] == "promoted":
+            # Already promoted — return existing flow_id
+            existing = conn.execute(
+                "SELECT promoted_flow_id FROM flow_drafts WHERE id = ?", (draft_id,)
+            ).fetchone()
+            return jsonify({
+                "success": True,
+                "already_promoted": True,
+                "flow_id": existing[0] if existing else None,
+                "draft_id": draft_id,
+            })
+
+        try:
+            flow_obj = json.loads(row[5]) if row[5] else {}
+        except Exception:
+            flow_obj = {}
+
+        _migrate_flows_table(conn)
+        cur = conn.execute(
+            """INSERT INTO flows (name, user_id, client_id, flow_json, category, description, is_template, updated_at)
+               VALUES (?, ?, ?, ?, 'Draft Promoted', ?, 0, datetime('now'))""",
+            (row[3], uid, row[2], row[5], row[4] or ""),
+        )
+        flow_id = cur.lastrowid
+
+        conn.execute(
+            "UPDATE flow_drafts SET status='promoted', promoted_flow_id=?, updated_at=datetime('now') WHERE id=?",
+            (flow_id, draft_id),
+        )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": "promote_failed"}), 500
+    finally:
+        conn.close()
+
+    return jsonify({
+        "success": True,
+        "draft_id": draft_id,
+        "flow_id": flow_id,
+        "status": "promoted",
+        "message": "Draft promoted to saved flow. Open in Orchestrator to review before running.",
+        "orchestrator_url": f"/orchestrator?flow_id={flow_id}",
+    })
+
+
 @app.route("/api/orchestrator/compose", methods=["POST"])
 def orchestrator_compose():
     payload = request.get_json(force=True, silent=True) or {}
@@ -12360,6 +12784,15 @@ def orchestrator_execute():
 
     if not flow or not flow.get("nodes"):
         return _execute_error("No flow data provided", 400, code="NO_FLOW_DATA")
+
+    # Draft safety guard: block execution of draft_only flows
+    _flow_safety = flow.get("safety") if isinstance(flow, dict) else None
+    if isinstance(_flow_safety, dict) and _flow_safety.get("mode") == "draft_only":
+        return jsonify({
+            "success": False,
+            "error": "draft_not_executable",
+            "message": "Draft flows must be reviewed and promoted before execution. Open the flow in Orchestrator to review and promote it.",
+        }), 400
 
     scope_conn = get_db()
     _ensure_client_tables(scope_conn)
