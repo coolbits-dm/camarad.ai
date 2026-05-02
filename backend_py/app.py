@@ -21,6 +21,7 @@ import markdown
 import json
 import copy
 import math
+import secrets
 import csv
 import base64
 import hashlib
@@ -20281,51 +20282,235 @@ def google_ads_test_call():
     })
 
 
-@app.route("/api/connectors/google-ads/reality/status", methods=["GET"])
-def google_ads_reality_status():
-    """Return safe truth-mode status for Google Ads connector. Never exposes secret values."""
-    user_id = get_current_user_id()
+# ─── Google Ads OAuth Helpers ─────────────────────────────────────────────────
 
-    # Config detection: boolean presence only, never values
-    oauth_configured = bool(
+_GADS_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+_GADS_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+_GADS_OAUTH_STATE_TTL_SECONDS = 600
+_GADS_SCOPES_DEFAULT = "https://www.googleapis.com/auth/adwords"
+
+
+def _gads_oauth_configured():
+    return bool(
         str(os.getenv("GOOGLE_ADS_CLIENT_ID", "")).strip()
         and str(os.getenv("GOOGLE_ADS_CLIENT_SECRET", "")).strip()
         and str(os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")).strip()
     )
 
-    # Token detection: row existence only, never values
-    has_token = False
-    try:
-        conn = get_db()
-        row_oauth = conn.execute(
-            "SELECT id FROM oauth_states WHERE provider = 'google-ads' LIMIT 1"
-        ).fetchone()
-        if row_oauth:
-            has_token = True
 
-        if not has_token:
-            row_cfg = conn.execute(
-                "SELECT config_json FROM connectors_config WHERE connector_slug = 'google-ads' AND user_id = ? LIMIT 1",
-                (user_id,)
-            ).fetchone()
-            if row_cfg:
-                try:
-                    import json as _json
-                    cfg = _json.loads(row_cfg[0]) if row_cfg[0] else {}
-                    if isinstance(cfg, dict) and (
-                        cfg.get("refresh_token") or cfg.get("access_token") or cfg.get("oauth_token")
-                    ):
-                        has_token = True
-                except Exception:
-                    pass
+def _gads_oauth_config_internal():
+    # Returns values for server-side use ONLY. Never pass return value to client.
+    client_id = str(os.getenv("GOOGLE_ADS_CLIENT_ID", "")).strip()
+    client_secret = str(os.getenv("GOOGLE_ADS_CLIENT_SECRET", "")).strip()
+    developer_token = str(os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")).strip()
+    scopes = str(os.getenv("GOOGLE_ADS_SCOPES", _GADS_SCOPES_DEFAULT)).strip() or _GADS_SCOPES_DEFAULT
+    redirect_uri = str(os.getenv("GOOGLE_ADS_REDIRECT_URI", "")).strip()
+    if not redirect_uri:
+        redirect_uri = "https://camarad.ai/api/connectors/google-ads/oauth/callback"
+    return {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "developer_token": developer_token,
+        "scopes": scopes,
+        "redirect_uri": redirect_uri,
+    }
+
+
+def _gads_store_oauth_state(state_value, user_id=None):
+    conn = get_db()
+    try:
+        _ensure_oauth_states_table(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO oauth_states"
+            " (provider, state, user_id, expires_at, meta_json)"
+            " VALUES ('google-ads', ?, ?, datetime('now', ?), ?)",
+            (
+                str(state_value),
+                int(user_id) if user_id is not None else None,
+                "+{} seconds".format(_GADS_OAUTH_STATE_TTL_SECONDS),
+                json.dumps({"source": "gads_oauth"}, ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
         conn.close()
+
+
+def _gads_validate_oauth_state(state_value):
+    state_value = str(state_value or "").strip()
+    if not state_value:
+        return False, "missing_state", None
+    conn = get_db()
+    try:
+        _ensure_oauth_states_table(conn)
+        row = conn.execute(
+            "SELECT id, state, expires_at, used_at, user_id FROM oauth_states"
+            " WHERE provider = 'google-ads' AND state = ? LIMIT 1",
+            (state_value,),
+        ).fetchone()
+        if not row:
+            return False, "state_not_found", None
+        if row["used_at"]:
+            return False, "state_already_used", None
+        now_row = conn.execute("SELECT datetime('now') AS now_utc").fetchone()
+        now_utc = str((now_row["now_utc"] if now_row else "") or "")
+        exp = str(row["expires_at"] or "")
+        if exp and now_utc and exp < now_utc:
+            return False, "state_expired", None
+        return True, "ok", dict(row)
+    except Exception:
+        return False, "state_validation_error", None
+    finally:
+        conn.close()
+
+
+def _gads_mark_oauth_state_used(state_value):
+    conn = get_db()
+    try:
+        _ensure_oauth_states_table(conn)
+        conn.execute(
+            "UPDATE oauth_states SET used_at = datetime('now')"
+            " WHERE provider = 'google-ads' AND state = ? AND used_at IS NULL",
+            (str(state_value),),
+        )
+        conn.commit()
     except Exception:
         pass
+    finally:
+        conn.close()
 
-    connected_live = False
-    connected_mock = True
-    token_validated = False
-    api_validated = False
+
+def _gads_token_store(user_id, token_data):
+    conn = get_db()
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS provider_credentials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL DEFAULT 0,
+                workspace_slug TEXT NOT NULL DEFAULT '',
+                provider_slug TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'byok',
+                secret_encrypted TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                last_validated_at TEXT,
+                last_error TEXT,
+                metadata_json TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(user_id, client_id, workspace_slug, provider_slug)
+            )"""
+        )
+        secret_payload = json.dumps({
+            "refresh_token": str(token_data.get("refresh_token") or ""),
+            "token_type": str(token_data.get("token_type") or "Bearer"),
+        }, ensure_ascii=False)
+        encrypted = _encrypt_provider_secret(secret_payload)
+        meta = json.dumps({
+            "scopes": str(token_data.get("scope") or _GADS_SCOPES_DEFAULT),
+            "customer_id": None,
+            "login_customer_id": str(os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "")).strip() or None,
+            "token_validated": True,
+            "api_validated": False,
+            "last_validated_at": None,
+        }, ensure_ascii=False)
+        conn.execute(
+            "INSERT INTO provider_credentials"
+            " (user_id, client_id, workspace_slug, provider_slug, mode,"
+            "  secret_encrypted, status, metadata_json, created_at, updated_at)"
+            " VALUES (?, 0, '', 'google-ads', 'oauth', ?, 'active', ?, datetime('now'), datetime('now'))"
+            " ON CONFLICT(user_id, client_id, workspace_slug, provider_slug) DO UPDATE SET"
+            "   mode = 'oauth',"
+            "   secret_encrypted = excluded.secret_encrypted,"
+            "   status = 'active',"
+            "   metadata_json = excluded.metadata_json,"
+            "   updated_at = datetime('now')",
+            (int(user_id or 0), encrypted, meta),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def _gads_token_get_meta(user_id):
+    conn = get_db()
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS provider_credentials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL DEFAULT 0,
+                workspace_slug TEXT NOT NULL DEFAULT '',
+                provider_slug TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'byok',
+                secret_encrypted TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                last_validated_at TEXT,
+                last_error TEXT,
+                metadata_json TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(user_id, client_id, workspace_slug, provider_slug)
+            )"""
+        )
+        row = conn.execute(
+            "SELECT status, metadata_json, updated_at FROM provider_credentials"
+            " WHERE user_id = ? AND provider_slug = 'google-ads' AND client_id = 0 LIMIT 1",
+            (int(user_id or 0),),
+        ).fetchone()
+        if not row:
+            return None
+        meta = _provider_credential_metadata_load(row["metadata_json"])
+        return {
+            "status": row["status"],
+            "token_validated": bool(meta.get("token_validated")),
+            "api_validated": bool(meta.get("api_validated")),
+            "customer_id": meta.get("customer_id"),
+            "login_customer_id": meta.get("login_customer_id"),
+            "scopes": meta.get("scopes"),
+            "last_validated_at": meta.get("last_validated_at"),
+            "updated_at": row["updated_at"],
+        }
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def _gads_token_revoke(user_id):
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE provider_credentials SET status = 'revoked', updated_at = datetime('now')"
+            " WHERE user_id = ? AND provider_slug = 'google-ads' AND client_id = 0",
+            (int(user_id or 0),),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+# ─── Google Ads Routes ────────────────────────────────────────────────────────
+
+@app.route("/api/connectors/google-ads/reality/status", methods=["GET"])
+def google_ads_reality_status():
+    user_id = get_current_user_id()
+    oauth_configured = _gads_oauth_configured()
+    meta = _gads_token_get_meta(user_id)
+    has_token = meta is not None and meta.get("status") == "active"
+    token_validated = has_token and bool((meta or {}).get("token_validated"))
+    api_validated = has_token and bool((meta or {}).get("api_validated"))
+    connected_live = api_validated
+    connected_mock = not connected_live
 
     if not oauth_configured:
         mode = "config_missing"
@@ -20336,15 +20521,21 @@ def google_ads_reality_status():
         mode = "oauth_required"
         ui_label = "OAuth Required"
         ui_badge_class = "warning"
-        message = "No active Google Ads OAuth token found. Demo data is shown. Connect via OAuth to use live data."
+        message = "No active Google Ads OAuth token found. Demo data is shown. Click 'Start OAuth' to connect."
+    elif token_validated and api_validated:
+        mode = "connected_live"
+        ui_label = "Live Connected"
+        ui_badge_class = "success"
+        message = "Google Ads live connection active."
+        connected_mock = False
     else:
-        mode = "mock"
-        ui_label = "Demo Data"
-        ui_badge_class = "demo"
-        message = "Token storage detected but not validated. Live connection not confirmed. Demo data is shown."
+        mode = "token_stored"
+        ui_label = "Token Stored"
+        ui_badge_class = "info"
+        message = "OAuth token stored. Click 'Validate Access' to confirm the connection. Demo data shown until validated."
 
-    if COOLBITS_GATEWAY_ENABLED and mode != "config_missing":
-        message += " (Coolbits gateway is enabled but Google Ads live credentials are not verified.)"
+    if COOLBITS_GATEWAY_ENABLED and mode not in ("config_missing", "connected_live"):
+        message += " (Coolbits gateway is enabled.)"
 
     return jsonify({
         "provider": "google_ads",
@@ -20355,16 +20546,179 @@ def google_ads_reality_status():
         "has_token": has_token,
         "token_validated": token_validated,
         "api_validated": api_validated,
-        "customer_id": None,
-        "login_customer_id": None,
-        "data_source": "mock",
+        "customer_id": (meta or {}).get("customer_id") if has_token else None,
+        "login_customer_id": (meta or {}).get("login_customer_id") if has_token else None,
+        "data_source": "live" if connected_live else "mock",
         "ui_label": ui_label,
         "ui_badge_class": ui_badge_class,
         "message": message,
     })
 
 
-# ─── GA4 Mock API ────────────────────────────────────────────────────────────
+@app.route("/api/connectors/google-ads/oauth/start", methods=["GET"])
+def google_ads_oauth_start():
+    if not _gads_oauth_configured():
+        return jsonify({
+            "success": False,
+            "error": "config_missing",
+            "message": "Google Ads OAuth is not configured. Set GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_DEVELOPER_TOKEN.",
+        }), 400
+    user_id = get_current_user_id()
+    cfg = _gads_oauth_config_internal()
+    state = secrets.token_urlsafe(32)
+    _gads_store_oauth_state(state, user_id=user_id)
+    params = urlencode({
+        "client_id": cfg["client_id"],
+        "redirect_uri": cfg["redirect_uri"],
+        "response_type": "code",
+        "scope": cfg["scopes"],
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    })
+    authorize_url = "{}?{}".format(_GADS_AUTH_ENDPOINT, params)
+    return jsonify({
+        "success": True,
+        "provider": "google_ads",
+        "authorize_url": authorize_url,
+        "state_created": True,
+    })
+
+
+@app.route("/api/connectors/google-ads/oauth/callback", methods=["GET"])
+def google_ads_oauth_callback():
+    error_param = str(request.args.get("error") or "").strip()
+    state_value = str(request.args.get("state") or "").strip()
+    code = str(request.args.get("code") or "").strip()
+
+    if error_param:
+        return redirect("/connectors?provider=google-ads&oauth=error&reason={}".format(error_param))
+
+    ok_state, state_reason, state_row = _gads_validate_oauth_state(state_value)
+    if not ok_state:
+        return redirect("/connectors?provider=google-ads&oauth=error&reason=invalid_state")
+
+    if not code:
+        _gads_mark_oauth_state_used(state_value)
+        return redirect("/connectors?provider=google-ads&oauth=error&reason=missing_code")
+
+    if not _gads_oauth_configured():
+        _gads_mark_oauth_state_used(state_value)
+        return redirect("/connectors?provider=google-ads&oauth=error&reason=config_missing")
+
+    cfg = _gads_oauth_config_internal()
+    user_id = int((state_row or {}).get("user_id") or get_current_user_id() or 0)
+
+    try:
+        resp = requests.post(
+            _GADS_TOKEN_ENDPOINT,
+            data={
+                "code": code,
+                "client_id": cfg["client_id"],
+                "client_secret": cfg["client_secret"],
+                "redirect_uri": cfg["redirect_uri"],
+                "grant_type": "authorization_code",
+            },
+            timeout=20,
+        )
+        ct = resp.headers.get("content-type", "")
+        token_data = resp.json() if "application/json" in ct else {}
+    except Exception:
+        _gads_mark_oauth_state_used(state_value)
+        return redirect("/connectors?provider=google-ads&oauth=error&reason=token_exchange_failed")
+
+    if resp.status_code != 200 or not token_data.get("refresh_token"):
+        _gads_mark_oauth_state_used(state_value)
+        return redirect("/connectors?provider=google-ads&oauth=error&reason=token_exchange_failed")
+
+    stored = _gads_token_store(user_id, token_data)
+    _gads_mark_oauth_state_used(state_value)
+
+    if not stored:
+        return redirect("/connectors?provider=google-ads&oauth=error&reason=token_storage_failed")
+
+    return redirect("/connectors?provider=google-ads&oauth=success")
+
+
+@app.route("/api/connectors/google-ads/oauth/disconnect", methods=["POST"])
+def google_ads_oauth_disconnect():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"success": False, "error": "not_authenticated"}), 401
+    ok = _gads_token_revoke(user_id)
+    return jsonify({
+        "success": ok,
+        "provider": "google_ads",
+        "status": "disconnected" if ok else "error",
+        "message": "Google Ads disconnected. Demo data will be shown.",
+    })
+
+
+@app.route("/api/connectors/google-ads/oauth/status", methods=["GET"])
+def google_ads_oauth_status():
+    user_id = get_current_user_id()
+    oauth_configured = _gads_oauth_configured()
+    meta = _gads_token_get_meta(user_id)
+    has_token = meta is not None and meta.get("status") == "active"
+    token_validated = has_token and bool((meta or {}).get("token_validated"))
+    api_validated = has_token and bool((meta or {}).get("api_validated"))
+    connected_live = api_validated
+
+    if not oauth_configured:
+        status = "config_missing"
+        message = "Google Ads OAuth is not configured."
+    elif not has_token:
+        status = "oauth_required"
+        message = "OAuth token not found. Click 'Start OAuth' to connect."
+    elif token_validated and api_validated:
+        status = "connected_live"
+        message = "Google Ads live connection active."
+    else:
+        status = "token_stored"
+        message = "Token stored. Click 'Validate Access' to confirm the connection."
+
+    return jsonify({
+        "success": True,
+        "provider": "google_ads",
+        "oauth_configured": oauth_configured,
+        "has_token": has_token,
+        "token_validated": token_validated,
+        "api_validated": api_validated,
+        "connected_live": connected_live,
+        "status": status,
+        "customer_id": (meta or {}).get("customer_id") if has_token else None,
+        "message": message,
+    })
+
+
+@app.route("/api/connectors/google-ads/validate", methods=["POST"])
+def google_ads_validate():
+    user_id = get_current_user_id()
+    if not _gads_oauth_configured():
+        return jsonify({
+            "success": False,
+            "status": "config_missing",
+            "message": "Google Ads OAuth is not configured.",
+        }), 400
+    meta = _gads_token_get_meta(user_id)
+    if meta is None or meta.get("status") != "active":
+        return jsonify({
+            "success": False,
+            "status": "oauth_required",
+            "message": "No active OAuth token. Connect via OAuth first.",
+        }), 400
+    return jsonify({
+        "success": True,
+        "status": "token_stored",
+        "token_validated": bool(meta.get("token_validated")),
+        "api_validated": False,
+        "connected_live": False,
+        "message": "Token stored. Full API validation (connected_live=true) requires Phase 2.",
+    })
+
+
+
+
 GA4_MOCK_PROPERTIES = [
     {"id": "G-ABC123DEF4", "name": "Main Website — camarad.ai", "stream": "Web", "url": "https://camarad.ai", "timezone": "Europe/Bucharest", "currency": "USD", "created": "2024-03-15"},
     {"id": "G-MOB987XYZ1", "name": "Mobile App — Camarad iOS/Android", "stream": "iOS + Android", "url": "camarad://app", "timezone": "Europe/Bucharest", "currency": "USD", "created": "2024-06-01"},

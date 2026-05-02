@@ -914,8 +914,8 @@
                       <button class="btn btn-outline-info" type="button" onclick="gadsApplyMccId()"><i class="bi bi-arrow-repeat"></i></button>
                     </div>
                   </div>
-                  <div class="col-auto">
-                    <button class="btn btn-sm btn-outline-success" onclick="gadsConnect()"><i class="bi bi-plug"></i> Connect</button>
+                  <div class="col-auto" id="gadsOAuthButtonArea">
+                    <button class="btn btn-sm btn-outline-secondary" disabled id="gadsOAuthBtn"><span class="spinner-border spinner-border-sm"></span></button>
                   </div>
                   <div class="col-auto ms-auto">
                     <span id="gadsAccountInfo" class="small text-muted"></span>
@@ -5547,23 +5547,70 @@
       const badge = document.getElementById('gadsConnBadge');
       badge.textContent = gadsState.connected ? 'Disconnected' : 'Disconnected';
       badge.className = 'badge bg-secondary';
-      // Fetch reality status and update badge with truthful label
+      // Fetch reality status and update badge + OAuth button
       try {
         const rRes = await fetch('/api/connectors/google-ads/reality/status');
         const rData = await rRes.json();
         gadsState.reality = rData;
-        const badgeClassMap = { demo: 'badge bg-secondary', warning: 'badge bg-warning text-dark', success: 'badge bg-success', danger: 'badge bg-danger' };
+        const badgeClassMap = {
+          demo: 'badge bg-secondary',
+          warning: 'badge bg-warning text-dark',
+          info: 'badge bg-info text-dark',
+          success: 'badge bg-success',
+          danger: 'badge bg-danger'
+        };
         badge.textContent = rData.ui_label || 'Demo Data';
         badge.className = badgeClassMap[rData.ui_badge_class] || 'badge bg-secondary';
         const notice = document.getElementById('gadsDemoNotice');
-        if (notice) notice.style.display = (rData.connected_live === false) ? '' : 'none';
+        if (notice) notice.style.display = (rData.connected_live === true) ? 'none' : '';
+        // Drive OAuth button state from reality mode
+        const btnArea = document.getElementById('gadsOAuthButtonArea');
+        if (btnArea) {
+          const mode = rData.mode || 'config_missing';
+          if (mode === 'config_missing') {
+            btnArea.innerHTML = '<button class="btn btn-sm btn-outline-secondary" disabled title="Set GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_DEVELOPER_TOKEN in environment to enable OAuth."><i class="bi bi-lock"></i> OAuth Not Configured</button>';
+          } else if (mode === 'oauth_required') {
+            btnArea.innerHTML = '<button class="btn btn-sm btn-outline-primary" onclick="gadsStartOAuth()"><i class="bi bi-google"></i> Start Google OAuth</button>';
+          } else if (mode === 'token_stored') {
+            btnArea.innerHTML = '<button class="btn btn-sm btn-outline-info me-1" onclick="gadsValidateToken()"><i class="bi bi-check-circle"></i> Validate Access</button>'
+              + '<button class="btn btn-sm btn-outline-danger" onclick="gadsDisconnect()"><i class="bi bi-plug"></i> Disconnect</button>';
+          } else if (mode === 'connected_live') {
+            btnArea.innerHTML = '<button class="btn btn-sm btn-outline-danger" onclick="gadsDisconnect()"><i class="bi bi-plug"></i> Disconnect</button>';
+          } else {
+            btnArea.innerHTML = '<button class="btn btn-sm btn-outline-success" onclick="gadsStartOAuth()"><i class="bi bi-plug"></i> Connect</button>';
+          }
+        }
       } catch (_e) {
         badge.textContent = gadsState.connected ? 'Demo Data' : 'Disconnected';
         badge.className = 'badge bg-secondary';
+        const btnArea = document.getElementById('gadsOAuthButtonArea');
+        if (btnArea) btnArea.innerHTML = '<button class="btn btn-sm btn-outline-success" onclick="gadsStartOAuth()"><i class="bi bi-plug"></i> Connect</button>';
       }
     } catch (e) {
       gadsState.mccId = normalizeMccId(localStorage.getItem('gads_mcc_id') || '');
     }
+
+    // Handle OAuth callback return (e.g. after redirect from /connectors?provider=google-ads&oauth=success)
+    try {
+      const qs = new URLSearchParams(window.location.search);
+      if (qs.get('provider') === 'google-ads' && qs.get('oauth')) {
+        const oauthResult = qs.get('oauth');
+        const reason = qs.get('reason') || '';
+        if (oauthResult === 'success') {
+          if (window.showToast) window.showToast('Google Ads', 'OAuth connected successfully. Token stored.', 'success');
+        } else if (oauthResult === 'error') {
+          const msg = reason === 'user_denied' ? 'OAuth was cancelled.'
+            : reason === 'invalid_state' ? 'OAuth failed: invalid or expired state. Please try again.'
+            : reason === 'token_exchange_failed' ? 'OAuth failed: could not exchange token with Google.'
+            : 'OAuth connection failed: ' + (reason || 'unknown error');
+          if (window.showToast) window.showToast('Google Ads', msg, 'danger');
+        }
+        // Clean URL without reloading
+        const url = new URL(window.location.href);
+        url.searchParams.delete('provider'); url.searchParams.delete('oauth'); url.searchParams.delete('reason');
+        window.history.replaceState({}, '', url.toString());
+      }
+    } catch (_e) {}
 
     const mccInput = document.getElementById('gadsMccId');
     if (mccInput) mccInput.value = gadsState.mccId || '';
@@ -5579,32 +5626,54 @@
     }
   }
 
-  async function gadsConnect() {
-    const badge = document.getElementById('gadsConnBadge');
-    badge.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Loading...';
-    badge.className = 'badge bg-secondary';
-
-    await new Promise(r => setTimeout(r, 600));
-
-    gadsState.connected = true;
-    badge.textContent = 'Demo Data';
-    badge.className = 'badge bg-secondary';
-
-    const notice = document.getElementById('gadsDemoNotice');
-    if (notice) notice.style.display = '';
-
-    // Save demo state to DB (not a real OAuth connection)
+  async function gadsStartOAuth() {
     try {
-      await fetch('/api/connectors/google-ads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'connected_mock', config: { account: 'demo-mode', mcc_id: gadsState.mccId || '' } })
-      });
-      loadConnectorStatuses();
-    } catch (e) {}
+      const res = await fetch('/api/connectors/google-ads/oauth/start');
+      const data = await res.json();
+      if (data.success && data.authorize_url) {
+        window.location.href = data.authorize_url;
+      } else {
+        const msg = data.error === 'config_missing'
+          ? 'Google Ads OAuth is not configured on the server.'
+          : (data.message || 'Failed to start OAuth flow.');
+        if (window.showToast) window.showToast('Google Ads', msg, 'warning');
+      }
+    } catch (e) {
+      if (window.showToast) window.showToast('Google Ads', 'Failed to start OAuth: ' + e.message, 'danger');
+    }
+  }
 
-    if (window.showToast) window.showToast('Google Ads', 'Demo mode active. No Google Ads OAuth connection was made. Showing demo data.', 'secondary');
-    gadsLoadAccount();
+  async function gadsValidateToken() {
+    try {
+      const res = await fetch('/api/connectors/google-ads/validate', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        if (window.showToast) window.showToast('Google Ads', data.message || 'Token validated.', 'success');
+      } else {
+        if (window.showToast) window.showToast('Google Ads', data.message || 'Validation failed.', 'warning');
+      }
+      // Refresh badge/button state
+      gadsInit();
+    } catch (e) {
+      if (window.showToast) window.showToast('Google Ads', 'Validation error: ' + e.message, 'danger');
+    }
+  }
+
+  async function gadsDisconnect() {
+    if (!confirm('Disconnect Google Ads OAuth? You will need to re-authenticate to use live data.')) return;
+    try {
+      const res = await fetch('/api/connectors/google-ads/oauth/disconnect', { method: 'POST' });
+      const data = await res.json();
+      if (window.showToast) window.showToast('Google Ads', data.message || 'Disconnected.', data.success ? 'secondary' : 'danger');
+      gadsInit();
+    } catch (e) {
+      if (window.showToast) window.showToast('Google Ads', 'Disconnect error: ' + e.message, 'danger');
+    }
+  }
+
+  async function gadsConnect() {
+    // Legacy: redirect to OAuth start
+    gadsStartOAuth();
   }
 
   async function gadsLoadAccount() {
