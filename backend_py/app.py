@@ -19741,7 +19741,13 @@ def _google_ads_set_active_customer(account_id, mcc_id):
 
 
 def _google_ads_mock_accounts_response():
-    return {"accounts": GOOGLE_ADS_MOCK_ACCOUNTS, "source": "mock"}
+    return {
+        "accounts": GOOGLE_ADS_MOCK_ACCOUNTS,
+        "source": "mock",
+        "connected_live": False,
+        "connected_mock": True,
+        "message": "Demo data only. No live Google Ads OAuth connection is active.",
+    }
 
 
 def _google_ads_mock_campaigns_response(account_id):
@@ -19751,12 +19757,21 @@ def _google_ads_mock_campaigns_response(account_id):
         "campaigns": campaigns,
         "summary": _google_ads_build_summary(campaigns),
         "source": "mock",
+        "connected_live": False,
+        "connected_mock": True,
+        "message": "Demo data only. No live Google Ads OAuth connection is active.",
     }
 
 
 def _google_ads_mock_keywords_response(campaign_id):
     keywords = GOOGLE_ADS_MOCK_KEYWORDS.get(campaign_id, [])
-    return {"campaign_id": campaign_id, "keywords": keywords, "source": "mock"}
+    return {
+        "campaign_id": campaign_id,
+        "keywords": keywords,
+        "source": "mock",
+        "connected_live": False,
+        "connected_mock": True,
+    }
 
 
 def _google_ads_mock_metrics_response(account_id, days):
@@ -19781,7 +19796,14 @@ def _google_ads_mock_metrics_response(account_id, days):
             "avg_cpc": round(base_cost / base_clicks, 2),
             "roas": round(random.uniform(2.5, 5.5), 2)
         })
-    return {"account_id": account_id, "days": days, "daily_metrics": daily, "source": "mock"}
+    return {
+        "account_id": account_id,
+        "days": days,
+        "daily_metrics": daily,
+        "source": "mock",
+        "connected_live": False,
+        "connected_mock": True,
+    }
 
 
 @app.route("/api/connectors/google-ads/accounts", methods=["GET"])
@@ -20254,6 +20276,91 @@ def google_ads_test_call():
         "latency_ms": elapsed,
         "quota": {"operations_remaining": 14567, "daily_limit": 15000},
         "source": "mock",
+        "api_validated": False,
+        "message": "Simulated Google Ads API response. No live API call was made.",
+    })
+
+
+@app.route("/api/connectors/google-ads/reality/status", methods=["GET"])
+def google_ads_reality_status():
+    """Return safe truth-mode status for Google Ads connector. Never exposes secret values."""
+    user_id = get_current_user_id()
+
+    # Config detection: boolean presence only, never values
+    oauth_configured = bool(
+        str(os.getenv("GOOGLE_ADS_CLIENT_ID", "")).strip()
+        and str(os.getenv("GOOGLE_ADS_CLIENT_SECRET", "")).strip()
+        and str(os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")).strip()
+    )
+
+    # Token detection: row existence only, never values
+    has_token = False
+    try:
+        conn = get_db()
+        row_oauth = conn.execute(
+            "SELECT id FROM oauth_states WHERE provider = 'google-ads' LIMIT 1"
+        ).fetchone()
+        if row_oauth:
+            has_token = True
+
+        if not has_token:
+            row_cfg = conn.execute(
+                "SELECT config_json FROM connectors_config WHERE connector_slug = 'google-ads' AND user_id = ? LIMIT 1",
+                (user_id,)
+            ).fetchone()
+            if row_cfg:
+                try:
+                    import json as _json
+                    cfg = _json.loads(row_cfg[0]) if row_cfg[0] else {}
+                    if isinstance(cfg, dict) and (
+                        cfg.get("refresh_token") or cfg.get("access_token") or cfg.get("oauth_token")
+                    ):
+                        has_token = True
+                except Exception:
+                    pass
+        conn.close()
+    except Exception:
+        pass
+
+    connected_live = False
+    connected_mock = True
+    token_validated = False
+    api_validated = False
+
+    if not oauth_configured:
+        mode = "config_missing"
+        ui_label = "Config Missing"
+        ui_badge_class = "warning"
+        message = "Google Ads OAuth config not found in environment. Demo data is shown."
+    elif not has_token:
+        mode = "oauth_required"
+        ui_label = "OAuth Required"
+        ui_badge_class = "warning"
+        message = "No active Google Ads OAuth token found. Demo data is shown. Connect via OAuth to use live data."
+    else:
+        mode = "mock"
+        ui_label = "Demo Data"
+        ui_badge_class = "demo"
+        message = "Token storage detected but not validated. Live connection not confirmed. Demo data is shown."
+
+    if COOLBITS_GATEWAY_ENABLED and mode != "config_missing":
+        message += " (Coolbits gateway is enabled but Google Ads live credentials are not verified.)"
+
+    return jsonify({
+        "provider": "google_ads",
+        "mode": mode,
+        "connected_live": connected_live,
+        "connected_mock": connected_mock,
+        "oauth_configured": oauth_configured,
+        "has_token": has_token,
+        "token_validated": token_validated,
+        "api_validated": api_validated,
+        "customer_id": None,
+        "login_customer_id": None,
+        "data_source": "mock",
+        "ui_label": ui_label,
+        "ui_badge_class": ui_badge_class,
+        "message": message,
     })
 
 

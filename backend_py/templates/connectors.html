@@ -889,6 +889,12 @@
               <button class="btn btn-outline-secondary" onclick="closePanel()">← Back to List</button>
             </div>
 
+            <!-- Demo Data Notice (shown when no live OAuth connection) -->
+            <div id="gadsDemoNotice" class="alert alert-secondary border-secondary py-2 mb-3 d-flex align-items-center gap-2">
+              <i class="bi bi-info-circle-fill"></i>
+              <span><strong>Demo Data</strong> — Showing demo/mock Google Ads data. No live OAuth connection is active. <a href="#" onclick="return false;" class="alert-link">Connect with OAuth</a> to use your real account data.</span>
+            </div>
+
             <!-- Account Selector Bar -->
             <div class="card bg-dark border-secondary mb-3">
               <div class="card-body py-2">
@@ -5433,6 +5439,7 @@
     accounts: [],
     selectedAccount: null,
     campaigns: [],
+    reality: null,
     summary: null,
     sortCol: null,
     sortDir: 1,
@@ -5538,8 +5545,22 @@
       const localMcc = normalizeMccId(localStorage.getItem('gads_mcc_id') || '');
       gadsState.mccId = persistedMcc || localMcc || '';
       const badge = document.getElementById('gadsConnBadge');
-      badge.textContent = gadsState.connected ? 'Connected' : 'Disconnected';
-      badge.className = gadsState.connected ? 'badge bg-success' : 'badge bg-secondary';
+      badge.textContent = gadsState.connected ? 'Disconnected' : 'Disconnected';
+      badge.className = 'badge bg-secondary';
+      // Fetch reality status and update badge with truthful label
+      try {
+        const rRes = await fetch('/api/connectors/google-ads/reality/status');
+        const rData = await rRes.json();
+        gadsState.reality = rData;
+        const badgeClassMap = { demo: 'badge bg-secondary', warning: 'badge bg-warning text-dark', success: 'badge bg-success', danger: 'badge bg-danger' };
+        badge.textContent = rData.ui_label || 'Demo Data';
+        badge.className = badgeClassMap[rData.ui_badge_class] || 'badge bg-secondary';
+        const notice = document.getElementById('gadsDemoNotice');
+        if (notice) notice.style.display = (rData.connected_live === false) ? '' : 'none';
+      } catch (_e) {
+        badge.textContent = gadsState.connected ? 'Demo Data' : 'Disconnected';
+        badge.className = 'badge bg-secondary';
+      }
     } catch (e) {
       gadsState.mccId = normalizeMccId(localStorage.getItem('gads_mcc_id') || '');
     }
@@ -5560,27 +5581,29 @@
 
   async function gadsConnect() {
     const badge = document.getElementById('gadsConnBadge');
-    badge.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Connecting...';
-    badge.className = 'badge bg-info';
+    badge.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Loading...';
+    badge.className = 'badge bg-secondary';
 
-    // Fake delay
-    await new Promise(r => setTimeout(r, 1200));
+    await new Promise(r => setTimeout(r, 600));
 
     gadsState.connected = true;
-    badge.textContent = 'Connected';
-    badge.className = 'badge bg-success';
+    badge.textContent = 'Demo Data';
+    badge.className = 'badge bg-secondary';
 
-    // Save to DB
+    const notice = document.getElementById('gadsDemoNotice');
+    if (notice) notice.style.display = '';
+
+    // Save demo state to DB (not a real OAuth connection)
     try {
       await fetch('/api/connectors/google-ads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'Connected', config: { account: 'ads-manager@camarad.ai', mcc_id: gadsState.mccId || '' } })
+        body: JSON.stringify({ status: 'connected_mock', config: { account: 'demo-mode', mcc_id: gadsState.mccId || '' } })
       });
       loadConnectorStatuses();
     } catch (e) {}
 
-    if (window.showToast) window.showToast('Google Ads', 'Connected successfully! Loading account data...', 'success');
+    if (window.showToast) window.showToast('Google Ads', 'Demo mode active. No Google Ads OAuth connection was made. Showing demo data.', 'secondary');
     gadsLoadAccount();
   }
 
@@ -6035,6 +6058,9 @@
         </div>
         <div class="mt-2 small text-muted">
           <i class="bi bi-speedometer"></i> Quota: ${data.quota.operations_remaining.toLocaleString()} / ${data.quota.daily_limit.toLocaleString()} operations remaining
+        </div>
+        <div class="mt-1 small text-warning">
+          <i class="bi bi-exclamation-triangle"></i> <strong>Simulated response</strong> — No live Google Ads API call was made. ${data.message || ''}
         </div>
       `;
     } catch (e) {
