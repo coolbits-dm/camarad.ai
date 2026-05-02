@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, jsonify, g, redirect, url_for
 from config import Config
 from database import init_db, get_db, save_message, get_messages, get_daily_message_count, is_user_premium, get_recent_conversations, get_conversation_context, create_new_conversation, get_or_create_conversation, update_conversation_title, search_conversations, get_conversation_brief, update_conversation_brief
 from models import workspaces, AGENT_REGISTRY_BY_SLUG, get_agent_name, get_agent_display_name, get_agent_role_label, get_agent_category, simulate_response, detect_handover, enhance_context, get_llm_response, get_api_docs_context
+from ai.provider_policy import is_ai_available, safe_provider_status, setup_required_payload
 from rag_store import (
     create_collection as rag_create_collection,
     ensure_schema as ensure_rag_schema,
@@ -5121,6 +5122,12 @@ def api_buildinfo():
     payload["now_utc"] = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
     payload["pid"] = int(os.getpid())
     return jsonify(payload), 200
+
+
+@app.route("/api/ai/provider/status", methods=["GET"])
+def api_ai_provider_status():
+    return jsonify(safe_provider_status()), 200
+
 
 # @app.before_request
 # def before_request():
