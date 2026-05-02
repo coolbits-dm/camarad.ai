@@ -1600,6 +1600,9 @@
         activeClientName = String(localStorage.getItem('camarad_client_name') || '').trim() || 'None';
       } catch (e) {}
 
+      // Restore stored client label on page load without waiting for a client-change event.
+      document.addEventListener('DOMContentLoaded', function() { syncActiveClientLabels(); });
+
       function syncActiveClientLabels() {
         var labelEl = document.getElementById('currentClientLabel');
         var text = activeClientId ? activeClientName : 'None';

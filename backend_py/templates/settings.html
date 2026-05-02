@@ -151,6 +151,36 @@
           </div>
         </div>
 
+        <div class="card settings-card mb-3">
+          <div class="card-header"><i class="bi bi-cpu me-2"></i>AI Provider</div>
+          <div class="card-body settings-kv">
+            {% if ai_provider_status %}
+            <div class="k">Status</div>
+            <div class="v">
+              {% if ai_provider_status.configured %}
+              <span class="badge bg-success">{{ ai_provider_status.status }}</span>
+              {% else %}
+              <span class="badge bg-warning text-dark">{{ ai_provider_status.status }}</span>
+              {% endif %}
+            </div>
+            <div class="k">Mode</div>
+            <div class="v">{{ ai_provider_status.mode or "—" }}</div>
+            <div class="k">Provider</div>
+            <div class="v">{{ ai_provider_status.provider or "—" }}</div>
+            <div class="k">Credential source</div>
+            <div class="v">{{ ai_provider_status.credential_source or "—" }}</div>
+            <div class="k">Default model</div>
+            <div class="v">{{ ai_provider_status.default_model or "—" }}</div>
+            {% if ai_provider_status.message %}
+            <div class="k">Note</div>
+            <div class="v text-muted small">{{ ai_provider_status.message }}</div>
+            {% endif %}
+            {% else %}
+            <div class="text-muted small">Provider status unavailable.</div>
+            {% endif %}
+          </div>
+        </div>
+
         <div class="card settings-card">
           <div class="card-header"><i class="bi bi-box me-2"></i>Site Modules</div>
           <div class="card-body">

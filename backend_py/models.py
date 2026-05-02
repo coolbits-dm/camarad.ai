@@ -382,7 +382,7 @@ from mocks.connectors import MOCK_CONNECTORS
 def get_agent_name(ws_slug, agent_slug):
     return get_agent_display_name(
         agent_slug,
-        fallback=workspaces.get(ws_slug, {}).get('agents', {}).get(agent_slug, 'Unknown Agent'),
+        fallback=workspaces.get(ws_slug, {}).get('agents', {}).get(agent_slug) or None,
     )
 
 def simulate_response(agent_slug: str, user_message: str) -> str:

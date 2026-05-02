@@ -7958,7 +7958,11 @@ def settings_page():
     uid = get_current_user_id()
     if uid > 0 and _must_complete_onboarding(uid):
         return redirect(url_for("onboarding_page"))
-    return render_template('settings.html', settings_agents_catalog=_all_workspace_agents())
+    return render_template(
+        'settings.html',
+        settings_agents_catalog=_all_workspace_agents(),
+        ai_provider_status=safe_provider_status(),
+    )
 
 
 @app.route('/workspace/<ws_slug>')
@@ -9570,6 +9574,22 @@ def chat(ws_slug, agent_slug):
             if not user_message:
                 return jsonify({"error": "No message provided"}), 400
 
+            # Provider guard: if AI is disabled/setup_required/invalid_config, return
+            # a clean JSON error instead of silently falling back to mock responses.
+            _pst = safe_provider_status()
+            if _pst.get("status") in ("disabled", "setup_required", "invalid_config"):
+                _guard_resp = {
+                    "error": str(_pst.get("status") or "provider_error"),
+                    "message": str(_pst.get("message") or "AI provider is not available."),
+                    "provider_status": _pst,
+                }
+                if wants_stream:
+                    @stream_with_context
+                    def _provider_guard_gen(_gr=_guard_resp):
+                        yield _sse_event("run.done", {"ok": False, **_gr})
+                    return Response(_provider_guard_gen(), mimetype="text/event-stream")
+                return jsonify(_guard_resp), 503
+
             if wants_stream:
                 @stream_with_context
                 def _gen():
@@ -10459,6 +10479,42 @@ def api_runtime_connector_refresh(connector_id):
     )
     item = next((row for row in (payload.get("connectors") or []) if str(row.get("id") or "") == str(connector_id)), None)
     return jsonify({"ok": True, "item": item, "refreshed_at": _utc_now_iso()})
+
+
+@app.route("/api/chat/runtime/status", methods=["GET"])
+def api_chat_runtime_status():
+    """Safe internal diagnostics: provider, persistence, usage ledger availability.
+    Never exposes API keys, env values, or full filesystem paths."""
+    import os as _os
+    pst = safe_provider_status()
+    db_ok = False
+    usage_ledger_ok = False
+    db_basename = None
+    try:
+        conn = get_db()
+        db_ok = conn is not None
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='usage_ledger'"
+        ).fetchone()
+        usage_ledger_ok = row is not None
+        try:
+            db_list = conn.execute("PRAGMA database_list").fetchone()
+            if db_list:
+                db_basename = _os.path.basename(str(db_list[2] or "")) or None
+        except Exception:
+            pass
+        conn.close()
+    except Exception:
+        pass
+    return jsonify({
+        "provider_configured": bool(pst.get("configured")),
+        "provider_status": pst.get("status"),
+        "provider_mode": pst.get("mode"),
+        "current_model": pst.get("default_model"),
+        "persistence_available": db_ok,
+        "usage_ledger_available": usage_ledger_ok,
+        "db_basename": db_basename,
+    })
 
 
 @app.route('/api/chat/ops-summary', methods=['GET'])
