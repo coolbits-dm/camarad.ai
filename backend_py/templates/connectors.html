@@ -966,7 +966,7 @@
               <!-- Dev-only tabs — hidden in production -->
               <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsApiTest" type="button"><i class="bi bi-terminal"></i> Test API</button></li>
               <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsPacing" type="button"><i class="bi bi-graph-up"></i> Budget Pacing</button></li>
-              <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsReports" type="button"><i class="bi bi-file-earmark-bar-graph"></i> Reports</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsReports" type="button" onclick="gadsOnReportsTabOpen()"><i class="bi bi-file-earmark-bar-graph"></i> Reports</button></li>
               <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsAssets" type="button"><i class="bi bi-pencil-square"></i> Asset Generator</button></li>
             </ul>
 
@@ -1089,18 +1089,28 @@
 
               <!-- ── Reports Tab ───────────────────────────────────── -->
               <div class="tab-pane fade" id="gadsReports">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h6 class="mb-0">Reports</h6>
-                  <div class="d-flex gap-2">
-                    <select id="gadsReportType" class="form-select form-select-sm bg-dark text-light" style="width:auto;">
-                      <option value="campaign_performance">Campaign Performance</option>
-                      <option value="budget_pacing">Budget Pacing</option>
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                  <span class="text-muted small me-1">Quick Reports:</span>
+                  <button class="btn btn-sm btn-outline-info" onclick="gadsRunPreset('account_health')"><i class="bi bi-heart-pulse"></i> Account Health</button>
+                  <button class="btn btn-sm btn-outline-warning" onclick="gadsRunPreset('waste_finder')"><i class="bi bi-trash"></i> Waste Finder</button>
+                  <button class="btn btn-sm btn-outline-success" onclick="gadsRunPreset('roas_leaders')"><i class="bi bi-trophy"></i> ROAS Leaders</button>
+                  <button class="btn btn-sm btn-outline-primary" onclick="gadsRunPreset('conversion_efficiency')"><i class="bi bi-bullseye"></i> Conv. Efficiency</button>
+                  <div class="ms-auto d-flex gap-2 align-items-center">
+                    <select id="gadsReportDateRange" class="form-select form-select-sm bg-dark text-light" style="width:auto;">
+                      <option value="LAST_7_DAYS">Last 7 days</option>
+                      <option value="LAST_14_DAYS">Last 14 days</option>
+                      <option value="LAST_30_DAYS" selected>Last 30 days</option>
+                      <option value="LAST_90_DAYS">Last 90 days</option>
+                      <option value="THIS_MONTH">This month</option>
+                      <option value="LAST_MONTH">Last month</option>
                     </select>
-                    <button class="btn btn-sm btn-success" onclick="gadsGenerateReport()"><i class="bi bi-play-fill"></i> Generate</button>
-                    <button class="btn btn-sm btn-outline-info" onclick="gadsExportReportCSV()"><i class="bi bi-download"></i> Export CSV</button>
+                    <select class="form-select form-select-sm bg-dark text-light" style="width:auto;" disabled title="Currency conversion coming later">
+                      <option>Native account currency</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="gadsExportReportCSV()"><i class="bi bi-download"></i> CSV</button>
                   </div>
                 </div>
-                <div id="gadsReportResult"></div>
+                <div id="gadsReportResult"><p class="text-muted small">Select a preset above to run a report.</p></div>
               </div>
 
               <!-- ── Asset Generator Tab ───────────────────────────── -->
@@ -5959,6 +5969,15 @@
     el.innerHTML = `<div class="alert alert-secondary d-flex align-items-center gap-2 mt-3">${badge}<span>${errMsg}</span></div>`;
   }
 
+  function _gadsCurrencySymbol(code) {
+    const map = {
+      USD:'$', EUR:'€', GBP:'£', RON:'lei ', JPY:'¥', CAD:'CA$', AUD:'A$',
+      BRL:'R$', MXN:'MX$', INR:'₹', PLN:'zł', SEK:'kr', NOK:'kr', DKK:'kr',
+      CHF:'CHF ', HUF:'Ft', CZK:'Kč', BGN:'лв', TRY:'₺', SGD:'S$', HKD:'HK$',
+    };
+    return map[String(code || '').toUpperCase()] || (code ? code + ' ' : '');
+  }
+
   function _gadsSourceBadge(source) {
     if (source === 'google_ads_api') return '<span class="badge bg-success ms-2" title="Live Google Ads API">Live</span>';
     if (source === 'mock_fallback') return '<span class="badge bg-warning text-dark ms-2" title="Google Ads API error — showing fallback data. Your account is connected but the API call failed.">API Error · Fallback</span>';
@@ -5986,6 +6005,11 @@
     const source = (data && data.source) || 'unknown';
     const dateRange = (data && data.date_range) || '';
     const sourceBadge = _gadsSourceBadge(source);
+    const currencyCode = (data && data.currency && data.currency.currency_code) || null;
+    const currSym = _gadsCurrencySymbol(currencyCode);
+    const currBadge = currencyCode
+      ? `<span class="badge bg-secondary text-light ms-1" title="Account native currency">${currencyCode}</span>`
+      : '';
 
     const fmt = (v, prefix='', suffix='', dp=0) => {
       const n = Number(v);
@@ -6001,6 +6025,7 @@
       <div class="d-flex align-items-center gap-2 mb-3">
         <span class="text-muted small">${dateRange.replace(/_/g,' ')}</span>
         ${sourceBadge}
+        ${currBadge}
         ${source === 'mock' ? '<span class="text-muted small">— Connect a real account to see live data</span>' : ''}
       </div>
       <div class="row g-3 mb-4">
@@ -6016,7 +6041,7 @@
           <div class="card bg-dark border-success h-100">
             <div class="card-body text-center py-3">
               <div class="text-muted small mb-1">Total Spend</div>
-              <div class="display-6 text-success">${fmt(t.spend, '$', '', 2)}</div>
+              <div class="display-6 text-success">${fmt(t.spend, currSym, '', 2)}</div>
               <div class="text-muted small">${fmt(t.impressions)} impr.</div>
             </div>
           </div>
@@ -6035,7 +6060,7 @@
             <div class="card-body text-center py-3">
               <div class="text-muted small mb-1">ROAS</div>
               <div class="display-6 text-warning">${fmt(t.roas, '', 'x', 2)}</div>
-              <div class="text-muted small">CPA ${fmt(t.cpa, '$', '', 2)} · CPC ${fmt(t.avg_cpc, '$', '', 2)}</div>
+              <div class="text-muted small">CPA ${fmt(t.cpa, currSym, '', 2)} · CPC ${fmt(t.avg_cpc, currSym, '', 2)}</div>
             </div>
           </div>
         </div>
@@ -6454,37 +6479,156 @@
     `;
   }
 
-  // ── Reports (legacy, hidden tab) ─────────────────────────────────────────
-  async function gadsGenerateReport() {
-    const accountId = document.getElementById('gadsAccountSelect').value;
-    const reportType = document.getElementById('gadsReportType').value;
-    const days = parseInt((document.getElementById('gadsDateRange') || {}).value || '30', 10) || 30;
+  // ── Reports ───────────────────────────────────────────────────────────────
+  const _GADS_REPORT_PRESETS = {
+    account_health: {
+      name: 'Account Health',
+      metrics: ['cost','impressions','clicks','ctr','conversions','cpa','roas'],
+      dimensions: ['campaign','campaign_status','advertising_channel_type'],
+      filters: {campaign_status:'ENABLED'},
+      sort: '-cost',
+    },
+    waste_finder: {
+      name: 'Waste Finder',
+      metrics: ['cost','clicks','conversions','cpa'],
+      dimensions: ['campaign','campaign_status','advertising_channel_type'],
+      filters: {},
+      sort: '-cost',
+    },
+    roas_leaders: {
+      name: 'ROAS Leaders',
+      metrics: ['cost','conversions_value','roas','conversions'],
+      dimensions: ['campaign','campaign_status'],
+      filters: {campaign_status:'ENABLED'},
+      sort: '-roas',
+    },
+    conversion_efficiency: {
+      name: 'Conversion Efficiency',
+      metrics: ['clicks','conversions','conversion_rate','cost','cpa','value_per_conversion'],
+      dimensions: ['campaign','campaign_status','advertising_channel_type'],
+      filters: {campaign_status:'ENABLED'},
+      sort: '-conversions',
+    },
+  };
+
+  function gadsOnReportsTabOpen() {
+    // no auto-load — user picks preset
+  }
+
+  async function gadsRunPreset(presetKey) {
+    const preset = _GADS_REPORT_PRESETS[presetKey];
+    if (!preset) return;
+    const { accountId, mccQs } = _gadsQs();
+    const dateRange = (document.getElementById('gadsReportDateRange') || {}).value || 'LAST_30_DAYS';
     const container = document.getElementById('gadsReportResult');
-    if (!accountId) { container.innerHTML = '<p class="text-muted">No account selected.</p>'; return; }
-    container.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Generating…</div>';
+    if (!accountId) {
+      container.innerHTML = '<p class="text-warning small">No account selected.</p>';
+      return;
+    }
+    container.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Running report…</div>';
     try {
-      const mccQs = gadsState.mccId ? `&mcc_id=${encodeURIComponent(gadsState.mccId)}` : '';
-      const res = await fetch(`/api/connectors/google-ads/reports?account_id=${accountId}&type=${reportType}&days=${days}${mccQs}`);
+      const mccId = gadsState.mccId || '';
+      const body = {
+        customer_id: accountId,
+        manager_customer_id: mccId || undefined,
+        date_range: dateRange,
+        level: 'campaign',
+        metrics: preset.metrics,
+        dimensions: preset.dimensions,
+        filters: preset.filters,
+        sort: preset.sort,
+        limit: 50,
+      };
+      const res = await fetch('/api/connectors/google-ads/report/query', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      const rows = data.rows || [];
-      if (!rows.length) { container.innerHTML = '<p class="text-muted">No report data available.</p>'; return; }
-      const cols = Object.keys(rows[0]);
-      let tbl = '<div class="table-responsive"><table class="table table-dark table-sm table-striped"><thead><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
-      rows.forEach(r => { tbl += '<tr>' + cols.map(c => `<td>${r[c]}</td>`).join('') + '</tr>'; });
-      tbl += '</tbody></table></div>';
-      container.innerHTML = `<div class="small text-muted mb-2">Generated: ${data.generated_at || ''} · Source: ${data.source || ''}</div>` + tbl;
+      gadsRenderReport(data, preset.name);
     } catch (e) {
-      container.innerHTML = '<div class="alert alert-danger">Report generation failed.</div>';
+      container.innerHTML = `<div class="alert alert-danger">Report failed: ${e.message}</div>`;
     }
   }
 
-  function gadsExportReportCSV() {
+  function gadsRenderReport(data, presetName) {
     const container = document.getElementById('gadsReportResult');
-    const rows = container ? container.querySelectorAll('table tr') : [];
-    if (!rows.length) return;
-    const csv = Array.from(rows).map(r => Array.from(r.querySelectorAll('th,td')).map(c => `"${c.textContent}"`).join(',')).join('\n');
+    const rows = data.rows || [];
+    const totals = data.totals || {};
+    const source = data.source || '';
+    const currency = (data.currency && data.currency.currency_code) || null;
+    const currSym = _gadsCurrencySymbol(currency);
+    const currBadge = currency
+      ? `<span class="badge bg-secondary">${currency}</span>`
+      : '<span class="badge bg-secondary text-muted">currency unknown</span>';
+    const warnings = data.warnings || [];
+
+    let warnHtml = '';
+    if (warnings.length) {
+      warnHtml = warnings.map(w =>
+        `<div class="alert alert-warning py-1 px-2 small mb-2">${w}</div>`
+      ).join('');
+    }
+
+    if (!rows.length) {
+      container.innerHTML = warnHtml + '<p class="text-muted">No rows returned for this report.</p>';
+      return;
+    }
+
+    const cols = data.columns || Object.keys(rows[0]);
+    const _CURRENCY_METRICS = new Set(['cost','avg_cpc','cpa','conversions_value',
+      'cost_per_all_conversions','value_per_conversion']);
+    const _PCT_METRICS = new Set(['ctr','conversion_rate']);
+    const _RATIO_METRICS = new Set(['roas']);
+
+    function fmtCell(col, val) {
+      if (val == null) return '—';
+      if (_CURRENCY_METRICS.has(col)) return currSym + Number(val).toFixed(2);
+      if (_PCT_METRICS.has(col)) return Number(val).toFixed(2) + '%';
+      if (_RATIO_METRICS.has(col)) return Number(val).toFixed(2) + 'x';
+      if (typeof val === 'number') return val.toLocaleString();
+      return val;
+    }
+
+    const colHeaders = cols.map(c => `<th class="text-nowrap">${c.replace(/_/g,' ')}</th>`).join('');
+    const bodyRows = rows.map(r =>
+      '<tr>' + cols.map(c => `<td class="text-nowrap">${fmtCell(c, r[c])}</td>`).join('') + '</tr>'
+    ).join('');
+    const totalRow = '<tr class="table-active fw-bold">' +
+      cols.map(c => `<td>${totals[c] != null ? fmtCell(c, totals[c]) : (c === cols[0] ? 'TOTAL' : '—')}</td>`).join('') +
+      '</tr>';
+
+    container.innerHTML = `
+      ${warnHtml}
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <span class="fw-semibold">${presetName}</span>
+        ${_gadsSourceBadge(source)}
+        ${currBadge}
+        <span class="text-muted small ms-auto">${rows.length} campaigns</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-dark table-sm table-hover" id="gadsReportTable">
+          <thead><tr>${colHeaders}</tr></thead>
+          <tbody>${bodyRows}</tbody>
+          <tfoot>${totalRow}</tfoot>
+        </table>
+      </div>
+    `;
+  }
+
+  function gadsExportReportCSV() {
+    const table = document.getElementById('gadsReportTable');
+    if (!table) return;
+    const rows = Array.from(table.querySelectorAll('tr'));
+    const csv = rows.map(r =>
+      Array.from(r.querySelectorAll('th,td')).map(c => `"${c.textContent.trim()}"`).join(',')
+    ).join('\n');
     const blob = new Blob([csv], {type: 'text/csv'});
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'report.csv'; a.click();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'google-ads-report.csv';
+    a.click();
   }
 
   // ── Asset Generator (legacy, hidden tab) ─────────────────────────────────

@@ -588,7 +588,7 @@ class TestSourceTruth(unittest.TestCase):
 
     def test_connected_api_error_returns_mock_fallback(self):
         """When connected+validated but searchStream fails → source=mock_fallback."""
-        _, _, source = self._resolve(
+        _, _, source, _ = self._resolve(
             mock_meta_val={"status": "active", "api_validated": True,
                            "selected_manager_customer_id": "8924163684"},
             mock_token_val={"success": True, "access_token": "test_token"},
@@ -599,7 +599,7 @@ class TestSourceTruth(unittest.TestCase):
 
     def test_not_connected_returns_mock(self):
         """When not connected (no meta) → source=mock."""
-        _, _, source = self._resolve(
+        _, _, source, _ = self._resolve(
             mock_meta_val=None,
             mock_token_val={"success": False},
             mock_stream_val={"success": False},
@@ -609,7 +609,7 @@ class TestSourceTruth(unittest.TestCase):
 
     def test_live_success_returns_google_ads_api(self):
         """When connected and API succeeds → source=google_ads_api."""
-        _, _, source = self._resolve(
+        _, _, source, _ = self._resolve(
             mock_meta_val={"status": "active", "api_validated": True,
                            "selected_manager_customer_id": "8924163684"},
             mock_token_val={"success": True, "access_token": "test_token"},

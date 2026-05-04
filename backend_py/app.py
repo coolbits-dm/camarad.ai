@@ -20040,7 +20040,8 @@ def _gads_searchstream_campaigns(account_id, access_token, developer_token, logi
         "SELECT campaign.id, campaign.name, campaign.advertising_channel_type,"
         " campaign.status, campaign.bidding_strategy_type,"
         " metrics.impressions, metrics.clicks, metrics.cost_micros,"
-        " metrics.conversions, metrics.conversions_value"
+        " metrics.conversions, metrics.conversions_value,"
+        " customer.currency_code"
         f" FROM campaign WHERE segments.date DURING {date_range}"
         " ORDER BY metrics.cost_micros DESC LIMIT 50"
     )
@@ -20090,10 +20091,12 @@ def _gads_searchstream_campaigns(account_id, access_token, developer_token, logi
     }
 
     campaigns = []
+    account_currency_code = None
     for obj in parsed_chunks:
         for r in (obj.get("results") or []):
             camp = r.get("campaign") or {}
             metrics = r.get("metrics") or {}
+            cust = r.get("customer") or {}
             if not camp:
                 continue
             cid = str(camp.get("id") or "")
@@ -20121,6 +20124,13 @@ def _gads_searchstream_campaigns(account_id, access_token, developer_token, logi
             cost_per_conv = round(cost / conversions, 2) if conversions > 0 else 0.0
             roas = round(conv_value / cost, 2) if cost > 0 else 0.0
 
+            # Extract account currency from the customer resource (same for all rows in account)
+            row_currency = str(
+                cust.get("currencyCode") or cust.get("currency_code") or ""
+            ).strip().upper()
+            if row_currency and not account_currency_code:
+                account_currency_code = row_currency
+
             campaigns.append({
                 "id": cid,
                 "name": camp.get("name") or f"Campaign {cid}",
@@ -20143,10 +20153,11 @@ def _gads_searchstream_campaigns(account_id, access_token, developer_token, logi
                 "roas": roas,
                 "ctr": ctr,
                 "avg_cpc": avg_cpc,
+                "currency_code": row_currency or None,
             })
 
     return {"success": True, "campaigns": campaigns, "account_id": safe_cid,
-            "date_range": date_range}
+            "date_range": date_range, "account_currency_code": account_currency_code}
 
 
 def _google_ads_mock_campaigns_response(account_id):
@@ -20415,10 +20426,11 @@ def google_ads_campaigns():
 def _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id=None):
     """Shared helper: fetch live campaign list or return fallback on failure.
 
-    Returns (campaigns_list, date_range_str, source_str) where source is:
+    Returns (campaigns_list, date_range_str, source_str, account_currency_code) where source is:
       'google_ads_api'  — live API succeeded
       'mock_fallback'   — connected/validated but API call failed (user is linked)
       'mock'            — no active connection or no valid customer_id
+    account_currency_code is the ISO 4217 currency code string or None.
     Does NOT raise exceptions.
     """
     if user_id is None:
@@ -20451,12 +20463,509 @@ def _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id=None):
             )
             access_token = None  # wipe immediately
             if result.get("success"):
-                return result["campaigns"], result.get("date_range", "LAST_30_DAYS"), "google_ads_api"
+                return (result["campaigns"], result.get("date_range", "LAST_30_DAYS"),
+                        "google_ads_api", result.get("account_currency_code"))
             print(f"gads_resolve_live_error: {result.get('error')} acct={safe_cid}")
     # Fallback: use mock data but distinguish connected-error from not-connected
     fallback_source = "mock_fallback" if live_attempted else "mock"
     mock = _google_ads_mock_campaigns_response(customer_id)
-    return mock.get("campaigns", []), "LAST_30_DAYS", fallback_source
+    # Look up currency for this mock account (never guess — if not found return None)
+    mock_currency = next(
+        (a.get("currency") for a in GOOGLE_ADS_MOCK_ACCOUNTS if a.get("id") == customer_id),
+        None,
+    )
+    return mock.get("campaigns", []), "LAST_30_DAYS", fallback_source, mock_currency
+
+
+# ─── Phase 2D: Currency helpers ──────────────────────────────────────────────
+
+def _gads_get_account_currency(customer_id, manager_customer_id=None, user_id=None):
+    """Look up cached currency_code from hierarchy DB. Returns uppercase str or None.
+    Never defaults to USD — if unknown, returns None.
+    """
+    if user_id is None:
+        user_id = get_current_user_id()
+    safe_cid = re.sub(r"[^0-9]", "", str(customer_id or ""))
+    safe_mgr = re.sub(r"[^0-9]", "", str(manager_customer_id or ""))
+    if not safe_cid:
+        return None
+    conn = get_db()
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS google_ads_customer_hierarchy (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL DEFAULT 0,
+                manager_customer_id TEXT NOT NULL,
+                customer_id TEXT NOT NULL,
+                resource_name TEXT NOT NULL DEFAULT '',
+                descriptive_name TEXT,
+                status TEXT NOT NULL DEFAULT 'UNKNOWN',
+                account_type TEXT NOT NULL DEFAULT 'unknown',
+                is_manager INTEGER NOT NULL DEFAULT 0,
+                level INTEGER,
+                currency_code TEXT,
+                time_zone TEXT,
+                source TEXT NOT NULL DEFAULT 'google_ads_api',
+                last_seen_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(user_id, manager_customer_id, customer_id)
+            )"""
+        )
+        if safe_mgr:
+            row = conn.execute(
+                "SELECT currency_code FROM google_ads_customer_hierarchy"
+                " WHERE user_id=? AND manager_customer_id=? AND customer_id=?"
+                " AND currency_code IS NOT NULL AND currency_code != ''",
+                (int(user_id or 0), safe_mgr, safe_cid),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT currency_code FROM google_ads_customer_hierarchy"
+                " WHERE user_id=? AND customer_id=?"
+                " AND currency_code IS NOT NULL AND currency_code != ''",
+                (int(user_id or 0), safe_cid),
+            ).fetchone()
+        if row:
+            code = str(row["currency_code"]).strip().upper()
+            return code if code else None
+        return None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def _gads_resolve_currency_context(customer_id=None, manager_customer_id=None,
+                                   api_currency_code=None, rows=None,
+                                   requested_currency=None, user_id=None):
+    """Resolve account currency context for report responses.
+
+    Priority: api_currency_code (from live query) > rows (from result set) > hierarchy DB.
+    Never defaults to USD — unknown currency is reported as null with a warning.
+
+    Returns dict: {currency_code, native_currency, display_currency,
+                   conversion_applied, mixed_currency, currency_source, warning}
+    """
+    currency_code = None
+    currency_source = "unknown"
+    warning = None
+    row_currencies = set()
+
+    if api_currency_code and str(api_currency_code).strip():
+        currency_code = str(api_currency_code).strip().upper()
+        currency_source = "google_ads_api_query"
+    elif rows:
+        for r in rows:
+            c = str(r.get("currency_code") or "").strip().upper()
+            if c:
+                row_currencies.add(c)
+        if len(row_currencies) == 1:
+            currency_code = next(iter(row_currencies))
+            currency_source = "query_result"
+        elif len(row_currencies) > 1:
+            currency_source = "mixed"
+            warning = (
+                "Multiple currencies detected in result set. "
+                "Monetary totals are not summed across currencies."
+            )
+
+    if not currency_code and currency_source != "mixed":
+        db_currency = _gads_get_account_currency(customer_id, manager_customer_id, user_id)
+        if db_currency:
+            currency_code = db_currency
+            currency_source = "cached_hierarchy"
+
+    if not currency_code and currency_source not in ("mixed",):
+        currency_source = "unknown"
+        warning = (warning or "") + (
+            " Account currency is unknown. Monetary values lack a reliable currency label."
+        )
+
+    mixed_currency = currency_source == "mixed"
+    display_currency = currency_code
+
+    if requested_currency and currency_code and requested_currency.upper() != currency_code:
+        display_currency = requested_currency.upper()
+        warning = (warning or "") + (
+            f" Currency conversion from {currency_code} to {requested_currency.upper()}"
+            " is not enabled yet. Native account currency is shown."
+        )
+        display_currency = currency_code  # no conversion yet — show native
+
+    return {
+        "currency_code": currency_code,
+        "native_currency": currency_code,
+        "display_currency": display_currency or currency_code,
+        "conversion_applied": False,
+        "mixed_currency": mixed_currency,
+        "currency_source": currency_source,
+        "warning": warning.strip() if warning else None,
+    }
+
+
+# ─── Phase 2D: Metric catalog ────────────────────────────────────────────────
+
+def _gads_metric_catalog():
+    """Return the allowlisted metric and dimension catalog for safe report queries."""
+    metrics = [
+        {"key": "cost", "label": "Cost", "type": "currency",
+         "source_field": "metrics.cost_micros", "formula": "cost_micros / 1000000",
+         "aggregation": "sum", "level": ["campaign", "account"],
+         "sortable": True, "currency_sensitive": True},
+        {"key": "impressions", "label": "Impressions", "type": "number",
+         "source_field": "metrics.impressions", "aggregation": "sum",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": False},
+        {"key": "clicks", "label": "Clicks", "type": "number",
+         "source_field": "metrics.clicks", "aggregation": "sum",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": False},
+        {"key": "ctr", "label": "CTR (%)", "type": "percent",
+         "formula": "clicks / impressions * 100", "aggregation": "derived",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": False},
+        {"key": "avg_cpc", "label": "Avg. CPC", "type": "currency",
+         "formula": "cost / clicks", "aggregation": "derived",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": True},
+        {"key": "conversions", "label": "Conversions", "type": "number",
+         "source_field": "metrics.conversions", "aggregation": "sum",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": False},
+        {"key": "conversions_value", "label": "Conversion Value", "type": "currency",
+         "source_field": "metrics.conversions_value", "aggregation": "sum",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": True},
+        {"key": "roas", "label": "ROAS", "type": "ratio",
+         "formula": "conversions_value / cost", "aggregation": "derived",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": False},
+        {"key": "cpa", "label": "CPA", "type": "currency",
+         "formula": "cost / conversions", "aggregation": "derived",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": True},
+        {"key": "conversion_rate", "label": "Conversion Rate (%)", "type": "percent",
+         "formula": "conversions / clicks * 100", "aggregation": "derived",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": False},
+        {"key": "all_conversions", "label": "All Conversions", "type": "number",
+         "source_field": "metrics.all_conversions", "aggregation": "sum",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": False},
+        {"key": "cost_per_all_conversions", "label": "Cost / All Conv.", "type": "currency",
+         "formula": "cost / all_conversions", "aggregation": "derived",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": True},
+        {"key": "value_per_conversion", "label": "Value / Conv.", "type": "currency",
+         "formula": "conversions_value / conversions", "aggregation": "derived",
+         "level": ["campaign", "account"], "sortable": True, "currency_sensitive": True},
+        {"key": "active_campaigns", "label": "Active Campaigns", "type": "number",
+         "formula": "count(status == ENABLED)", "aggregation": "derived",
+         "level": ["account"], "sortable": False, "currency_sensitive": False},
+        {"key": "total_campaigns", "label": "Total Campaigns", "type": "number",
+         "formula": "count(all)", "aggregation": "derived",
+         "level": ["account"], "sortable": False, "currency_sensitive": False},
+    ]
+    dimensions = [
+        {"key": "campaign", "label": "Campaign Name",
+         "source_field": "campaign.name", "level": ["campaign"]},
+        {"key": "campaign_id", "label": "Campaign ID",
+         "source_field": "campaign.id", "level": ["campaign"]},
+        {"key": "campaign_status", "label": "Campaign Status",
+         "source_field": "campaign.status", "level": ["campaign"]},
+        {"key": "advertising_channel_type", "label": "Channel Type",
+         "source_field": "campaign.advertising_channel_type", "level": ["campaign"]},
+        {"key": "bidding_strategy_type", "label": "Bidding Strategy",
+         "source_field": "campaign.bidding_strategy_type", "level": ["campaign"]},
+        {"key": "customer_id", "label": "Account ID",
+         "source_field": "customer.id", "level": ["campaign", "account"]},
+        {"key": "currency_code", "label": "Currency",
+         "source_field": "customer.currency_code", "level": ["campaign", "account"]},
+    ]
+    return {"metrics": metrics, "dimensions": dimensions}
+
+
+# ─── Phase 2D: Safe report query builder ─────────────────────────────────────
+
+# Allowlist: metric key → GAQL primitive source field (None = derived in Python)
+_GADS_METRIC_SELECT_MAP = {
+    "cost": "metrics.cost_micros",
+    "impressions": "metrics.impressions",
+    "clicks": "metrics.clicks",
+    "conversions": "metrics.conversions",
+    "conversions_value": "metrics.conversions_value",
+    "all_conversions": "metrics.all_conversions",
+    "ctr": None,
+    "avg_cpc": None,
+    "roas": None,
+    "cpa": None,
+    "conversion_rate": None,
+    "cost_per_all_conversions": None,
+    "value_per_conversion": None,
+    "active_campaigns": None,
+    "total_campaigns": None,
+}
+
+_GADS_DIMENSION_SELECT_MAP = {
+    "campaign": "campaign.name",
+    "campaign_id": "campaign.id",
+    "campaign_status": "campaign.status",
+    "advertising_channel_type": "campaign.advertising_channel_type",
+    "bidding_strategy_type": "campaign.bidding_strategy_type",
+    "currency_code": "customer.currency_code",
+    "customer_id": None,  # implicit — always the queried account
+}
+
+_GADS_SORT_FIELD_MAP = {
+    "cost": "metrics.cost_micros",
+    "impressions": "metrics.impressions",
+    "clicks": "metrics.clicks",
+    "conversions": "metrics.conversions",
+    "conversions_value": "metrics.conversions_value",
+    "all_conversions": "metrics.all_conversions",
+    "campaign": "campaign.name",
+    "campaign_status": "campaign.status",
+}
+
+_GADS_DATE_RANGE_ALLOWLIST = frozenset([
+    "LAST_7_DAYS", "LAST_14_DAYS", "LAST_30_DAYS", "LAST_90_DAYS",
+    "THIS_MONTH", "LAST_MONTH",
+])
+
+_GADS_CAMPAIGN_STATUS_ALLOWLIST = frozenset(["ENABLED", "PAUSED", "REMOVED"])
+
+_GADS_CHANNEL_TYPE_ALLOWLIST = frozenset([
+    "SEARCH", "DISPLAY", "SHOPPING", "VIDEO", "MULTI_CHANNEL",
+    "APP", "PERFORMANCE_MAX", "DISCOVERY",
+])
+
+_GADS_REPORT_MAX_LIMIT = 200
+
+
+def _gads_build_safe_report_query(level, metrics, dimensions, filters, date_range, sort, limit):
+    """Build a read-only allowlisted GAQL query. Never accepts raw GAQL.
+
+    Returns (gaql_str, error_str_or_None).
+    Raises nothing — returns error string on invalid input.
+    """
+    if level not in ("campaign", "account"):
+        return None, f"Invalid level '{level}'. Must be 'campaign' or 'account'."
+
+    if date_range not in _GADS_DATE_RANGE_ALLOWLIST:
+        return None, (
+            f"Invalid date_range '{date_range}'. "
+            f"Allowed: {sorted(_GADS_DATE_RANGE_ALLOWLIST)}"
+        )
+
+    for m in (metrics or []):
+        if m not in _GADS_METRIC_SELECT_MAP:
+            return None, f"Invalid metric '{m}'. Use /report/catalog for allowed values."
+
+    for d in (dimensions or []):
+        if d not in _GADS_DIMENSION_SELECT_MAP:
+            return None, f"Invalid dimension '{d}'. Use /report/catalog for allowed values."
+
+    allowed_filter_keys = frozenset({"campaign_status", "advertising_channel_type",
+                                     "min_cost", "max_cost"})
+    for fk in (filters or {}):
+        if fk not in allowed_filter_keys:
+            return None, (
+                f"Invalid filter key '{fk}'. "
+                f"Allowed: {sorted(allowed_filter_keys)}"
+            )
+
+    safe_limit = max(1, min(int(limit or 50), _GADS_REPORT_MAX_LIMIT))
+
+    # Build SELECT — always include minimum required fields
+    select_fields = {"campaign.id", "campaign.status", "customer.currency_code"}
+
+    metrics_set = set(metrics or [])
+    prim_needs = {
+        "metrics.cost_micros": {"cost", "avg_cpc", "roas", "cpa",
+                                 "cost_per_all_conversions", "value_per_conversion"},
+        "metrics.clicks": {"clicks", "ctr", "avg_cpc", "conversion_rate"},
+        "metrics.impressions": {"impressions", "ctr"},
+        "metrics.conversions": {"conversions", "roas", "cpa",
+                                 "conversion_rate", "value_per_conversion"},
+        "metrics.conversions_value": {"conversions_value", "roas", "value_per_conversion"},
+        "metrics.all_conversions": {"all_conversions", "cost_per_all_conversions"},
+    }
+    for prim, needed_by in prim_needs.items():
+        if metrics_set & needed_by:
+            select_fields.add(prim)
+
+    # Add dimension fields
+    for d in (dimensions or []):
+        gf = _GADS_DIMENSION_SELECT_MAP.get(d)
+        if gf:
+            select_fields.add(gf)
+
+    # Always add campaign.name for readability if campaign.id is selected
+    if "campaign.id" in select_fields:
+        select_fields.add("campaign.name")
+
+    select_clause = ", ".join(sorted(select_fields))
+
+    # WHERE clause
+    where_parts = [f"segments.date DURING {date_range}"]
+
+    status_filter = (filters or {}).get("campaign_status")
+    if status_filter:
+        if isinstance(status_filter, list):
+            valid = [s for s in status_filter if s in _GADS_CAMPAIGN_STATUS_ALLOWLIST]
+            if valid:
+                s_str = ", ".join(f"'{s}'" for s in valid)
+                where_parts.append(f"campaign.status IN ({s_str})")
+        elif isinstance(status_filter, str) and status_filter in _GADS_CAMPAIGN_STATUS_ALLOWLIST:
+            where_parts.append(f"campaign.status = '{status_filter}'")
+
+    channel_filter = (filters or {}).get("advertising_channel_type")
+    if channel_filter:
+        if isinstance(channel_filter, list):
+            valid = [c for c in channel_filter if c in _GADS_CHANNEL_TYPE_ALLOWLIST]
+            if valid:
+                c_str = ", ".join(f"'{c}'" for c in valid)
+                where_parts.append(f"campaign.advertising_channel_type IN ({c_str})")
+        elif (isinstance(channel_filter, str)
+              and channel_filter in _GADS_CHANNEL_TYPE_ALLOWLIST):
+            where_parts.append(f"campaign.advertising_channel_type = '{channel_filter}'")
+
+    where_clause = " AND ".join(where_parts)
+
+    # ORDER BY — server-side pre-sort
+    sort_str = str(sort or "-cost").strip()
+    if sort_str.startswith("-"):
+        order_dir = "DESC"
+        sort_key = sort_str[1:]
+    else:
+        order_dir = "ASC"
+        sort_key = sort_str
+    order_field = _GADS_SORT_FIELD_MAP.get(sort_key, "metrics.cost_micros")
+
+    gaql = (
+        f"SELECT {select_clause}"
+        f" FROM campaign"
+        f" WHERE {where_clause}"
+        f" ORDER BY {order_field} {order_dir}"
+        f" LIMIT {safe_limit}"
+    )
+    return gaql, None
+
+
+def _gads_compute_report_rows(parsed_chunks, metrics, dimensions):
+    """Parse searchStream result chunks into structured report rows with derived metrics.
+
+    Returns (rows_list, account_currency_code_or_None).
+    """
+    _CHANNEL_TYPE_MAP = {
+        "SEARCH": "Search", "DISPLAY": "Display", "SHOPPING": "Shopping",
+        "VIDEO": "Video", "MULTI_CHANNEL": "Performance Max",
+        "APP": "App", "LOCAL": "Local", "SMART": "Smart",
+        "PERFORMANCE_MAX": "Performance Max", "DISCOVERY": "Discovery",
+        "UNKNOWN": "Unknown",
+    }
+
+    rows = []
+    account_currency = None
+
+    for obj in (parsed_chunks or []):
+        for r in (obj.get("results") or []):
+            camp = r.get("campaign") or {}
+            mtr = r.get("metrics") or {}
+            cust = r.get("customer") or {}
+
+            cid = str(camp.get("id") or "")
+            if not cid:
+                continue
+
+            cost_micros = float(mtr.get("costMicros") or mtr.get("cost_micros") or 0)
+            cost = round(cost_micros / 1_000_000, 2)
+            impressions = int(mtr.get("impressions") or 0)
+            clicks = int(mtr.get("clicks") or 0)
+            convs = float(mtr.get("conversions") or 0)
+            conv_value = float(
+                mtr.get("conversionsValue") or mtr.get("conversions_value") or 0
+            )
+            all_convs = float(
+                mtr.get("allConversions") or mtr.get("all_conversions") or 0
+            )
+
+            row_currency = str(
+                cust.get("currencyCode") or cust.get("currency_code") or ""
+            ).strip().upper() or None
+            if row_currency and not account_currency:
+                account_currency = row_currency
+
+            channel_raw = str(
+                camp.get("advertisingChannelType")
+                or camp.get("advertising_channel_type")
+                or "UNKNOWN"
+            )
+
+            ctr = round(clicks / impressions * 100, 2) if impressions > 0 else None
+            avg_cpc = round(cost / clicks, 2) if clicks > 0 else None
+            roas = round(conv_value / cost, 2) if cost > 0 else None
+            cpa = round(cost / convs, 2) if convs > 0 else None
+            conversion_rate = round(convs / clicks * 100, 2) if clicks > 0 else None
+            value_per_conv = round(conv_value / convs, 2) if convs > 0 else None
+            cost_per_all_conv = round(cost / all_convs, 2) if all_convs > 0 else None
+
+            rows.append({
+                "campaign_id": cid,
+                "campaign": camp.get("name") or f"Campaign {cid}",
+                "campaign_status": str(camp.get("status") or "UNKNOWN"),
+                "advertising_channel_type": channel_raw,
+                "advertising_channel_label": _CHANNEL_TYPE_MAP.get(
+                    channel_raw, channel_raw.replace("_", " ").title()
+                ),
+                "bidding_strategy_type": str(
+                    camp.get("biddingStrategyType")
+                    or camp.get("bidding_strategy_type") or ""
+                ),
+                "currency_code": row_currency,
+                "cost": cost,
+                "impressions": impressions,
+                "clicks": clicks,
+                "conversions": round(convs, 2),
+                "conversions_value": round(conv_value, 2),
+                "all_conversions": round(all_convs, 2),
+                "ctr": ctr,
+                "avg_cpc": avg_cpc,
+                "roas": roas,
+                "cpa": cpa,
+                "conversion_rate": conversion_rate,
+                "value_per_conversion": value_per_conv,
+                "cost_per_all_conversions": cost_per_all_conv,
+            })
+
+    return rows, account_currency
+
+
+def _gads_compute_report_totals(rows, metrics):
+    """Aggregate rows into account-level totals for the requested metrics."""
+    metrics_set = set(metrics or [])
+    totals = {}
+
+    sum_fields = ["cost", "impressions", "clicks", "conversions",
+                  "conversions_value", "all_conversions"]
+    for f in sum_fields:
+        if not metrics_set or f in metrics_set:
+            totals[f] = round(sum(r.get(f, 0) or 0 for r in rows), 2)
+
+    tc = totals.get("cost", 0)
+    ti = totals.get("impressions", 0)
+    tk = totals.get("clicks", 0)
+    tv = totals.get("conversions", 0)
+    tcv = totals.get("conversions_value", 0)
+    tac = totals.get("all_conversions", 0)
+
+    derived = {
+        "ctr": (round(tk / ti * 100, 2) if ti > 0 else None),
+        "avg_cpc": (round(tc / tk, 2) if tk > 0 else None),
+        "roas": (round(tcv / tc, 2) if tc > 0 else None),
+        "cpa": (round(tc / tv, 2) if tv > 0 else None),
+        "conversion_rate": (round(tv / tk * 100, 2) if tk > 0 else None),
+        "value_per_conversion": (round(tcv / tv, 2) if tv > 0 else None),
+        "cost_per_all_conversions": (round(tc / tac, 2) if tac > 0 else None),
+        "active_campaigns": sum(1 for r in rows if r.get("campaign_status") == "ENABLED"),
+        "total_campaigns": len(rows),
+    }
+    for k, v in derived.items():
+        if not metrics_set or k in metrics_set:
+            totals[k] = v
+
+    return totals
 
 
 @app.route("/api/connectors/google-ads/overview", methods=["GET"])
@@ -20481,14 +20990,24 @@ def google_ads_overview():
         or ""
     )
 
-    campaigns, date_range, source = _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id)
+    campaigns, date_range, source, api_currency = _gads_resolve_live_campaigns(
+        customer_id, mcc_id, days, user_id
+    )
     totals = _gads_compute_overview_totals(campaigns, customer_id, manager_cid, date_range)
+    currency_ctx = _gads_resolve_currency_context(
+        customer_id=customer_id,
+        manager_customer_id=manager_cid,
+        api_currency_code=api_currency,
+        rows=None,  # rows only used for mixed-currency detection with live data
+        user_id=user_id,
+    )
 
     return jsonify({
         "source": source,
         "customer_id": customer_id,
         "manager_customer_id": manager_cid,
         "date_range": date_range,
+        "currency": currency_ctx,
         "totals": totals,
     })
 
@@ -20508,8 +21027,15 @@ def google_ads_diagnostics():
     days = request.args.get("days", 30, type=int)
 
     user_id = get_current_user_id()
-    campaigns, date_range, source = _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id)
+    campaigns, date_range, source, api_currency = _gads_resolve_live_campaigns(
+        customer_id, mcc_id, days, user_id
+    )
     findings = _gads_compute_diagnostics(campaigns)
+    currency_ctx = _gads_resolve_currency_context(
+        customer_id=customer_id,
+        api_currency_code=api_currency,
+        user_id=user_id,
+    )
 
     summary = {
         "critical": sum(1 for f in findings if f.get("severity") == "critical"),
@@ -20522,6 +21048,7 @@ def google_ads_diagnostics():
         "source": source,
         "customer_id": customer_id,
         "date_range": date_range,
+        "currency": currency_ctx,
         "findings": findings,
         "summary": summary,
     })
@@ -20552,14 +21079,354 @@ def google_ads_ai_brief():
         or ""
     )
 
-    campaigns, date_range, source = _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id)
+    campaigns, date_range, source, api_currency = _gads_resolve_live_campaigns(
+        customer_id, mcc_id, days, user_id
+    )
     brief = _gads_compute_ai_brief(campaigns, customer_id, manager_cid, date_range)
+    currency_ctx = _gads_resolve_currency_context(
+        customer_id=customer_id,
+        manager_customer_id=manager_cid,
+        api_currency_code=api_currency,
+        user_id=user_id,
+    )
 
     return jsonify({
         "source": source,
         "customer_id": customer_id,
         "date_range": date_range,
+        "currency": currency_ctx,
         **brief,
+    })
+
+
+# ─── Phase 2D: Report Catalog + Safe Query Endpoints ─────────────────────────
+
+@app.route("/api/connectors/google-ads/report/catalog", methods=["GET"])
+def google_ads_report_catalog():
+    """Return the allowlisted metric/dimension/filter catalog for report queries.
+
+    No authentication required — this is a static schema endpoint.
+    """
+    catalog = _gads_metric_catalog()
+    return jsonify({
+        "success": True,
+        "metrics": catalog["metrics"],
+        "dimensions": catalog["dimensions"],
+        "date_ranges": sorted(_GADS_DATE_RANGE_ALLOWLIST),
+        "levels": ["account", "campaign"],
+        "filters": {
+            "campaign_status": sorted(_GADS_CAMPAIGN_STATUS_ALLOWLIST),
+            "advertising_channel_type": sorted(_GADS_CHANNEL_TYPE_ALLOWLIST),
+            "min_cost": "number (optional)",
+            "max_cost": "number (optional)",
+        },
+        "currency": {
+            "native_account_currency": True,
+            "conversion_supported": False,
+            "display_currency_supported": False,
+            "notes": (
+                "Reports use each account's native Google Ads currency. "
+                "Cross-currency conversion is not enabled. "
+                "Unknown currency is returned as null, not as a guessed value."
+            ),
+        },
+        "limits": {
+            "max_rows": _GADS_REPORT_MAX_LIMIT,
+            "default_rows": 50,
+        },
+        "presets": [
+            {
+                "name": "Account Health",
+                "level": "campaign",
+                "metrics": ["cost", "impressions", "clicks", "ctr",
+                            "conversions", "cpa", "roas"],
+                "dimensions": ["campaign", "campaign_status",
+                               "advertising_channel_type"],
+                "filters": {"campaign_status": "ENABLED"},
+                "sort": "-cost",
+                "date_range": "LAST_30_DAYS",
+            },
+            {
+                "name": "Waste Finder",
+                "level": "campaign",
+                "metrics": ["cost", "clicks", "conversions", "cpa"],
+                "dimensions": ["campaign", "campaign_status",
+                               "advertising_channel_type"],
+                "filters": {},
+                "sort": "-cost",
+                "date_range": "LAST_30_DAYS",
+            },
+            {
+                "name": "ROAS Leaders",
+                "level": "campaign",
+                "metrics": ["cost", "conversions_value", "roas", "conversions"],
+                "dimensions": ["campaign", "campaign_status"],
+                "filters": {"campaign_status": "ENABLED"},
+                "sort": "-roas",
+                "date_range": "LAST_30_DAYS",
+            },
+            {
+                "name": "Conversion Efficiency",
+                "level": "campaign",
+                "metrics": ["clicks", "conversions", "conversion_rate",
+                            "cost", "cpa", "value_per_conversion"],
+                "dimensions": ["campaign", "campaign_status",
+                               "advertising_channel_type"],
+                "filters": {"campaign_status": "ENABLED"},
+                "sort": "-conversions",
+                "date_range": "LAST_30_DAYS",
+            },
+        ],
+    })
+
+
+@app.route("/api/connectors/google-ads/report/query", methods=["POST"])
+def google_ads_report_query():
+    """Execute a safe, allowlisted report query against the Google Ads API.
+
+    Accepts JSON body with: customer_id, manager_customer_id?, date_range,
+    level, metrics[], dimensions[], filters{}, sort, limit.
+    Rejects raw GAQL — all queries are built from allowlisted keys.
+    Returns: {success, source, currency, columns, rows, totals, warnings, query_plan}
+    """
+    user_id = get_current_user_id()
+    data = request.get_json(silent=True) or {}
+
+    # Reject raw GAQL injection attempts
+    if any(k in data for k in ("gaql", "raw_query", "query", "sql")):
+        return jsonify({
+            "success": False,
+            "error": "raw_gaql_not_allowed",
+            "message": (
+                "Raw GAQL queries are not accepted. "
+                "Use metric/dimension keys from /report/catalog."
+            ),
+        }), 400
+
+    customer_id = str(
+        data.get("customer_id") or data.get("account_id") or ""
+    ).strip()
+    if not customer_id:
+        return jsonify({
+            "success": False, "error": "customer_id_required",
+            "message": "customer_id is required.",
+        }), 400
+
+    safe_cid = re.sub(r"[^0-9]", "", customer_id)
+    if len(safe_cid) < 8:
+        return jsonify({
+            "success": False, "error": "invalid_customer_id",
+            "message": "customer_id must be at least 8 digits.",
+        }), 400
+
+    manager_customer_id = str(
+        data.get("manager_customer_id") or data.get("mcc_id") or ""
+    ).strip()
+    date_range = str(data.get("date_range") or "LAST_30_DAYS").strip().upper()
+    level = str(data.get("level") or "campaign").strip().lower()
+    metrics = [str(m) for m in (data.get("metrics") or [])]
+    dimensions = [str(d) for d in (data.get("dimensions") or [])]
+    filters = dict(data.get("filters") or {})
+    sort = str(data.get("sort") or "-cost").strip()
+    limit = data.get("limit") or 50
+    display_currency = str(data.get("display_currency") or "").strip().upper() or None
+
+    # Build validated GAQL
+    gaql, build_error = _gads_build_safe_report_query(
+        level, metrics, dimensions, filters, date_range, sort, limit
+    )
+    if build_error:
+        return jsonify({
+            "success": False, "error": "invalid_query_params",
+            "message": build_error,
+        }), 400
+
+    safe_limit = max(1, min(int(limit or 50), _GADS_REPORT_MAX_LIMIT))
+
+    # Attempt live API query
+    meta = _gads_token_get_meta(user_id)
+    source = "mock"
+    live_attempted = False
+    parsed_chunks = None
+    account_currency_from_api = None
+
+    if (
+        meta
+        and meta.get("status") == "active"
+        and meta.get("api_validated")
+        and safe_cid.isdigit()
+        and len(safe_cid) >= 8
+    ):
+        token_result = _gads_get_fresh_access_token(user_id)
+        if token_result.get("success"):
+            live_attempted = True
+            access_token = token_result["access_token"]
+            cfg = _gads_oauth_config_internal()
+            developer_token = cfg.get("developer_token", "")
+            safe_mgr = re.sub(r"[^0-9]", "", str(manager_customer_id or "")).strip()
+            if not safe_mgr:
+                safe_mgr = (
+                    re.sub(r"[^0-9]", "",
+                           str((meta or {}).get("selected_manager_customer_id") or "")).strip()
+                    or safe_cid
+                )
+            url = (f"{_GADS_API_BASE}/{_GADS_API_VERSION}"
+                   f"/customers/{safe_cid}/googleAds:searchStream")
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "developer-token": developer_token,
+                "login-customer-id": safe_mgr,
+                "Content-Type": "application/json",
+            }
+            access_token = None  # wipe immediately
+            try:
+                resp = requests.post(
+                    url, headers=headers, json={"query": gaql}, timeout=20
+                )
+                if resp.status_code == 200:
+                    raw_text = resp.text.strip()
+                    if raw_text.startswith("["):
+                        try:
+                            parsed_chunks = json.loads(raw_text)
+                            if not isinstance(parsed_chunks, list):
+                                parsed_chunks = [parsed_chunks]
+                        except Exception:
+                            parsed_chunks = []
+                    else:
+                        parsed_chunks = []
+                        for line in raw_text.splitlines():
+                            line = line.strip()
+                            if line:
+                                try:
+                                    parsed_chunks.append(json.loads(line))
+                                except Exception:
+                                    pass
+                    source = "google_ads_api"
+                else:
+                    print(f"gads_report_query_api_error: {resp.status_code} acct={safe_cid}")
+                    source = "mock_fallback"
+            except Exception as exc:
+                print(f"gads_report_query_network_error: {str(exc)[:60]} acct={safe_cid}")
+                source = "mock_fallback"
+        else:
+            source = "mock_fallback"
+
+    # Build rows from result or mock
+    if parsed_chunks is not None:
+        rows, account_currency_from_api = _gads_compute_report_rows(
+            parsed_chunks, metrics, dimensions
+        )
+    else:
+        # Fallback to mock campaigns data, converted to report row format
+        if not live_attempted:
+            source = "mock"
+        mock = _google_ads_mock_campaigns_response(customer_id)
+        mock_camps = mock.get("campaigns", [])
+        mock_currency = next(
+            (a.get("currency") for a in GOOGLE_ADS_MOCK_ACCOUNTS
+             if a.get("id") == customer_id),
+            None,
+        )
+        rows = []
+        for c in mock_camps:
+            cost = float(c.get("spent") or c.get("cost") or 0)
+            impressions = int(c.get("impressions") or 0)
+            clicks = int(c.get("clicks") or 0)
+            convs = float(c.get("conversions") or 0)
+            conv_value = float(c.get("conversion_value") or convs * 10)
+            ctr = round(clicks / impressions * 100, 2) if impressions > 0 else None
+            avg_cpc = round(cost / clicks, 2) if clicks > 0 else None
+            roas = round(conv_value / cost, 2) if cost > 0 else None
+            cpa = round(cost / convs, 2) if convs > 0 else None
+            rows.append({
+                "campaign_id": str(c.get("id") or ""),
+                "campaign": str(c.get("name") or ""),
+                "campaign_status": str(c.get("status") or "UNKNOWN"),
+                "advertising_channel_type": str(c.get("channel") or "UNKNOWN"),
+                "advertising_channel_label": str(c.get("type") or ""),
+                "bidding_strategy_type": str(c.get("bidding") or ""),
+                "currency_code": mock_currency,
+                "cost": cost,
+                "impressions": impressions,
+                "clicks": clicks,
+                "conversions": convs,
+                "conversions_value": conv_value,
+                "all_conversions": convs,
+                "ctr": ctr,
+                "avg_cpc": avg_cpc,
+                "roas": roas,
+                "cpa": cpa,
+                "conversion_rate": None,
+                "value_per_conversion": None,
+                "cost_per_all_conversions": None,
+            })
+
+    # Apply Python-side min_cost filter (for mock — live uses GAQL WHERE)
+    min_cost = (filters or {}).get("min_cost")
+    if min_cost is not None:
+        try:
+            mc = float(min_cost)
+            rows = [r for r in rows if (r.get("cost") or 0) >= mc]
+        except Exception:
+            pass
+
+    totals = _gads_compute_report_totals(rows, metrics)
+
+    # Currency context
+    safe_mgr_for_currency = (
+        re.sub(r"[^0-9]", "", str(manager_customer_id or "")).strip() or None
+    )
+    currency_ctx = _gads_resolve_currency_context(
+        customer_id=safe_cid,
+        manager_customer_id=safe_mgr_for_currency,
+        api_currency_code=account_currency_from_api,
+        rows=rows,
+        requested_currency=display_currency,
+        user_id=user_id,
+    )
+
+    # Build column list
+    metric_keys = metrics or [
+        "cost", "impressions", "clicks", "ctr", "avg_cpc",
+        "conversions", "conversions_value", "roas", "cpa",
+    ]
+    dim_keys = dimensions or ["campaign", "campaign_status", "advertising_channel_type"]
+    columns = dim_keys + metric_keys
+
+    warnings = []
+    if currency_ctx.get("warning"):
+        warnings.append(currency_ctx["warning"])
+    if source == "mock_fallback":
+        warnings.append(
+            "API call failed. Showing fallback data. "
+            "Your account is connected but the API returned an error."
+        )
+    elif source == "mock":
+        warnings.append("No live Google Ads connection. Showing demo data.")
+
+    return jsonify({
+        "success": True,
+        "source": source,
+        "customer_id": safe_cid,
+        "manager_customer_id": safe_mgr_for_currency,
+        "date_range": date_range,
+        "level": level,
+        "currency": currency_ctx,
+        "columns": columns,
+        "rows": rows,
+        "totals": totals,
+        "row_count": len(rows),
+        "warnings": warnings,
+        "query_plan": {
+            "resource": "campaign",
+            "level": level,
+            "metrics": metric_keys,
+            "dimensions": dim_keys,
+            "filters": {k: v for k, v in filters.items()},
+            "date_range": date_range,
+            "sort": sort,
+            "limit": safe_limit,
+        },
     })
 
 
