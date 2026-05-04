@@ -956,15 +956,18 @@
               </div>
             </div>
 
-            <!-- Tabs -->
+            <!-- Tabs — Account Intelligence structure (Phase 2C) -->
             <ul class="nav nav-tabs nav-fill mb-3" id="gadsTabs">
               <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#gadsOverview" type="button"><i class="bi bi-speedometer2"></i> Overview</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsCampaigns" type="button"><i class="bi bi-megaphone"></i> Campaigns</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsPacing" type="button"><i class="bi bi-graph-up"></i> Budget Pacing</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsReports" type="button"><i class="bi bi-file-earmark-bar-graph"></i> Reports</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsAssets" type="button"><i class="bi bi-pencil-square"></i> Asset Generator</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsApiTest" type="button"><i class="bi bi-terminal"></i> Test API</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsDiagnostics" type="button"><i class="bi bi-exclamation-triangle"></i> Diagnostics</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsAiBrief" type="button"><i class="bi bi-robot"></i> AI Brief</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsSettings" type="button"><i class="bi bi-gear"></i> Settings</button></li>
+              <!-- Dev-only tabs — hidden in production -->
+              <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsApiTest" type="button"><i class="bi bi-terminal"></i> Test API</button></li>
+              <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsPacing" type="button"><i class="bi bi-graph-up"></i> Budget Pacing</button></li>
+              <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsReports" type="button"><i class="bi bi-file-earmark-bar-graph"></i> Reports</button></li>
+              <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsAssets" type="button"><i class="bi bi-pencil-square"></i> Asset Generator</button></li>
             </ul>
 
             <div class="tab-content">
@@ -1043,9 +1046,44 @@
                 </div>
               </div>
 
-              <!-- ── Budget Pacing Tab ─────────────────────────────── -->
+              <!-- ── Diagnostics Tab (Phase 2C) ────────────────────── -->
+              <div class="tab-pane fade" id="gadsDiagnostics">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h6 class="mb-0"><i class="bi bi-exclamation-triangle text-warning"></i> Campaign Diagnostics</h6>
+                  <div id="gadsDiagSummaryBadges" class="d-flex gap-2"></div>
+                </div>
+                <div id="gadsDiagnosticsContent">
+                  <div class="text-center text-muted py-5">
+                    <i class="bi bi-search" style="font-size:2.5rem;"></i>
+                    <p class="mt-3">Select an account to run diagnostics.</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ── AI Brief Tab (Phase 2C) ───────────────────────── -->
+              <div class="tab-pane fade" id="gadsAiBrief">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h6 class="mb-0"><i class="bi bi-robot text-info"></i> AI Account Brief</h6>
+                  <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-secondary" id="gadsAiBriefCopyBtn" onclick="gadsAiBriefCopyJSON()" style="display:none;">
+                      <i class="bi bi-clipboard"></i> Copy JSON
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" disabled title="Orchestrator integration coming soon">
+                      <i class="bi bi-send"></i> Send to Orchestrator
+                    </button>
+                  </div>
+                </div>
+                <div id="gadsAiBriefContent">
+                  <div class="text-center text-muted py-5">
+                    <i class="bi bi-robot" style="font-size:2.5rem;"></i>
+                    <p class="mt-3">Select an account to generate the AI brief.</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ── Budget Pacing Tab (hidden — merged into Diagnostics) ── -->
               <div class="tab-pane fade" id="gadsPacing">
-                <h6 class="mb-3">Budget Pacing & Utilization</h6>
+                <h6 class="mb-3">Budget Pacing &amp; Utilization</h6>
                 <div id="gadsPacingContent"></div>
               </div>
 
@@ -5477,7 +5515,12 @@
     sortDir: 1,
     lastReport: null,
     connected: false,
-    mccId: ''
+    mccId: '',
+    // Phase 2C: Account Intelligence
+    overviewData: null,
+    diagnosticsData: null,
+    aiBriefData: null,
+    loaded: { campaigns: false, diagnostics: false, aiBrief: false }
   };
 
   async function gadsInit() {
@@ -5861,7 +5904,6 @@
   async function gadsLoadAccount() {
     const accountId = document.getElementById('gadsAccountSelect').value;
     if (!accountId) return;
-    const days = parseInt((document.getElementById('gadsDateRange') || {}).value || '30', 10) || 30;
 
     const acct = gadsState.accounts.find(a => a.id === accountId);
     gadsState.selectedAccount = acct;
@@ -5869,84 +5911,158 @@
       ? `${acct.currency} · ${acct.timezone}`
       : '';
 
-    // Load campaigns
-    try {
-      const mccQs = gadsState.mccId ? `&mcc_id=${encodeURIComponent(gadsState.mccId)}` : '';
-      const res = await fetch(`/api/connectors/google-ads/campaigns?account_id=${accountId}&days=${days}${mccQs}`);
-      const data = await res.json();
-      gadsState.campaigns = data.campaigns || [];
-      gadsState.summary = data.summary || {};
-      gadsRenderOverview();
-      gadsRenderCampaigns();
-      gadsRenderPacing();
-    } catch (e) { console.error('Failed to load campaigns:', e); }
+    // Reset lazy-load state for this account
+    gadsState.loaded = { campaigns: false, diagnostics: false, aiBrief: false };
+    gadsState.overviewData = null;
+    gadsState.diagnosticsData = null;
+    gadsState.aiBriefData = null;
+
+    // Always load overview immediately
+    await gadsLoadOverview();
+
+    // Register tab lazy-loaders (once; bootstrap 'shown.bs.tab' is safe to re-bind)
+    document.querySelectorAll('#gadsTabs [data-bs-toggle="tab"]').forEach(btn => {
+      btn.removeEventListener('shown.bs.tab', btn._gadsTabHandler || null);
+      btn._gadsTabHandler = async function(e) {
+        const target = e.target.getAttribute('data-bs-target');
+        if (target === '#gadsCampaigns' && !gadsState.loaded.campaigns) {
+          await gadsLoadCampaigns();
+        } else if (target === '#gadsDiagnostics' && !gadsState.loaded.diagnostics) {
+          await gadsLoadDiagnostics();
+        } else if (target === '#gadsAiBrief' && !gadsState.loaded.aiBrief) {
+          await gadsLoadAiBrief();
+        }
+      };
+      btn.addEventListener('shown.bs.tab', btn._gadsTabHandler);
+    });
   }
 
-  // ── Overview Rendering ──────────────────────────────────────────────────
-  function gadsRenderOverview() {
-    const s = gadsState.summary;
-    if (!s) return;
-    const pct = s.budget_utilization || 0;
-    const pctClass = pct < 70 ? 'bg-success' : (pct < 90 ? 'bg-warning' : 'bg-danger');
+  // ── Helpers ─────────────────────────────────────────────────────────────
+  function _gadsQs() {
+    const accountId = (document.getElementById('gadsAccountSelect') || {}).value || '';
+    const days = parseInt((document.getElementById('gadsDateRange') || {}).value || '30', 10) || 30;
+    const mccQs = gadsState.mccId ? `&mcc_id=${encodeURIComponent(gadsState.mccId)}` : '';
+    return { accountId, days, mccQs };
+  }
+
+  function _gadsSpinner(containerId, msg) {
+    const el = document.getElementById(containerId);
+    if (el) el.innerHTML = `<div class="text-center py-5 text-muted"><span class="spinner-border spinner-border-sm me-2"></span>${msg}</div>`;
+  }
+
+  function _gadsErrorState(containerId, errMsg, isApiError) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    const badge = isApiError
+      ? '<span class="badge bg-danger me-2">API Error</span>'
+      : '<span class="badge bg-warning text-dark me-2">No Data</span>';
+    el.innerHTML = `<div class="alert alert-secondary d-flex align-items-center gap-2 mt-3">${badge}<span>${errMsg}</span></div>`;
+  }
+
+  function _gadsSourceBadge(source) {
+    if (source === 'google_ads_api') return '<span class="badge bg-success ms-2" title="Live Google Ads API">Live</span>';
+    if (source === 'mock') return '<span class="badge bg-secondary ms-2" title="Mock data — connect account to see live data">Mock</span>';
+    return `<span class="badge bg-info ms-2">${source}</span>`;
+  }
+
+  // ── Overview (Phase 2C) ──────────────────────────────────────────────────
+  async function gadsLoadOverview() {
+    const { accountId, days, mccQs } = _gadsQs();
+    _gadsSpinner('gadsOverviewContent', 'Loading overview…');
+    try {
+      const res = await fetch(`/api/connectors/google-ads/overview?customer_id=${accountId}&days=${days}${mccQs}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      gadsState.overviewData = data;
+      gadsRenderOverview(data);
+    } catch (e) {
+      _gadsErrorState('gadsOverviewContent', `Failed to load overview: ${e.message}`, true);
+    }
+  }
+
+  function gadsRenderOverview(data) {
+    const t = (data && data.totals) ? data.totals : {};
+    const source = (data && data.source) || 'unknown';
+    const dateRange = (data && data.date_range) || '';
+    const sourceBadge = _gadsSourceBadge(source);
+
+    const fmt = (v, prefix='', suffix='', dp=0) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '—';
+      return prefix + (dp > 0 ? n.toFixed(dp) : n.toLocaleString()) + suffix;
+    };
 
     document.getElementById('gadsOverviewContent').innerHTML = `
-      <div class="row g-3 mb-4">
-        <div class="col-md-3">
-          <div class="card bg-dark border-info h-100">
-            <div class="card-body text-center">
-              <div class="text-muted small">Active Campaigns</div>
-              <div class="display-6 text-info">${s.active_campaigns}<small class="text-muted fs-6">/${s.total_campaigns}</small></div>
-            </div>
-          </div>
-        </div>
-        <div class="col-md-3">
-          <div class="card bg-dark border-success h-100">
-            <div class="card-body text-center">
-              <div class="text-muted small">Total Spend</div>
-              <div class="display-6 text-success">$${s.total_spent.toLocaleString()}</div>
-              <div class="text-muted small">of $${s.total_budget.toLocaleString()} budget</div>
-            </div>
-          </div>
-        </div>
-        <div class="col-md-3">
-          <div class="card bg-dark border-primary h-100">
-            <div class="card-body text-center">
-              <div class="text-muted small">Total Conversions</div>
-              <div class="display-6 text-primary">${s.total_conversions.toLocaleString()}</div>
-              <div class="text-muted small">${s.total_clicks.toLocaleString()} clicks</div>
-            </div>
-          </div>
-        </div>
-        <div class="col-md-3">
-          <div class="card bg-dark border-warning h-100">
-            <div class="card-body text-center">
-              <div class="text-muted small">Avg. ROAS</div>
-              <div class="display-6 text-warning">${s.avg_roas}x</div>
-              <div class="text-muted small">${s.total_impressions.toLocaleString()} impr.</div>
-            </div>
-          </div>
-        </div>
+      <div class="d-flex align-items-center gap-2 mb-3">
+        <span class="text-muted small">${dateRange.replace(/_/g,' ')}</span>
+        ${sourceBadge}
+        ${source === 'mock' ? '<span class="text-muted small">— Connect a real account to see live data</span>' : ''}
       </div>
-      <div class="card bg-dark border-secondary">
-        <div class="card-body">
-          <div class="d-flex justify-content-between mb-1">
-            <span class="small">Budget Utilization</span>
-            <span class="small fw-bold">${pct}%</span>
+      <div class="row g-3 mb-4">
+        <div class="col-6 col-md-3">
+          <div class="card bg-dark border-info h-100">
+            <div class="card-body text-center py-3">
+              <div class="text-muted small mb-1">Active Campaigns</div>
+              <div class="display-6 text-info">${t.active_campaigns ?? '—'}<small class="text-muted fs-6">/${t.total_campaigns ?? '—'}</small></div>
+            </div>
           </div>
-          <div class="progress" style="height: 20px;">
-            <div class="progress-bar ${pctClass} progress-bar-striped progress-bar-animated"
-                 role="progressbar" style="width: ${pct}%">${pct}%</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="card bg-dark border-success h-100">
+            <div class="card-body text-center py-3">
+              <div class="text-muted small mb-1">Total Spend</div>
+              <div class="display-6 text-success">${fmt(t.spend, '$', '', 2)}</div>
+              <div class="text-muted small">${fmt(t.impressions)} impr.</div>
+            </div>
           </div>
-          <div class="d-flex justify-content-between mt-1">
-            <span class="small text-muted">$${s.total_spent.toLocaleString()} spent</span>
-            <span class="small text-muted">$${(s.total_budget - s.total_spent).toLocaleString()} remaining</span>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="card bg-dark border-primary h-100">
+            <div class="card-body text-center py-3">
+              <div class="text-muted small mb-1">Conversions</div>
+              <div class="display-6 text-primary">${fmt(t.conversions)}</div>
+              <div class="text-muted small">${fmt(t.clicks)} clicks · ${fmt(t.ctr, '', '%', 2)} CTR</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="card bg-dark border-warning h-100">
+            <div class="card-body text-center py-3">
+              <div class="text-muted small mb-1">ROAS</div>
+              <div class="display-6 text-warning">${fmt(t.roas, '', 'x', 2)}</div>
+              <div class="text-muted small">CPA ${fmt(t.cpa, '$', '', 2)} · CPC ${fmt(t.avg_cpc, '$', '', 2)}</div>
+            </div>
           </div>
         </div>
       </div>
     `;
   }
 
-  // ── Campaigns Table ─────────────────────────────────────────────────────
+  // ── Campaigns (Phase 2B / 2C) ────────────────────────────────────────────
+  async function gadsLoadCampaigns() {
+    const { accountId, days, mccQs } = _gadsQs();
+    document.getElementById('gadsCampaignsBody').innerHTML =
+      '<tr><td colspan="12" class="text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading campaigns…</td></tr>';
+    try {
+      const res = await fetch(`/api/connectors/google-ads/campaigns?account_id=${accountId}&days=${days}${mccQs}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      gadsState.campaigns = data.campaigns || [];
+      gadsState.summary = data.summary || {};
+      gadsState.loaded.campaigns = true;
+      if (!gadsState.campaigns.length) {
+        document.getElementById('gadsCampaignsBody').innerHTML =
+          `<tr><td colspan="12" class="text-center text-muted py-4"><i class="bi bi-inbox"></i> ${data.source === 'google_ads_api' ? 'No campaigns found for this account in the selected date range.' : 'No campaigns data. Connect a real account to see live data.'}</td></tr>`;
+        document.getElementById('gadsCampaignsFoot').innerHTML = '';
+        return;
+      }
+      gadsRenderCampaigns();
+    } catch (e) {
+      document.getElementById('gadsCampaignsBody').innerHTML =
+        `<tr><td colspan="12" class="text-center text-danger py-4"><i class="bi bi-exclamation-triangle"></i> Failed to load campaigns: ${e.message}</td></tr>`;
+    }
+  }
+
   function gadsRenderCampaigns(filter, minRoas, minSpend) {
     filter = filter || 'all';
     minRoas = minRoas || 0;
@@ -5954,42 +6070,47 @@
     let camps = gadsState.campaigns;
     if (filter !== 'all') camps = camps.filter(c => c.status === filter);
     if (minRoas > 0) camps = camps.filter(c => c.roas >= minRoas);
-    if (minSpend > 0) camps = camps.filter(c => c.spent >= minSpend);
+    if (minSpend > 0) camps = camps.filter(c => (c.spent || c.cost || 0) >= minSpend);
 
-    // Sort
     if (gadsState.sortCol) {
       camps.sort((a, b) => {
         const va = a[gadsState.sortCol], vb = b[gadsState.sortCol];
-        return (typeof va === 'string' ? va.localeCompare(vb) : va - vb) * gadsState.sortDir;
+        return (typeof va === 'string' ? va.localeCompare(vb) : (va - vb)) * gadsState.sortDir;
       });
     }
 
     const body = document.getElementById('gadsCampaignsBody');
     body.innerHTML = '';
+
+    if (!camps.length) {
+      body.innerHTML = '<tr><td colspan="12" class="text-center text-muted py-4"><i class="bi bi-funnel"></i> No campaigns match the current filters.</td></tr>';
+      document.getElementById('gadsCampaignsFoot').innerHTML = '';
+      return;
+    }
+
     camps.forEach(c => {
+      const cost = c.spent ?? c.cost ?? 0;
       const statusBadge = c.status === 'ENABLED'
         ? '<span class="badge bg-success">Enabled</span>'
         : '<span class="badge bg-secondary">Paused</span>';
-      const roasClass = c.roas >= 4 ? 'text-success' : (c.roas >= 3 ? 'text-warning' : 'text-danger');
+      const roasVal = Number(c.roas) || 0;
+      const roasClass = roasVal >= 4 ? 'text-success' : (roasVal >= 2 ? 'text-warning' : 'text-danger');
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td class="fw-semibold">${c.name}</td>
-        <td><span class="badge bg-outline-secondary border">${c.type}</span></td>
+        <td><span class="badge bg-outline-secondary border">${c.type || c.channel_type || '—'}</span></td>
         <td>${statusBadge}</td>
-        <td>${c.impressions.toLocaleString()}</td>
-        <td>${c.clicks.toLocaleString()}</td>
-        <td>${c.ctr}%</td>
-        <td>$${c.avg_cpc.toFixed(2)}</td>
-        <td>$${c.spent.toLocaleString()}</td>
-        <td>${c.conversions}</td>
-        <td>$${c.cost_per_conv.toFixed(2)}</td>
-        <td class="${roasClass} fw-bold">${c.roas}x</td>
+        <td>${Number(c.impressions||0).toLocaleString()}</td>
+        <td>${Number(c.clicks||0).toLocaleString()}</td>
+        <td>${Number(c.ctr||0).toFixed(2)}%</td>
+        <td>$${Number(c.avg_cpc||0).toFixed(2)}</td>
+        <td>$${Number(cost).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+        <td>${Number(c.conversions||0).toFixed(1)}</td>
+        <td>$${Number(c.cost_per_conv||c.cpa||0).toFixed(2)}</td>
+        <td class="${roasClass} fw-bold">${roasVal.toFixed(2)}x</td>
         <td>
-          <button class="btn btn-sm btn-outline-info py-0 px-1" onclick="gadsShowKeywords('${c.id}', '${c.name}')" title="Keywords">
+          <button class="btn btn-sm btn-outline-info py-0 px-1" onclick="gadsShowKeywords('${c.id}','${c.name.replace(/'/g,"\\'")}')" title="Keywords">
             <i class="bi bi-key"></i>
-          </button>
-          <button class="btn btn-sm btn-outline-warning py-0 px-1" onclick="gadsToggleCampaign('${c.id}')" title="Toggle status">
-            <i class="bi bi-${c.status === 'ENABLED' ? 'pause' : 'play'}"></i>
           </button>
         </td>
       `;
@@ -5997,28 +6118,22 @@
     });
 
     // Footer totals
-    if (camps.length > 0) {
-      const totals = camps.reduce((acc, c) => ({
-        impressions: acc.impressions + c.impressions,
-        clicks: acc.clicks + c.clicks,
-        spent: acc.spent + c.spent,
-        conversions: acc.conversions + c.conversions
-      }), { impressions: 0, clicks: 0, spent: 0, conversions: 0 });
-      const avgRoas = (camps.reduce((s, c) => s + c.roas, 0) / camps.length).toFixed(2);
-      const foot = document.getElementById('gadsCampaignsFoot');
-      foot.innerHTML = `<tr class="fw-bold table-secondary">
-        <td>TOTAL (${camps.length})</td><td></td><td></td>
-        <td>${totals.impressions.toLocaleString()}</td>
-        <td>${totals.clicks.toLocaleString()}</td>
-        <td>${(totals.clicks / totals.impressions * 100).toFixed(2)}%</td>
-        <td>$${(totals.spent / totals.clicks).toFixed(2)}</td>
-        <td>$${totals.spent.toLocaleString()}</td>
-        <td>${totals.conversions}</td>
-        <td>$${(totals.spent / totals.conversions).toFixed(2)}</td>
-        <td class="text-warning">${avgRoas}x</td>
-        <td></td>
-      </tr>`;
-    }
+    const totImpr = camps.reduce((s,c) => s + Number(c.impressions||0), 0);
+    const totClk = camps.reduce((s,c) => s + Number(c.clicks||0), 0);
+    const totCost = camps.reduce((s,c) => s + Number(c.spent||c.cost||0), 0);
+    const totConv = camps.reduce((s,c) => s + Number(c.conversions||0), 0);
+    const foot = document.getElementById('gadsCampaignsFoot');
+    foot.innerHTML = `<tr class="fw-bold table-secondary">
+      <td>TOTAL (${camps.length})</td><td></td><td></td>
+      <td>${totImpr.toLocaleString()}</td>
+      <td>${totClk.toLocaleString()}</td>
+      <td>${totImpr > 0 ? (totClk/totImpr*100).toFixed(2) : '—'}%</td>
+      <td>${totClk > 0 ? '$'+(totCost/totClk).toFixed(2) : '—'}</td>
+      <td>$${totCost.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+      <td>${totConv.toFixed(1)}</td>
+      <td>${totConv > 0 ? '$'+(totCost/totConv).toFixed(2) : '—'}</td>
+      <td></td><td></td>
+    </tr>`;
   }
 
   function gadsFilterCampaigns() {
@@ -6034,48 +6149,28 @@
     gadsFilterCampaigns();
   }
 
-  function gadsToggleCampaign(campId) {
-    const c = gadsState.campaigns.find(x => x.id === campId);
-    if (c) {
-      c.status = c.status === 'ENABLED' ? 'PAUSED' : 'ENABLED';
-      gadsFilterCampaigns();
-      if (window.showToast) window.showToast('Campaign Updated', `${c.name} → ${c.status}`, 'info');
-    }
-  }
-
   async function gadsShowKeywords(campId, campName) {
     document.getElementById('gadsKeywordsTitle').textContent = `Keywords — ${campName}`;
     document.getElementById('gadsKeywordsPanel').style.display = 'block';
     const body = document.getElementById('gadsKeywordsBody');
-
-    body.innerHTML = '<tr><td colspan="8" class="text-center"><span class="spinner-border spinner-border-sm"></span> Loading...</td></tr>';
-
+    body.innerHTML = '<tr><td colspan="8" class="text-center"><span class="spinner-border spinner-border-sm"></span> Loading…</td></tr>';
     try {
-      const mccQs = gadsState.mccId ? `&mcc_id=${encodeURIComponent(gadsState.mccId)}` : '';
-      const accountId = (document.getElementById('gadsAccountSelect') || {}).value || '';
-      const accQs = accountId ? `&account_id=${encodeURIComponent(accountId)}` : '';
-      const res = await fetch(`/api/connectors/google-ads/keywords?campaign_id=${campId}${accQs}${mccQs}`);
+      const { accountId, mccQs } = _gadsQs();
+      const res = await fetch(`/api/connectors/google-ads/keywords?campaign_id=${campId}&account_id=${encodeURIComponent(accountId)}${mccQs}`);
       const data = await res.json();
-      body.innerHTML = '';
-      if (data.keywords && data.keywords.length > 0) {
-        data.keywords.forEach(k => {
-          const qsColor = k.quality_score >= 8 ? 'text-success' : (k.quality_score >= 6 ? 'text-warning' : 'text-danger');
-          body.innerHTML += `<tr>
-            <td>${k.keyword}</td>
-            <td><span class="badge bg-outline-secondary border">${k.match_type}</span></td>
-            <td>${k.status === 'ENABLED' ? '<span class="badge bg-success">Active</span>' : '<span class="badge bg-secondary">Paused</span>'}</td>
-            <td>${k.impressions.toLocaleString()}</td>
-            <td>${k.clicks.toLocaleString()}</td>
-            <td>${k.ctr}%</td>
-            <td>$${k.avg_cpc.toFixed(2)}</td>
-            <td class="${qsColor} fw-bold">${k.quality_score}/10</td>
-          </tr>`;
-        });
-      } else {
-        body.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No keywords found for this campaign.</td></tr>';
+      const kws = data.keywords || [];
+      if (!kws.length) {
+        body.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No keywords found.</td></tr>';
+        return;
       }
+      body.innerHTML = '';
+      kws.forEach(k => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${k.text||k.keyword||'—'}</td><td>${k.match_type||'—'}</td><td>${k.status||'—'}</td><td>${Number(k.impressions||0).toLocaleString()}</td><td>${Number(k.clicks||0).toLocaleString()}</td><td>${Number(k.ctr||0).toFixed(2)}%</td><td>$${Number(k.avg_cpc||0).toFixed(2)}</td><td>${k.quality_score||'—'}</td>`;
+        body.appendChild(tr);
+      });
     } catch (e) {
-      body.innerHTML = '<tr><td colspan="8" class="text-danger">Error loading keywords.</td></tr>';
+      body.innerHTML = '<tr><td colspan="8" class="text-center text-danger">Failed to load keywords.</td></tr>';
     }
   }
 
@@ -6083,13 +6178,14 @@
     if (!gadsState.campaigns.length) return;
     const headers = ['Campaign', 'Type', 'Status', 'Impressions', 'Clicks', 'CTR', 'Avg CPC', 'Cost', 'Conversions', 'Cost/Conv', 'ROAS'];
     const rows = gadsState.campaigns.map(c => [
-      c.name, c.type, c.status, c.impressions, c.clicks, c.ctr + '%', '$' + c.avg_cpc.toFixed(2),
-      '$' + c.spent.toFixed(2), c.conversions, '$' + c.cost_per_conv.toFixed(2), c.roas + 'x'
+      c.name, c.type||c.channel_type||'', c.status,
+      c.impressions, c.clicks, c.ctr+'%', '$'+Number(c.avg_cpc||0).toFixed(2),
+      '$'+(c.spent||c.cost||0).toFixed(2), c.conversions, '$'+Number(c.cost_per_conv||c.cpa||0).toFixed(2), c.roas+'x'
     ]);
     downloadCSV('google_ads_campaigns.csv', headers, rows);
   }
 
-  // ── Budget Pacing ───────────────────────────────────────────────────────
+  // ── Budget Pacing (legacy, for hidden tab) ───────────────────────────────
   function gadsRenderPacing() {
     const container = document.getElementById('gadsPacingContent');
     if (!gadsState.campaigns.length) {
@@ -6098,101 +6194,297 @@
     }
     let html = '';
     gadsState.campaigns.forEach(c => {
-      const pct = Math.min(100, Math.round(c.spent / c.budget_total * 100));
-      const barColor = pct < 70 ? 'bg-success' : (pct < 90 ? 'bg-warning' : 'bg-danger');
-      const daysLeft = c.status === 'ENABLED' ? Math.max(1, Math.round((c.budget_total - c.spent) / c.budget_daily)) : 0;
-      const statusIcon = pct < 70 ? '🟢' : (pct < 90 ? '🟡' : '🔴');
-      html += `
-        <div class="card bg-dark border-secondary mb-3">
-          <div class="card-body">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <div>
-                <strong>${c.name}</strong>
-                <span class="badge ${c.status === 'ENABLED' ? 'bg-success' : 'bg-secondary'} ms-2">${c.status}</span>
-              </div>
-              <div class="text-end">
-                <span class="small">${statusIcon} $${c.spent.toLocaleString()} / $${c.budget_total.toLocaleString()}</span>
-              </div>
-            </div>
-            <div class="progress mb-2" style="height: 24px;">
-              <div class="progress-bar ${barColor} progress-bar-striped ${c.status === 'ENABLED' ? 'progress-bar-animated' : ''}"
-                   role="progressbar" style="width: ${pct}%">${pct}%</div>
-            </div>
-            <div class="d-flex justify-content-between small text-muted">
-              <span>Daily: $${c.budget_daily}/day</span>
-              <span>Remaining: $${(c.budget_total - c.spent).toFixed(2)}</span>
-              <span>${c.status === 'ENABLED' ? `~${daysLeft} days left` : 'Paused'}</span>
-            </div>
-          </div>
+      const cost = Number(c.spent||c.cost||0);
+      const budgetTotal = Number(c.budget_total||0);
+      const budgetDaily = Number(c.budget_daily||0);
+      const pct = budgetTotal > 0 ? Math.min(100, Math.round(cost / budgetTotal * 100)) : 0;
+      const pctClass = pct < 70 ? 'bg-success' : (pct < 90 ? 'bg-warning' : 'bg-danger');
+      const daysLeft = (c.status === 'ENABLED' && budgetDaily > 0 && budgetTotal > cost) ? Math.max(1, Math.round((budgetTotal - cost) / budgetDaily)) : 0;
+      html += `<div class="card bg-dark border-secondary mb-3"><div class="card-body py-2">
+        <div class="d-flex justify-content-between mb-1"><span class="fw-semibold small">${c.name}</span><span class="badge ${c.status==='ENABLED'?'bg-success':'bg-secondary'}">${c.status}</span></div>
+        ${budgetTotal > 0 ? `<div class="progress mb-1" style="height:14px;"><div class="progress-bar ${pctClass}" style="width:${pct}%">${pct}%</div></div>` : '<div class="text-muted small mb-1">Budget data unavailable</div>'}
+        <div class="d-flex justify-content-between small text-muted">
+          <span>Spent: $${cost.toFixed(2)}</span>
+          ${budgetDaily > 0 ? `<span>Daily: $${budgetDaily}/day</span>` : ''}
+          ${budgetTotal > 0 ? `<span>Remaining: $${Math.max(0,budgetTotal-cost).toFixed(2)}</span>` : ''}
+          ${daysLeft > 0 ? `<span>~${daysLeft}d left</span>` : ''}
         </div>
-      `;
+      </div></div>`;
     });
     container.innerHTML = html;
   }
 
-  // ── Reports ─────────────────────────────────────────────────────────────
+  // ── Diagnostics (Phase 2C) ───────────────────────────────────────────────
+  async function gadsLoadDiagnostics() {
+    const { accountId, days, mccQs } = _gadsQs();
+    _gadsSpinner('gadsDiagnosticsContent', 'Running diagnostics…');
+    document.getElementById('gadsDiagSummaryBadges').innerHTML = '';
+    try {
+      const res = await fetch(`/api/connectors/google-ads/diagnostics?customer_id=${accountId}&days=${days}${mccQs}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      gadsState.diagnosticsData = data;
+      gadsState.loaded.diagnostics = true;
+      gadsRenderDiagnostics(data);
+    } catch (e) {
+      _gadsErrorState('gadsDiagnosticsContent', `Failed to run diagnostics: ${e.message}`, true);
+    }
+  }
+
+  function gadsRenderDiagnostics(data) {
+    const findings = (data && data.findings) || [];
+    const summary = (data && data.summary) || {};
+    const source = (data && data.source) || 'unknown';
+    const sourceBadge = _gadsSourceBadge(source);
+
+    // Summary badges in header
+    const badges = document.getElementById('gadsDiagSummaryBadges');
+    if (badges) {
+      badges.innerHTML = `
+        ${sourceBadge}
+        ${summary.critical > 0 ? `<span class="badge bg-danger">${summary.critical} Critical</span>` : ''}
+        ${summary.warning > 0 ? `<span class="badge bg-warning text-dark">${summary.warning} Warning</span>` : ''}
+        ${summary.info > 0 ? `<span class="badge bg-info text-dark">${summary.info} Info</span>` : ''}
+        ${findings.length === 0 ? '<span class="badge bg-success">No Issues</span>' : ''}
+      `;
+    }
+
+    const container = document.getElementById('gadsDiagnosticsContent');
+    if (!findings.length) {
+      container.innerHTML = `
+        <div class="alert alert-success d-flex align-items-center gap-2 mt-2">
+          <i class="bi bi-check-circle-fill fs-5"></i>
+          <div>
+            <strong>No issues detected</strong><br>
+            <span class="small">${source === 'google_ads_api' ? 'All enabled campaigns are within normal operating parameters.' : 'Connect a real account for live diagnostic data.'}</span>
+          </div>
+        </div>`;
+      return;
+    }
+
+    const severityConfig = {
+      critical: { cls: 'danger', icon: 'bi-x-octagon-fill', label: 'Critical' },
+      warning:  { cls: 'warning', icon: 'bi-exclamation-triangle-fill', label: 'Warning', textCls: 'text-dark' },
+      info:     { cls: 'info', icon: 'bi-info-circle-fill', label: 'Info', textCls: 'text-dark' },
+    };
+
+    let html = '';
+    findings.forEach(f => {
+      const cfg = severityConfig[f.severity] || severityConfig.info;
+      const snap = f.metric_snapshot || {};
+      const snapHtml = Object.entries(snap).map(([k,v]) =>
+        `<span class="badge bg-secondary me-1">${k}: ${typeof v === 'number' ? (k.includes('cost') ? '$'+v.toFixed(2) : v) : v}</span>`
+      ).join('');
+      html += `
+        <div class="card bg-dark border-${cfg.cls} mb-3">
+          <div class="card-header bg-${cfg.cls} bg-opacity-15 d-flex align-items-center gap-2 py-2">
+            <i class="bi ${cfg.icon} text-${cfg.cls}"></i>
+            <span class="fw-semibold small ${cfg.textCls||'text-'+cfg.cls}">${cfg.label}</span>
+            <span class="badge bg-${cfg.cls} bg-opacity-25 text-${cfg.cls} border border-${cfg.cls} ms-auto small">${f.type.replace(/_/g,' ')}</span>
+          </div>
+          <div class="card-body py-2">
+            <div class="fw-semibold small mb-1">${f.campaign_name || '—'}</div>
+            <div class="mb-2">${snapHtml}</div>
+            <div class="small text-muted"><i class="bi bi-lightbulb me-1"></i>${f.recommendation}</div>
+          </div>
+        </div>`;
+    });
+    container.innerHTML = html;
+  }
+
+  // ── AI Brief (Phase 2C) ──────────────────────────────────────────────────
+  let _gadsAiBriefRaw = null;
+
+  async function gadsLoadAiBrief() {
+    const { accountId, days, mccQs } = _gadsQs();
+    _gadsSpinner('gadsAiBriefContent', 'Generating AI brief…');
+    const copyBtn = document.getElementById('gadsAiBriefCopyBtn');
+    if (copyBtn) copyBtn.style.display = 'none';
+    try {
+      const res = await fetch(`/api/connectors/google-ads/ai-brief?customer_id=${accountId}&days=${days}${mccQs}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      gadsState.aiBriefData = data;
+      gadsState.loaded.aiBrief = true;
+      _gadsAiBriefRaw = data;
+      if (copyBtn) copyBtn.style.display = '';
+      gadsRenderAiBrief(data);
+    } catch (e) {
+      _gadsErrorState('gadsAiBriefContent', `Failed to generate AI brief: ${e.message}`, true);
+    }
+  }
+
+  function gadsAiBriefCopyJSON() {
+    if (!_gadsAiBriefRaw) return;
+    navigator.clipboard.writeText(JSON.stringify(_gadsAiBriefRaw, null, 2))
+      .then(() => { if (window.showToast) showToast('Copied', 'AI Brief JSON copied to clipboard', 'info'); });
+  }
+
+  function gadsRenderAiBrief(data) {
+    const source = (data && data.source) || 'unknown';
+    const sourceBadge = _gadsSourceBadge(source);
+    const as = data.account_summary || {};
+    const ps = data.performance_summary || {};
+    const winners = data.top_winners || [];
+    const losers = data.top_losers || [];
+    const risks = data.risks || [];
+    const opps = data.opportunities || [];
+    const actions = data.recommended_next_actions || [];
+
+    const fmtNum = (v, prefix='', suffix='', dp=2) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? prefix + (dp === 0 ? n.toLocaleString() : n.toFixed(dp)) + suffix : '—';
+    };
+
+    const campaignCard = (c, badge, badgeCls) => `
+      <div class="d-flex justify-content-between align-items-start py-2 border-bottom border-secondary">
+        <div>
+          <span class="badge bg-${badgeCls} me-2">${badge}</span>
+          <span class="small fw-semibold">${c.name}</span>
+        </div>
+        <div class="text-end small text-muted">
+          ROAS <span class="fw-bold text-light">${fmtNum(c.roas, '', 'x')}</span>
+          · Cost <span class="fw-bold text-light">${fmtNum(c.cost, '$')}</span>
+          · Conv <span class="fw-bold text-light">${fmtNum(c.conversions, '', '', 1)}</span>
+        </div>
+      </div>`;
+
+    const riskRows = risks.slice(0, 5).map(r =>
+      `<li class="list-group-item bg-dark border-secondary d-flex align-items-start gap-2">
+        <span class="badge bg-${r.severity === 'critical' ? 'danger' : 'warning'} mt-1">${r.severity}</span>
+        <span class="small">${r.recommendation}</span>
+      </li>`
+    ).join('');
+
+    const oppRows = opps.slice(0, 5).map(o => {
+      const desc = o.recommendation || o.description || '';
+      return `<li class="list-group-item bg-dark border-secondary small"><i class="bi bi-arrow-up-circle text-success me-2"></i>${desc}</li>`;
+    }).join('');
+
+    const actionRows = actions.map((a, i) =>
+      `<li class="list-group-item bg-dark border-secondary small"><span class="badge bg-primary me-2">${i+1}</span>${a}</li>`
+    ).join('');
+
+    document.getElementById('gadsAiBriefContent').innerHTML = `
+      <div class="d-flex align-items-center gap-2 mb-3">
+        <span class="text-muted small">${(as.date_range || '').replace(/_/g,' ')}</span>
+        ${sourceBadge}
+        ${source === 'mock' ? '<span class="text-muted small">— mock data</span>' : ''}
+      </div>
+      <div class="row g-3 mb-4">
+        <!-- Performance Summary -->
+        <div class="col-md-6">
+          <div class="card bg-dark border-secondary h-100">
+            <div class="card-header py-2 small fw-semibold"><i class="bi bi-bar-chart me-2"></i>Performance Summary</div>
+            <div class="card-body py-2">
+              <table class="table table-dark table-sm mb-0">
+                <tbody>
+                  <tr><td class="text-muted">Spend</td><td class="text-end fw-semibold">${fmtNum(ps.spend, '$')}</td></tr>
+                  <tr><td class="text-muted">ROAS</td><td class="text-end fw-semibold">${fmtNum(ps.roas, '', 'x')}</td></tr>
+                  <tr><td class="text-muted">Conversions</td><td class="text-end">${fmtNum(ps.conversions, '', '', 1)}</td></tr>
+                  <tr><td class="text-muted">CPA</td><td class="text-end">${fmtNum(ps.cpa, '$')}</td></tr>
+                  <tr><td class="text-muted">Clicks</td><td class="text-end">${fmtNum(ps.clicks, '', '', 0)}</td></tr>
+                  <tr><td class="text-muted">CTR</td><td class="text-end">${fmtNum(ps.ctr, '', '%')}</td></tr>
+                  <tr><td class="text-muted">Avg CPC</td><td class="text-end">${fmtNum(ps.avg_cpc, '$')}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <!-- Account Summary -->
+        <div class="col-md-6">
+          <div class="card bg-dark border-secondary h-100">
+            <div class="card-header py-2 small fw-semibold"><i class="bi bi-building me-2"></i>Account</div>
+            <div class="card-body py-2">
+              <table class="table table-dark table-sm mb-0">
+                <tbody>
+                  <tr><td class="text-muted">Customer ID</td><td class="text-end small">${as.customer_id || '—'}</td></tr>
+                  <tr><td class="text-muted">Manager</td><td class="text-end small">${as.manager_customer_id || '—'}</td></tr>
+                  <tr><td class="text-muted">Active Campaigns</td><td class="text-end">${as.active_campaigns ?? '—'}</td></tr>
+                  <tr><td class="text-muted">Total Campaigns</td><td class="text-end">${as.total_campaigns ?? '—'}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Winners & Losers -->
+      ${winners.length || losers.length ? `
+      <div class="row g-3 mb-4">
+        ${winners.length ? `<div class="col-md-6">
+          <div class="card bg-dark border-success">
+            <div class="card-header py-2 small fw-semibold text-success"><i class="bi bi-trophy me-2"></i>Top Winners</div>
+            <div class="card-body py-2">${winners.map(c => campaignCard(c,'Winner','success')).join('')}</div>
+          </div>
+        </div>` : ''}
+        ${losers.length ? `<div class="col-md-6">
+          <div class="card bg-dark border-danger">
+            <div class="card-header py-2 small fw-semibold text-danger"><i class="bi bi-arrow-down-circle me-2"></i>Underperformers</div>
+            <div class="card-body py-2">${losers.map(c => campaignCard(c,'Review','danger')).join('')}</div>
+          </div>
+        </div>` : ''}
+      </div>` : ''}
+
+      <!-- Risks, Opportunities, Actions -->
+      <div class="row g-3">
+        ${riskRows ? `<div class="col-md-6">
+          <h6 class="text-danger small"><i class="bi bi-shield-exclamation me-1"></i>Risks (${risks.length})</h6>
+          <ul class="list-group list-group-flush">${riskRows}</ul>
+        </div>` : ''}
+        ${oppRows ? `<div class="col-md-6">
+          <h6 class="text-success small"><i class="bi bi-lightbulb me-1"></i>Opportunities</h6>
+          <ul class="list-group list-group-flush">${oppRows}</ul>
+        </div>` : ''}
+        <div class="col-12">
+          <h6 class="text-info small"><i class="bi bi-check2-all me-1"></i>Recommended Next Actions</h6>
+          <ul class="list-group list-group-flush">${actionRows}</ul>
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Reports (legacy, hidden tab) ─────────────────────────────────────────
   async function gadsGenerateReport() {
     const accountId = document.getElementById('gadsAccountSelect').value;
     const reportType = document.getElementById('gadsReportType').value;
     const days = parseInt((document.getElementById('gadsDateRange') || {}).value || '30', 10) || 30;
     const container = document.getElementById('gadsReportResult');
-
-    container.innerHTML = '<div class="text-center py-3"><span class="spinner-border"></span> Generating report...</div>';
-
+    if (!accountId) { container.innerHTML = '<p class="text-muted">No account selected.</p>'; return; }
+    container.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Generating…</div>';
     try {
       const mccQs = gadsState.mccId ? `&mcc_id=${encodeURIComponent(gadsState.mccId)}` : '';
       const res = await fetch(`/api/connectors/google-ads/reports?account_id=${accountId}&type=${reportType}&days=${days}${mccQs}`);
       const data = await res.json();
-      gadsState.lastReport = data;
-
-      if (!data.rows || data.rows.length === 0) {
-        container.innerHTML = '<div class="alert alert-warning">No data available for this report.</div>';
-        return;
-      }
-
-      const headers = Object.keys(data.rows[0]);
-      let html = `<div class="small text-muted mb-2">Generated: ${data.generated_at} · ${data.rows.length} rows</div>`;
-      html += '<div class="table-responsive"><table class="table table-dark table-striped table-sm"><thead><tr>';
-      headers.forEach(h => html += `<th>${h}</th>`);
-      html += '</tr></thead><tbody>';
-      data.rows.forEach(row => {
-        html += '<tr>';
-        headers.forEach(h => {
-          let val = row[h];
-          // Color-code status indicators
-          if (typeof val === 'string' && val.startsWith('🟢')) html += `<td class="text-success">${val}</td>`;
-          else if (typeof val === 'string' && val.startsWith('🟡')) html += `<td class="text-warning">${val}</td>`;
-          else if (typeof val === 'string' && val.startsWith('🔴')) html += `<td class="text-danger">${val}</td>`;
-          else html += `<td>${val}</td>`;
-        });
-        html += '</tr>';
-      });
-      html += '</tbody></table></div>';
-      container.innerHTML = html;
+      const rows = data.rows || [];
+      if (!rows.length) { container.innerHTML = '<p class="text-muted">No report data available.</p>'; return; }
+      const cols = Object.keys(rows[0]);
+      let tbl = '<div class="table-responsive"><table class="table table-dark table-sm table-striped"><thead><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+      rows.forEach(r => { tbl += '<tr>' + cols.map(c => `<td>${r[c]}</td>`).join('') + '</tr>'; });
+      tbl += '</tbody></table></div>';
+      container.innerHTML = `<div class="small text-muted mb-2">Generated: ${data.generated_at || ''} · Source: ${data.source || ''}</div>` + tbl;
     } catch (e) {
-      container.innerHTML = '<div class="alert alert-danger">Error generating report.</div>';
+      container.innerHTML = '<div class="alert alert-danger">Report generation failed.</div>';
     }
   }
 
   function gadsExportReportCSV() {
-    if (!gadsState.lastReport || !gadsState.lastReport.rows || !gadsState.lastReport.rows.length) {
-      if (window.showToast) window.showToast('Export', 'Generate a report first.', 'warning');
-      return;
-    }
-    const headers = Object.keys(gadsState.lastReport.rows[0]);
-    const rows = gadsState.lastReport.rows.map(r => headers.map(h => r[h]));
-    downloadCSV('google_ads_report.csv', headers, rows);
+    const container = document.getElementById('gadsReportResult');
+    const rows = container ? container.querySelectorAll('table tr') : [];
+    if (!rows.length) return;
+    const csv = Array.from(rows).map(r => Array.from(r.querySelectorAll('th,td')).map(c => `"${c.textContent}"`).join(',')).join('\n');
+    const blob = new Blob([csv], {type: 'text/csv'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'report.csv'; a.click();
   }
 
-  // ── Asset Generator ─────────────────────────────────────────────────────
+  // ── Asset Generator (legacy, hidden tab) ─────────────────────────────────
   async function gadsGenerateAssets() {
-    const product = document.getElementById('gadsAssetProduct').value.trim() || 'Premium Product';
-    const tone = document.getElementById('gadsAssetTone').value;
-    const lang = document.getElementById('gadsAssetLang').value;
+    const product = (document.getElementById('gadsAssetProduct') || {}).value || '';
+    const tone = (document.getElementById('gadsAssetTone') || {}).value || 'professional';
+    const lang = (document.getElementById('gadsAssetLang') || {}).value || 'en';
     const container = document.getElementById('gadsAssetsResult');
-
-    container.innerHTML = '<div class="text-center py-3"><span class="spinner-border"></span> Generating assets for "<strong>' + product + '</strong>"...</div>';
-
+    if (!product.trim()) { container.innerHTML = '<div class="alert alert-warning">Enter a product/keyword first.</div>'; return; }
+    container.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Generating…</div>';
     try {
       const res = await fetch('/api/connectors/google-ads/generate-assets', {
         method: 'POST',
@@ -6200,80 +6492,25 @@
         body: JSON.stringify({ product, tone, language: lang })
       });
       const data = await res.json();
-
       let html = '';
-
-      // Google-style Ad Preview Card
       if (data.rsa_preview) {
         const p = data.rsa_preview;
-        html += `
-          <div class="card border-0 mb-4" style="background:#1a1a2e; border-radius:12px; overflow:hidden;">
-            <div class="card-header d-flex align-items-center gap-2" style="background:#16213e; border:none;">
-              <i class="bi bi-eye text-info"></i>
-              <span class="fw-bold small">Live Ad Preview — Google Search</span>
-              <span class="badge bg-secondary ms-auto">Desktop</span>
-            </div>
-            <div class="card-body" style="font-family: Arial, sans-serif; max-width:650px;">
-              <div class="small" style="color:#969ba1;">Sponsored · www.${product.toLowerCase().replace(/\s+/g,'-')}.com</div>
-              <a href="#" class="d-block mt-1 mb-1 text-decoration-none" style="color:#8ab4f8; font-size:1.15rem; line-height:1.3;">${p.headline_1} | ${p.headline_2} | ${p.headline_3}</a>
-              <div style="color:#bdc1c6; font-size:.875rem; line-height:1.4;">${p.description_1}</div>
-              <div style="color:#969ba1; font-size:.8rem;" class="mt-1">${p.description_2}</div>
-              <div class="d-flex gap-3 mt-2">
-                <span style="color:#8ab4f8; font-size:.8rem; cursor:pointer;">Shop Now ›</span>
-                <span style="color:#8ab4f8; font-size:.8rem; cursor:pointer;">Free Shipping ›</span>
-                <span style="color:#8ab4f8; font-size:.8rem; cursor:pointer;">Reviews ›</span>
-              </div>
-            </div>
-          </div>
-        `;
+        html += `<div class="card border-0 mb-4" style="background:#1a1a2e;border-radius:12px;overflow:hidden;"><div class="card-header d-flex align-items-center gap-2" style="background:#16213e;border:none;"><i class="bi bi-eye text-info"></i><span class="fw-bold small">Ad Preview</span></div><div class="card-body" style="font-family:Arial,sans-serif;max-width:650px;"><div class="small" style="color:#969ba1;">Sponsored · www.${product.toLowerCase().replace(/\s+/g,'-')}.com</div><a href="#" class="d-block mt-1 mb-1 text-decoration-none" style="color:#8ab4f8;font-size:1.1rem;">${p.headline_1} | ${p.headline_2} | ${p.headline_3}</a><div style="color:#bdc1c6;font-size:.875rem;">${p.description_1}</div></div></div>`;
       }
-
-      // Headlines (show first 5 for cleaner output)
-      const topHeadlines = data.headlines.slice(0, 5);
-      html += '<h6 class="mt-3"><i class="bi bi-type-h1"></i> Headlines <small class="text-muted">(max 30 chars)</small></h6>';
-      html += '<div class="table-responsive"><table class="table table-dark table-sm"><thead><tr><th>#</th><th>Text</th><th>Chars</th><th>Status</th><th>Copy</th></tr></thead><tbody>';
-      topHeadlines.forEach((h, i) => {
-        const ok = h.chars <= 30;
-        html += `<tr>
-          <td>${i + 1}</td>
-          <td>${h.text}</td>
-          <td><span class="badge ${ok ? 'bg-success' : 'bg-danger'}">${h.chars}/30</span></td>
-          <td>${ok ? '<span class="text-success">✅</span>' : '<span class="text-danger">⚠️ Over</span>'}</td>
-          <td><button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="navigator.clipboard.writeText('${h.text.replace(/'/g,"\\'")}');if(window.showToast)showToast('Copied','Headline copied','info')"><i class="bi bi-clipboard"></i></button></td>
-        </tr>`;
-      });
+      const topH = (data.headlines || []).slice(0,5);
+      html += '<h6><i class="bi bi-type-h1"></i> Headlines</h6><div class="table-responsive"><table class="table table-dark table-sm"><thead><tr><th>#</th><th>Text</th><th>Chars</th></tr></thead><tbody>';
+      topH.forEach((h, i) => { html += `<tr><td>${i+1}</td><td>${h.text}</td><td><span class="badge ${h.chars<=30?'bg-success':'bg-danger'}">${h.chars}/30</span></td></tr>`; });
       html += '</tbody></table></div>';
-
-      // Descriptions (show first 5)
-      const topDescs = data.descriptions.slice(0, 5);
-      html += '<h6 class="mt-3"><i class="bi bi-text-paragraph"></i> Descriptions <small class="text-muted">(max 90 chars)</small></h6>';
-      html += '<div class="table-responsive"><table class="table table-dark table-sm"><thead><tr><th>#</th><th>Text</th><th>Chars</th><th>Status</th><th>Copy</th></tr></thead><tbody>';
-      topDescs.forEach((d, i) => {
-        const ok = d.chars <= 90;
-        html += `<tr>
-          <td>${i + 1}</td>
-          <td class="small">${d.text}</td>
-          <td><span class="badge ${ok ? 'bg-success' : 'bg-danger'}">${d.chars}/90</span></td>
-          <td>${ok ? '<span class="text-success">✅</span>' : '<span class="text-danger">⚠️ Over</span>'}</td>
-          <td><button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="navigator.clipboard.writeText(\`${d.text.replace(/`/g,'\\`')}\`);if(window.showToast)showToast('Copied','Description copied','info')"><i class="bi bi-clipboard"></i></button></td>
-        </tr>`;
-      });
-      html += '</tbody></table></div>';
-
       container.innerHTML = html;
-    } catch (e) {
-      container.innerHTML = '<div class="alert alert-danger">Error generating assets.</div>';
-    }
+    } catch (e) { container.innerHTML = '<div class="alert alert-danger">Error generating assets.</div>'; }
   }
 
-  // ── Test API Call ───────────────────────────────────────────────────────
+  // ── Test API Call (legacy, hidden tab) ───────────────────────────────────
   async function gadsTestApiCall() {
     const method = document.getElementById('gadsApiMethod').value;
     const endpoint = document.getElementById('gadsApiEndpoint').value;
     const container = document.getElementById('gadsApiResult');
-
-    container.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Sending request...</div>';
-
+    container.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Sending…</div>';
     try {
       const res = await fetch('/api/connectors/google-ads/test-call', {
         method: 'POST',
@@ -6281,42 +6518,8 @@
         body: JSON.stringify({ method, endpoint })
       });
       const data = await res.json();
-
-      container.innerHTML = `
-        <div class="row g-3">
-          <div class="col-md-6">
-            <div class="card bg-dark border-info">
-              <div class="card-header bg-info bg-opacity-25 small fw-bold">
-                <i class="bi bi-arrow-up-circle"></i> Request
-              </div>
-              <div class="card-body p-2">
-                <pre class="mb-0 small" style="max-height:250px; overflow:auto; color:#8be9fd;">${method} ${endpoint}\n\nHeaders:\n${JSON.stringify(data.request.headers, null, 2)}</pre>
-              </div>
-            </div>
-          </div>
-          <div class="col-md-6">
-            <div class="card bg-dark border-success">
-              <div class="card-header bg-success bg-opacity-25 small fw-bold">
-                <i class="bi bi-arrow-down-circle"></i> Response
-                <span class="badge bg-success ms-2">${data.response.status_code}</span>
-                <span class="badge bg-secondary ms-1">${data.latency_ms}ms</span>
-              </div>
-              <div class="card-body p-2">
-                <pre class="mb-0 small" style="max-height:250px; overflow:auto; color:#50fa7b;">${JSON.stringify(data.response.body, null, 2)}</pre>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="mt-2 small text-muted">
-          <i class="bi bi-speedometer"></i> Quota: ${data.quota.operations_remaining.toLocaleString()} / ${data.quota.daily_limit.toLocaleString()} operations remaining
-        </div>
-        <div class="mt-1 small text-warning">
-          <i class="bi bi-exclamation-triangle"></i> <strong>Simulated response</strong> — No live Google Ads API call was made. ${data.message || ''}
-        </div>
-      `;
-    } catch (e) {
-      container.innerHTML = '<div class="alert alert-danger">API call failed.</div>';
-    }
+      container.innerHTML = `<div class="row g-3"><div class="col-md-6"><div class="card bg-dark border-info"><div class="card-header small fw-bold">Request</div><div class="card-body p-2"><pre class="mb-0 small" style="max-height:200px;overflow:auto;color:#8be9fd;">${method} ${endpoint}</pre></div></div></div><div class="col-md-6"><div class="card bg-dark border-success"><div class="card-header small fw-bold">Response <span class="badge bg-success ms-1">${data.response&&data.response.status_code||200}</span></div><div class="card-body p-2"><pre class="mb-0 small" style="max-height:200px;overflow:auto;color:#50fa7b;">${JSON.stringify((data.response&&data.response.body)||data, null, 2)}</pre></div></div></div></div><div class="mt-2 small text-warning"><i class="bi bi-exclamation-triangle"></i> Simulated response — no live API call.</div>`;
+    } catch (e) { container.innerHTML = '<div class="alert alert-danger">API call failed.</div>'; }
   }
 
   // ── Settings Save ───────────────────────────────────────────────────────

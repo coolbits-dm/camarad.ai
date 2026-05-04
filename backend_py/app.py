@@ -18659,6 +18659,262 @@ def _google_ads_build_summary(campaigns):
     }
 
 
+# ── Account Intelligence helpers (Phase 2C) ──────────────────────────────────
+
+def _gads_compute_overview_totals(campaigns, customer_id="", manager_customer_id="", date_range="LAST_30_DAYS"):
+    """Compute clean KPI totals from a list of campaign dicts (Phase 2C spec)."""
+    campaigns = campaigns if isinstance(campaigns, list) else []
+    spend = sum(float(c.get("spent") or 0) for c in campaigns if isinstance(c, dict))
+    impressions = sum(int(c.get("impressions") or 0) for c in campaigns if isinstance(c, dict))
+    clicks = sum(int(c.get("clicks") or 0) for c in campaigns if isinstance(c, dict))
+    conversions = sum(float(c.get("conversions") or 0) for c in campaigns if isinstance(c, dict))
+    conversion_value = sum(float(c.get("conversion_value") or 0) for c in campaigns if isinstance(c, dict))
+    total_campaigns = len(campaigns)
+    active_campaigns = sum(
+        1 for c in campaigns
+        if isinstance(c, dict) and str(c.get("status", "")).upper() == "ENABLED"
+    )
+    ctr = round(clicks / impressions * 100, 2) if impressions > 0 else 0.0
+    avg_cpc = round(spend / clicks, 2) if clicks > 0 else 0.0
+    cpa = round(spend / conversions, 2) if conversions > 0 else 0.0
+    roas = round(conversion_value / spend, 2) if spend > 0 else 0.0
+    return {
+        "spend": round(spend, 2),
+        "impressions": impressions,
+        "clicks": clicks,
+        "conversions": round(conversions, 2),
+        "conversion_value": round(conversion_value, 2),
+        "ctr": ctr,
+        "avg_cpc": avg_cpc,
+        "cpa": cpa,
+        "roas": roas,
+        "active_campaigns": active_campaigns,
+        "total_campaigns": total_campaigns,
+    }
+
+
+def _gads_compute_diagnostics(campaigns):
+    """Deterministic rule-based diagnostics from campaign data (Phase 2C spec).
+
+    Rules (evaluated per campaign):
+      high_spend_no_conversions   — enabled, cost > 50, conversions == 0          → critical
+      low_roas_enabled            — enabled, cost > 50, 0 < roas < 2.0            → warning
+      zero_impressions_enabled    — enabled, impressions == 0                     → warning
+      paused_with_conversions     — paused, conversions > 0                       → info
+      high_cpc_low_ctr            — enabled, avg_cpc > 5, ctr < 1, impr > 100    → warning
+      budget_overspend_or_missing_budget — enabled, budget_daily == 0             → info
+    """
+    findings = []
+    for c in (campaigns if isinstance(campaigns, list) else []):
+        if not isinstance(c, dict):
+            continue
+        status = str(c.get("status", "")).upper()
+        enabled = status == "ENABLED"
+        paused = status == "PAUSED"
+        cost = float(c.get("spent") or 0)
+        conversions = float(c.get("conversions") or 0)
+        impressions = int(c.get("impressions") or 0)
+        roas = float(c.get("roas") or 0)
+        avg_cpc = float(c.get("avg_cpc") or 0)
+        ctr = float(c.get("ctr") or 0)
+        budget_daily = float(c.get("budget_daily") or 0)
+        cid = c.get("id", "")
+        cname = c.get("name", "")
+
+        if enabled and cost > 50 and conversions == 0:
+            findings.append({
+                "severity": "critical",
+                "type": "high_spend_no_conversions",
+                "campaign_id": cid,
+                "campaign_name": cname,
+                "metric_snapshot": {"cost": cost, "conversions": 0, "status": status},
+                "recommendation": (
+                    f"'{cname}' has spent ${cost:.2f} with zero conversions. "
+                    "Review targeting, ad copy, landing page, or pause until resolved."
+                ),
+            })
+        elif enabled and cost > 50 and 0 < roas < 2.0:
+            findings.append({
+                "severity": "warning",
+                "type": "low_roas_enabled",
+                "campaign_id": cid,
+                "campaign_name": cname,
+                "metric_snapshot": {"cost": cost, "roas": roas, "status": status},
+                "recommendation": (
+                    f"'{cname}' ROAS is {roas:.2f}x (below 2.0x threshold). "
+                    "Optimize bids, add negative keywords, or tighten audience targeting."
+                ),
+            })
+
+        if enabled and impressions == 0:
+            findings.append({
+                "severity": "warning",
+                "type": "zero_impressions_enabled",
+                "campaign_id": cid,
+                "campaign_name": cname,
+                "metric_snapshot": {"impressions": 0, "status": status},
+                "recommendation": (
+                    f"'{cname}' is enabled but has zero impressions. "
+                    "Check daily budget limits, ad approval status, and targeting settings."
+                ),
+            })
+
+        if paused and conversions > 0:
+            findings.append({
+                "severity": "info",
+                "type": "paused_with_conversions",
+                "campaign_id": cid,
+                "campaign_name": cname,
+                "metric_snapshot": {"conversions": conversions, "cost": cost, "status": status},
+                "recommendation": (
+                    f"'{cname}' is paused but had {conversions:.0f} conversion(s). "
+                    "Consider reactivating or applying learnings to active campaigns."
+                ),
+            })
+
+        if enabled and avg_cpc > 5.0 and ctr < 1.0 and impressions > 100:
+            findings.append({
+                "severity": "warning",
+                "type": "high_cpc_low_ctr",
+                "campaign_id": cid,
+                "campaign_name": cname,
+                "metric_snapshot": {"avg_cpc": avg_cpc, "ctr": ctr, "impressions": impressions},
+                "recommendation": (
+                    f"'{cname}' has high CPC (${avg_cpc:.2f}) and low CTR ({ctr:.2f}%). "
+                    "Review ad relevance, headline variety, and Quality Score."
+                ),
+            })
+
+        if enabled and budget_daily == 0:
+            findings.append({
+                "severity": "info",
+                "type": "budget_overspend_or_missing_budget",
+                "campaign_id": cid,
+                "campaign_name": cname,
+                "metric_snapshot": {"budget_daily": 0, "cost": cost},
+                "recommendation": (
+                    f"'{cname}' budget data is unavailable. "
+                    "Verify daily budget is set and pacing is correct in Google Ads."
+                ),
+            })
+
+    severity_order = {"critical": 0, "warning": 1, "info": 2}
+    findings.sort(key=lambda x: severity_order.get(x.get("severity", "info"), 3))
+    return findings
+
+
+def _gads_compute_ai_brief(campaigns, customer_id="", manager_customer_id="", date_range="LAST_30_DAYS"):
+    """Build a structured AI-ready intelligence brief from campaign data (Phase 2C spec).
+
+    All computations are deterministic — no LLM call. Designed for Orchestrator consumption.
+    """
+    campaigns = campaigns if isinstance(campaigns, list) else []
+    totals = _gads_compute_overview_totals(campaigns, customer_id, manager_customer_id, date_range)
+    diagnostics = _gads_compute_diagnostics(campaigns)
+
+    enabled_with_spend = [
+        c for c in campaigns
+        if isinstance(c, dict)
+        and str(c.get("status", "")).upper() == "ENABLED"
+        and float(c.get("spent") or 0) > 0
+    ]
+    heavy_spend = [c for c in enabled_with_spend if float(c.get("spent") or 0) > 100]
+
+    top_winners = sorted(enabled_with_spend, key=lambda c: float(c.get("roas") or 0), reverse=True)[:3]
+    top_losers = sorted(heavy_spend, key=lambda c: float(c.get("roas") or 0))[:3]
+
+    risks = [d for d in diagnostics if d.get("severity") in ("critical", "warning")]
+    opportunities = [d for d in diagnostics if d.get("type") == "paused_with_conversions"]
+    zero_impr_count = sum(1 for d in diagnostics if d.get("type") == "zero_impressions_enabled")
+    if zero_impr_count:
+        opportunities.append({
+            "type": "zero_impressions_review",
+            "description": (
+                f"{zero_impr_count} enabled campaign(s) have zero impressions — "
+                "resolving delivery issues could unlock immediate scale."
+            ),
+        })
+
+    actions = []
+    critical_count = sum(1 for d in diagnostics if d.get("severity") == "critical")
+    if critical_count:
+        actions.append(
+            f"URGENT: {critical_count} campaign(s) spending with zero conversions. "
+            "Pause or fix conversion tracking immediately."
+        )
+    roas = totals["roas"]
+    if roas > 0 and roas < 2.0:
+        actions.append(
+            "Overall ROAS is below 2.0x. Review bidding strategy and confirm "
+            "conversion tracking is recording all conversion types."
+        )
+    elif roas >= 4.0:
+        actions.append(
+            f"ROAS is strong at {roas:.2f}x. Consider increasing budget on "
+            "top-performing campaigns to capture more conversion volume."
+        )
+    if top_winners:
+        w = top_winners[0]
+        actions.append(
+            f"Scale opportunity: '{w.get('name')}' has {float(w.get('roas') or 0):.2f}x ROAS "
+            "— increase daily budget or duplicate to new audiences."
+        )
+    if top_losers:
+        lo = top_losers[0]
+        actions.append(
+            f"Underperformer: '{lo.get('name')}' has {float(lo.get('roas') or 0):.2f}x ROAS "
+            "with significant spend — review or reduce budget."
+        )
+    if totals["active_campaigns"] == 0:
+        actions.append("No active campaigns detected. Verify account status and campaign settings.")
+    if not actions:
+        actions.append(
+            "Performance is within normal parameters. Monitor trends weekly "
+            "and A/B test new creatives on top campaigns."
+        )
+
+    def _slim(c):
+        return {
+            "id": c.get("id"),
+            "name": c.get("name"),
+            "status": c.get("status"),
+            "cost": float(c.get("spent") or 0),
+            "roas": float(c.get("roas") or 0),
+            "conversions": float(c.get("conversions") or 0),
+            "impressions": int(c.get("impressions") or 0),
+            "ctr": float(c.get("ctr") or 0),
+        }
+
+    return {
+        "account_summary": {
+            "customer_id": customer_id,
+            "manager_customer_id": manager_customer_id,
+            "date_range": date_range,
+            "active_campaigns": totals["active_campaigns"],
+            "total_campaigns": totals["total_campaigns"],
+        },
+        "performance_summary": {
+            "spend": totals["spend"],
+            "impressions": totals["impressions"],
+            "clicks": totals["clicks"],
+            "conversions": totals["conversions"],
+            "ctr": totals["ctr"],
+            "avg_cpc": totals["avg_cpc"],
+            "cpa": totals["cpa"],
+            "roas": totals["roas"],
+        },
+        "top_winners": [_slim(c) for c in top_winners],
+        "top_losers": [_slim(c) for c in top_losers],
+        "risks": risks,
+        "opportunities": opportunities,
+        "recommended_next_actions": actions,
+        "raw_metrics_reference": {
+            "conversion_value": totals["conversion_value"],
+            "total_campaigns": totals["total_campaigns"],
+        },
+    }
+
+
 def _google_ads_gateway_fetch(path_candidates, params=None, timeout=25):
     if not COOLBITS_GATEWAY_ENABLED:
         return None, {"enabled": False, "reason": "disabled"}
@@ -20148,6 +20404,158 @@ def google_ads_campaigns():
                 "gateway": gw,
             })
     return jsonify(_google_ads_mock_campaigns_response(account_id))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 2C — Account Intelligence endpoints
+# Each endpoint fetches live campaign data via searchStream (same live/mock
+# fallback pattern as google_ads_campaigns) then applies server-side logic.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id=None):
+    """Shared helper: fetch live campaign list or return None on failure.
+
+    Returns (campaigns_list, date_range_str, source_str) where source is
+    'google_ads_api' | 'mock'.  On live-API error returns (mock_list, ..., 'mock').
+    Does NOT raise exceptions.
+    """
+    if user_id is None:
+        user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id)
+    safe_cid = re.sub(r"[^0-9]", "", str(customer_id or ""))
+    if (
+        meta
+        and meta.get("status") == "active"
+        and meta.get("api_validated")
+        and safe_cid
+        and safe_cid.isdigit()
+        and len(safe_cid) >= 8
+    ):
+        token_result = _gads_get_fresh_access_token(user_id)
+        if token_result.get("success"):
+            access_token = token_result["access_token"]
+            cfg = _gads_oauth_config_internal()
+            developer_token = cfg.get("developer_token", "")
+            login_cid = (
+                re.sub(r"[^0-9]", "", str(mcc_id or "")).strip()
+                or re.sub(r"[^0-9]", "",
+                          str((meta or {}).get("selected_manager_customer_id") or "")).strip()
+                or safe_cid
+            )
+            result = _gads_searchstream_campaigns(
+                safe_cid, access_token, developer_token, login_cid, days=days
+            )
+            access_token = None  # wipe immediately
+            if result.get("success"):
+                return result["campaigns"], result.get("date_range", "LAST_30_DAYS"), "google_ads_api"
+            print(f"gads_resolve_live_error: {result.get('error')} acct={safe_cid}")
+    # Fallback to mock
+    mock = _google_ads_mock_campaigns_response(customer_id)
+    return mock.get("campaigns", []), "LAST_30_DAYS", "mock"
+
+
+@app.route("/api/connectors/google-ads/overview", methods=["GET"])
+def google_ads_overview():
+    """Account-level KPI overview.
+
+    Query params: customer_id (or account_id), days, mcc_id
+    Returns: {source, customer_id, manager_customer_id, date_range, totals{...}}
+    """
+    customer_id = (
+        request.args.get("customer_id", "").strip()
+        or request.args.get("account_id", "123-456-7890").strip()
+    )
+    mcc_id = request.args.get("mcc_id", "").strip()
+    days = request.args.get("days", 30, type=int)
+
+    user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id) or {}
+    manager_cid = (
+        re.sub(r"[^0-9]", "", mcc_id).strip()
+        or re.sub(r"[^0-9]", "", str(meta.get("selected_manager_customer_id") or "")).strip()
+        or ""
+    )
+
+    campaigns, date_range, source = _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id)
+    totals = _gads_compute_overview_totals(campaigns, customer_id, manager_cid, date_range)
+
+    return jsonify({
+        "source": source,
+        "customer_id": customer_id,
+        "manager_customer_id": manager_cid,
+        "date_range": date_range,
+        "totals": totals,
+    })
+
+
+@app.route("/api/connectors/google-ads/diagnostics", methods=["GET"])
+def google_ads_diagnostics():
+    """Rule-based campaign diagnostics.
+
+    Query params: customer_id (or account_id), days, mcc_id
+    Returns: {source, customer_id, date_range, findings:[...], summary:{critical,warning,info}}
+    """
+    customer_id = (
+        request.args.get("customer_id", "").strip()
+        or request.args.get("account_id", "123-456-7890").strip()
+    )
+    mcc_id = request.args.get("mcc_id", "").strip()
+    days = request.args.get("days", 30, type=int)
+
+    user_id = get_current_user_id()
+    campaigns, date_range, source = _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id)
+    findings = _gads_compute_diagnostics(campaigns)
+
+    summary = {
+        "critical": sum(1 for f in findings if f.get("severity") == "critical"),
+        "warning": sum(1 for f in findings if f.get("severity") == "warning"),
+        "info": sum(1 for f in findings if f.get("severity") == "info"),
+        "total": len(findings),
+    }
+
+    return jsonify({
+        "source": source,
+        "customer_id": customer_id,
+        "date_range": date_range,
+        "findings": findings,
+        "summary": summary,
+    })
+
+
+@app.route("/api/connectors/google-ads/ai-brief", methods=["GET"])
+def google_ads_ai_brief():
+    """Structured AI intelligence brief for Orchestrator consumption.
+
+    Query params: customer_id (or account_id), days, mcc_id
+    Returns: {source, customer_id, date_range, account_summary, performance_summary,
+              top_winners, top_losers, risks, opportunities, recommended_next_actions,
+              raw_metrics_reference}
+    All computations are deterministic — no LLM call.
+    """
+    customer_id = (
+        request.args.get("customer_id", "").strip()
+        or request.args.get("account_id", "123-456-7890").strip()
+    )
+    mcc_id = request.args.get("mcc_id", "").strip()
+    days = request.args.get("days", 30, type=int)
+
+    user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id) or {}
+    manager_cid = (
+        re.sub(r"[^0-9]", "", mcc_id).strip()
+        or re.sub(r"[^0-9]", "", str(meta.get("selected_manager_customer_id") or "")).strip()
+        or ""
+    )
+
+    campaigns, date_range, source = _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id)
+    brief = _gads_compute_ai_brief(campaigns, customer_id, manager_cid, date_range)
+
+    return jsonify({
+        "source": source,
+        "customer_id": customer_id,
+        "date_range": date_range,
+        **brief,
+    })
 
 
 @app.route("/api/connectors/google-ads/keywords", methods=["GET"])
