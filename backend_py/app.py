@@ -20413,16 +20413,19 @@ def google_ads_campaigns():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id=None):
-    """Shared helper: fetch live campaign list or return None on failure.
+    """Shared helper: fetch live campaign list or return fallback on failure.
 
-    Returns (campaigns_list, date_range_str, source_str) where source is
-    'google_ads_api' | 'mock'.  On live-API error returns (mock_list, ..., 'mock').
+    Returns (campaigns_list, date_range_str, source_str) where source is:
+      'google_ads_api'  — live API succeeded
+      'mock_fallback'   — connected/validated but API call failed (user is linked)
+      'mock'            — no active connection or no valid customer_id
     Does NOT raise exceptions.
     """
     if user_id is None:
         user_id = get_current_user_id()
     meta = _gads_token_get_meta(user_id)
     safe_cid = re.sub(r"[^0-9]", "", str(customer_id or ""))
+    live_attempted = False
     if (
         meta
         and meta.get("status") == "active"
@@ -20433,6 +20436,7 @@ def _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id=None):
     ):
         token_result = _gads_get_fresh_access_token(user_id)
         if token_result.get("success"):
+            live_attempted = True
             access_token = token_result["access_token"]
             cfg = _gads_oauth_config_internal()
             developer_token = cfg.get("developer_token", "")
@@ -20449,9 +20453,10 @@ def _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id=None):
             if result.get("success"):
                 return result["campaigns"], result.get("date_range", "LAST_30_DAYS"), "google_ads_api"
             print(f"gads_resolve_live_error: {result.get('error')} acct={safe_cid}")
-    # Fallback to mock
+    # Fallback: use mock data but distinguish connected-error from not-connected
+    fallback_source = "mock_fallback" if live_attempted else "mock"
     mock = _google_ads_mock_campaigns_response(customer_id)
-    return mock.get("campaigns", []), "LAST_30_DAYS", "mock"
+    return mock.get("campaigns", []), "LAST_30_DAYS", fallback_source
 
 
 @app.route("/api/connectors/google-ads/overview", methods=["GET"])

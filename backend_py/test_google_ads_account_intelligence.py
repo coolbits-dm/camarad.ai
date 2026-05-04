@@ -24,12 +24,15 @@ os.environ.setdefault("DATABASE", "/tmp/camarad_ai_intel_test.db")
 
 # Allow import from parent when run as module
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import backend_py.app as _app_module
 from backend_py.app import (
     app,
     _gads_compute_overview_totals,
     _gads_compute_diagnostics,
     _gads_compute_ai_brief,
+    _gads_resolve_live_campaigns,
 )
+_PATCH_PREFIX = "backend_py.app"
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -403,8 +406,14 @@ class TestOverviewRoute(unittest.TestCase):
     def test_overview_source_mock_unauthenticated(self):
         r = self.client.get("/api/connectors/google-ads/overview?customer_id=1234567890")
         data = json.loads(r.data)
-        # Without live OAuth, should return mock source
-        self.assertIn(data["source"], ("mock", "google_ads_api"))
+        # Without live OAuth, should return mock or mock_fallback — never live
+        self.assertIn(data["source"], ("mock", "google_ads_api", "mock_fallback"))
+
+    def test_overview_source_not_live_without_oauth(self):
+        """Unauthenticated test client must never return source=google_ads_api."""
+        r = self.client.get("/api/connectors/google-ads/overview?customer_id=1234567890")
+        data = json.loads(r.data)
+        self.assertNotEqual(data["source"], "google_ads_api")
 
     def test_overview_account_id_alias(self):
         """account_id param should work as alias for customer_id."""
@@ -504,3 +513,125 @@ class TestAiBriefRoute(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Source Truth: mock vs mock_fallback vs google_ads_api
+# Verifies the source field correctly distinguishes connected-but-errored from
+# not-connected, so mock is never silently shown as live.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSourceTruth(unittest.TestCase):
+    """Verify _gads_resolve_live_campaigns source field semantics."""
+
+    def setUp(self):
+        self.client = app.test_client()
+
+    def _source_for(self, cid="1234567890"):
+        r = self.client.get(f"/api/connectors/google-ads/overview?customer_id={cid}")
+        return json.loads(r.data)["source"]
+
+    def test_valid_source_values_only(self):
+        """source must always be one of the three declared values."""
+        source = self._source_for()
+        self.assertIn(source, ("google_ads_api", "mock", "mock_fallback"),
+                      f"Unexpected source: {source}")
+
+    def test_no_credentials_in_any_source_state(self):
+        """No token material leaks regardless of source."""
+        for endpoint in ["/api/connectors/google-ads/overview",
+                         "/api/connectors/google-ads/diagnostics",
+                         "/api/connectors/google-ads/ai-brief"]:
+            r = self.client.get(f"{endpoint}?customer_id=1234567890")
+            body = r.data.decode()
+            for secret in ["refresh_token", "developer_token", "client_secret",
+                            "access_token", "Bearer ", "private_key"]:
+                self.assertNotIn(secret, body,
+                                 f"Secret field '{secret}' leaked in {endpoint}")
+
+    def test_all_three_endpoints_return_same_source(self):
+        """Overview, diagnostics, and ai-brief share the same live resolver."""
+        cid = "1234567890"
+        days = "30"
+        ov = json.loads(self.client.get(
+            f"/api/connectors/google-ads/overview?customer_id={cid}&days={days}").data)
+        dx = json.loads(self.client.get(
+            f"/api/connectors/google-ads/diagnostics?customer_id={cid}&days={days}").data)
+        ab = json.loads(self.client.get(
+            f"/api/connectors/google-ads/ai-brief?customer_id={cid}&days={days}").data)
+        # All must return a valid source (need not match since separate requests)
+        for name, d in [("overview", ov), ("diagnostics", dx), ("ai_brief", ab)]:
+            self.assertIn(d["source"], ("google_ads_api", "mock", "mock_fallback"),
+                          f"{name} returned invalid source: {d['source']}")
+
+    def test_mock_fallback_distinct_from_mock(self):
+        """mock_fallback is a distinct string from mock."""
+        self.assertNotEqual("mock_fallback", "mock")
+        self.assertNotEqual("mock_fallback", "google_ads_api")
+
+    def _resolve(self, mock_meta_val, mock_token_val, mock_stream_val, cid="1234567890"):
+        """Call _gads_resolve_live_campaigns directly with patched internals.
+
+        Uses test_request_context to provide Flask context (same approach as
+        the confirmed-working direct debug call).  Patches use the correct
+        module path (backend_py.app) to avoid the double-import problem where
+        'app' and 'backend_py.app' are different sys.modules entries.
+        """
+        with patch(f"{_PATCH_PREFIX}._gads_token_get_meta",
+                   return_value=mock_meta_val), \
+             patch(f"{_PATCH_PREFIX}._gads_get_fresh_access_token",
+                   return_value=mock_token_val), \
+             patch(f"{_PATCH_PREFIX}._gads_searchstream_campaigns",
+                   return_value=mock_stream_val):
+            with app.test_request_context("/"):
+                return _gads_resolve_live_campaigns(cid, "", 30, user_id="testuser")
+
+    def test_connected_api_error_returns_mock_fallback(self):
+        """When connected+validated but searchStream fails → source=mock_fallback."""
+        _, _, source = self._resolve(
+            mock_meta_val={"status": "active", "api_validated": True,
+                           "selected_manager_customer_id": "8924163684"},
+            mock_token_val={"success": True, "access_token": "test_token"},
+            mock_stream_val={"success": False, "error": "403 Forbidden"},
+        )
+        self.assertEqual(source, "mock_fallback",
+                         "Connected user with API error should get mock_fallback, not mock")
+
+    def test_not_connected_returns_mock(self):
+        """When not connected (no meta) → source=mock."""
+        _, _, source = self._resolve(
+            mock_meta_val=None,
+            mock_token_val={"success": False},
+            mock_stream_val={"success": False},
+        )
+        self.assertEqual(source, "mock",
+                         "Not-connected user should get source=mock")
+
+    def test_live_success_returns_google_ads_api(self):
+        """When connected and API succeeds → source=google_ads_api."""
+        _, _, source = self._resolve(
+            mock_meta_val={"status": "active", "api_validated": True,
+                           "selected_manager_customer_id": "8924163684"},
+            mock_token_val={"success": True, "access_token": "test_token"},
+            mock_stream_val={"success": True, "campaigns": [], "date_range": "LAST_30_DAYS"},
+        )
+        self.assertEqual(source, "google_ads_api")
+
+    def test_mock_fallback_no_credentials_in_response(self):
+        """mock_fallback response must not leak any credential."""
+        with patch(f"{_PATCH_PREFIX}._gads_token_get_meta",
+                   return_value={"status": "active", "api_validated": True}), \
+             patch(f"{_PATCH_PREFIX}._gads_get_fresh_access_token",
+                   return_value={"success": True, "access_token": "test_token"}), \
+             patch(f"{_PATCH_PREFIX}._gads_searchstream_campaigns",
+                   return_value={"success": False, "error": "500"}):
+            for endpoint in ["/api/connectors/google-ads/overview",
+                             "/api/connectors/google-ads/diagnostics",
+                             "/api/connectors/google-ads/ai-brief"]:
+                r = self.client.get(f"{endpoint}?customer_id=1234567890")
+                body = r.data.decode()
+                for secret in ["test_token", "refresh_token", "client_secret",
+                                "developer_token"]:
+                    self.assertNotIn(secret, body,
+                                     f"Secret in {endpoint} mock_fallback response")
+

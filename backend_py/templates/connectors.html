@@ -5961,6 +5961,7 @@
 
   function _gadsSourceBadge(source) {
     if (source === 'google_ads_api') return '<span class="badge bg-success ms-2" title="Live Google Ads API">Live</span>';
+    if (source === 'mock_fallback') return '<span class="badge bg-warning text-dark ms-2" title="Google Ads API error — showing fallback data. Your account is connected but the API call failed.">API Error · Fallback</span>';
     if (source === 'mock') return '<span class="badge bg-secondary ms-2" title="Mock data — connect account to see live data">Mock</span>';
     return `<span class="badge bg-info ms-2">${source}</span>`;
   }
@@ -5992,7 +5993,11 @@
       return prefix + (dp > 0 ? n.toFixed(dp) : n.toLocaleString()) + suffix;
     };
 
+    const mockFallbackWarning = source === 'mock_fallback'
+      ? '<div class="alert alert-warning py-2 px-3 mb-3 small"><strong>API Error:</strong> Your Google Ads account is connected but the campaign data API call failed. Showing fallback data. Retry or check API access.</div>'
+      : '';
     document.getElementById('gadsOverviewContent').innerHTML = `
+      ${mockFallbackWarning}
       <div class="d-flex align-items-center gap-2 mb-3">
         <span class="text-muted small">${dateRange.replace(/_/g,' ')}</span>
         ${sourceBadge}
@@ -6252,6 +6257,7 @@
     const container = document.getElementById('gadsDiagnosticsContent');
     if (!findings.length) {
       container.innerHTML = `
+        ${source === 'mock_fallback' ? '<div class="alert alert-warning py-2 px-3 mb-3 small"><strong>API Error:</strong> Account connected but campaign API call failed. Showing fallback data.</div>' : ''}
         <div class="alert alert-success d-flex align-items-center gap-2 mt-2">
           <i class="bi bi-check-circle-fill fs-5"></i>
           <div>
@@ -6323,6 +6329,9 @@
   function gadsRenderAiBrief(data) {
     const source = (data && data.source) || 'unknown';
     const sourceBadge = _gadsSourceBadge(source);
+    const mockFallbackWarning = source === 'mock_fallback'
+      ? '<div class="alert alert-warning py-2 px-3 mb-3 small"><strong>API Error:</strong> Account connected but campaign API call failed. AI Brief is based on fallback data.</div>'
+      : '';
     const as = data.account_summary || {};
     const ps = data.performance_summary || {};
     const winners = data.top_winners || [];
@@ -6366,6 +6375,7 @@
     ).join('');
 
     document.getElementById('gadsAiBriefContent').innerHTML = `
+      ${mockFallbackWarning}
       <div class="d-flex align-items-center gap-2 mb-3">
         <span class="text-muted small">${(as.date_range || '').replace(/_/g,' ')}</span>
         ${sourceBadge}
