@@ -400,15 +400,24 @@ class TestUIModuleLabels(unittest.TestCase):
             self.assertIn(label, html, f"Missing module label: {label}")
 
     def test_21_planned_module_buttons_disabled(self):
-        """Test 21: Planned module buttons carry the disabled attribute in the HTML."""
+        """Test 21: Planned module buttons carry the disabled attribute in the HTML.
+        Note: Search Terms was promoted to partial_live in Phase 2E.2 — it is no longer
+        disabled. PMax, Budget, Assets, Audiences remain disabled/planned.
+        """
         html = self._read_html()
-        # Search Terms, PMax must be disabled buttons
         import re
-        # Each planned module button should have both a Planned badge and disabled attribute
         planned_buttons = re.findall(r'<button[^>]*disabled[^>]*>.*?</button>', html, re.DOTALL)
         btn_texts = " ".join(planned_buttons)
-        for label in ("Search Terms", "PMax", "Budget", "Assets"):
+        # These remain disabled/planned
+        for label in ("PMax", "Budget", "Assets"):
             self.assertIn(label, btn_texts, f"Planned module '{label}' not in disabled buttons")
+        # Search Terms is now partial_live — must NOT be disabled
+        st_live = re.findall(
+            r"<button[^>]*gadsModuleBtn_search_terms[^>]*>.*?</button>", html, re.DOTALL
+        )
+        self.assertTrue(st_live, "Search Terms button not found")
+        self.assertNotIn(" disabled", st_live[0],
+                         "Search Terms must not be disabled after Phase 2E.2 promotion")
 
 
 class TestSecurityConstraints(unittest.TestCase):

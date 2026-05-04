@@ -21489,19 +21489,21 @@ _GADS_INTELLIGENCE_MODULE_REGISTRY = [
         "id": "search_terms",
         "label": "Search Terms",
         "category": "search_terms",
-        "status": "planned",
+        "status": "partial_live",
         "description": (
-            "Search term performance. Standard Search uses search_term_view. "
-            "PMax requires campaign_search_term_view (excludes PMax from search_term_view)."
+            "Search term performance from search_term_view. "
+            "Classifies waste, winner, and opportunity terms. "
+            "PMax search terms require separate path — not included here."
         ),
-        "endpoint": None,
+        "endpoint": "/api/connectors/google-ads/intelligence/search-terms",
         "requires": ["google_ads_api"],
-        "source": "planned",
+        "source": "search_term_view",
         "currency_sensitive": True,
-        "campaign_types": ["SEARCH", "PERFORMANCE_MAX"],
+        "campaign_types": ["SEARCH"],
         "notes": [
             "search_term_view does not include Performance Max search term data.",
-            "PMax search terms require campaign_search_term_view.",
+            "PMax search terms require campaign_search_term_view (planned).",
+            "No negative keyword mutations. Recommendations only.",
         ],
     },
     {
@@ -22247,6 +22249,763 @@ def google_ads_intelligence_waste_finder():
             signals=waste_signals,
             recommendations=top_recs,
             rows=waste_rows,
+            warnings=warnings,
+        )
+    )
+
+
+# ─── Phase 2E.2: Search Terms Intelligence ────────────────────────────────────
+
+_GADS_MOCK_SEARCH_TERMS = [
+    # Waste — cost, zero conversions
+    {
+        "search_term": "free running shoes",
+        "campaign_id": "1001",
+        "campaign_name": "Brand Search",
+        "campaign_status": "ENABLED",
+        "ad_group_id": "2001",
+        "ad_group_name": "Brand Keywords",
+        "impressions": 320,
+        "clicks": 28,
+        "cost": 18.50,
+        "conversions": 0.0,
+        "conversion_value": 0.0,
+        "ctr": 8.75,
+        "avg_cpc": 0.66,
+        "cpa": None,
+        "roas": None,
+        "conversion_rate": None,
+        "currency_code": None,
+        "targeting_status": "NONE",
+        "classification": "waste",
+        "reason": "Spend with zero conversions",
+    },
+    {
+        "search_term": "buy cheap sneakers",
+        "campaign_id": "1001",
+        "campaign_name": "Brand Search",
+        "campaign_status": "ENABLED",
+        "ad_group_id": "2001",
+        "ad_group_name": "Brand Keywords",
+        "impressions": 540,
+        "clicks": 42,
+        "cost": 31.20,
+        "conversions": 0.0,
+        "conversion_value": 0.0,
+        "ctr": 7.78,
+        "avg_cpc": 0.74,
+        "cpa": None,
+        "roas": None,
+        "conversion_rate": None,
+        "currency_code": None,
+        "targeting_status": "NONE",
+        "classification": "waste",
+        "reason": "Spend with zero conversions",
+    },
+    # Winner — conversions, good ROAS
+    {
+        "search_term": "best running shoes men",
+        "campaign_id": "1002",
+        "campaign_name": "Performance Search",
+        "campaign_status": "ENABLED",
+        "ad_group_id": "2002",
+        "ad_group_name": "Running Shoes",
+        "impressions": 1200,
+        "clicks": 95,
+        "cost": 67.50,
+        "conversions": 8.0,
+        "conversion_value": 640.0,
+        "ctr": 7.92,
+        "avg_cpc": 0.71,
+        "cpa": 8.44,
+        "roas": 9.48,
+        "conversion_rate": 8.42,
+        "currency_code": None,
+        "targeting_status": "NONE",
+        "classification": "winner",
+        "reason": "Good ROAS (9.48x)",
+    },
+    {
+        "search_term": "running shoes sale",
+        "campaign_id": "1002",
+        "campaign_name": "Performance Search",
+        "campaign_status": "ENABLED",
+        "ad_group_id": "2002",
+        "ad_group_name": "Running Shoes",
+        "impressions": 880,
+        "clicks": 61,
+        "cost": 44.30,
+        "conversions": 5.0,
+        "conversion_value": 375.0,
+        "ctr": 6.93,
+        "avg_cpc": 0.73,
+        "cpa": 8.86,
+        "roas": 8.47,
+        "conversion_rate": 8.20,
+        "currency_code": None,
+        "targeting_status": "NONE",
+        "classification": "winner",
+        "reason": "Good ROAS (8.47x)",
+    },
+    # Opportunity — high CTR, no conversions, low cost
+    {
+        "search_term": "trail running shoes waterproof",
+        "campaign_id": "1002",
+        "campaign_name": "Performance Search",
+        "campaign_status": "ENABLED",
+        "ad_group_id": "2003",
+        "ad_group_name": "Trail Running",
+        "impressions": 450,
+        "clicks": 35,
+        "cost": 4.20,
+        "conversions": 0.0,
+        "conversion_value": 0.0,
+        "ctr": 7.78,
+        "avg_cpc": 0.12,
+        "cpa": None,
+        "roas": None,
+        "conversion_rate": None,
+        "currency_code": None,
+        "targeting_status": "NONE",
+        "classification": "opportunity",
+        "reason": "High CTR, no conversions yet",
+    },
+    # Low CTR, high impressions — opportunity
+    {
+        "search_term": "athletic footwear",
+        "campaign_id": "1003",
+        "campaign_name": "Generic Search",
+        "campaign_status": "ENABLED",
+        "ad_group_id": "2004",
+        "ad_group_name": "Generic",
+        "impressions": 2400,
+        "clicks": 9,
+        "cost": 3.60,
+        "conversions": 0.0,
+        "conversion_value": 0.0,
+        "ctr": 0.38,
+        "avg_cpc": 0.40,
+        "cpa": None,
+        "roas": None,
+        "conversion_rate": None,
+        "currency_code": None,
+        "targeting_status": "NONE",
+        "classification": "opportunity",
+        "reason": "High impressions, low CTR",
+    },
+    # Neutral
+    {
+        "search_term": "sports shoes online",
+        "campaign_id": "1003",
+        "campaign_name": "Generic Search",
+        "campaign_status": "ENABLED",
+        "ad_group_id": "2004",
+        "ad_group_name": "Generic",
+        "impressions": 310,
+        "clicks": 18,
+        "cost": 7.80,
+        "conversions": 1.0,
+        "conversion_value": 60.0,
+        "ctr": 5.81,
+        "avg_cpc": 0.43,
+        "cpa": 7.80,
+        "roas": 7.69,
+        "conversion_rate": 5.56,
+        "currency_code": None,
+        "targeting_status": "NONE",
+        "classification": "winner",
+        "reason": "Good ROAS (7.69x)",
+    },
+]
+
+
+def _gads_fetch_search_terms(
+    customer_id, manager_customer_id, access_token, developer_token, days=30, limit=200
+):
+    """Fetch search term performance from search_term_view via Google Ads searchStream.
+
+    Read-only GAQL. Does NOT include Performance Max (uses search_term_view only).
+    Returns {"success": True, "rows": [...], "date_range": str, "account_currency_code": str|None}
+    or error dict. Never exposes access_token or developer_token.
+    """
+    safe_cid = re.sub(r"[^0-9]", "", str(customer_id or ""))
+    if not safe_cid or not safe_cid.isdigit() or len(safe_cid) < 8:
+        return {"success": False, "error": "invalid_account_id",
+                "message": "Invalid client account ID."}
+
+    _DATE_RANGE_MAP = {7: "LAST_7_DAYS", 14: "LAST_14_DAYS", 30: "LAST_30_DAYS",
+                       90: "LAST_90_DAYS"}
+    date_range = _DATE_RANGE_MAP.get(int(days or 30), "LAST_30_DAYS")
+    safe_limit = min(max(int(limit or 100), 1), 500)
+
+    safe_login_cid = re.sub(r"[^0-9]", "", str(manager_customer_id or safe_cid))
+    url = f"{_GADS_API_BASE}/{_GADS_API_VERSION}/customers/{safe_cid}/googleAds:searchStream"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "developer-token": developer_token,
+        "login-customer-id": safe_login_cid,
+        "Content-Type": "application/json",
+    }
+    # Read-only GAQL. search_term_view does NOT include PMax.
+    gaql = (
+        "SELECT search_term_view.search_term, search_term_view.status,"
+        " campaign.id, campaign.name, campaign.status,"
+        " ad_group.id, ad_group.name,"
+        " metrics.impressions, metrics.clicks, metrics.cost_micros,"
+        " metrics.conversions, metrics.conversions_value,"
+        " metrics.ctr, metrics.average_cpc,"
+        " customer.currency_code"
+        " FROM search_term_view"
+        f" WHERE segments.date DURING {date_range}"
+        " ORDER BY metrics.cost_micros DESC"
+        f" LIMIT {safe_limit}"
+    )
+    try:
+        resp = requests.post(url, headers=headers, json={"query": gaql}, timeout=20)
+    except Exception as exc:
+        return {"success": False, "error": "api_network_error",
+                "message": f"Network error querying search terms: {str(exc)[:60]}"}
+
+    if resp.status_code != 200:
+        status_code = resp.status_code
+        try:
+            err = (resp.json().get("error") or {})
+            google_status = str(err.get("status") or "UNKNOWN")[:50]
+        except Exception:
+            google_status = "UNKNOWN"
+        return {"success": False, "error": "google_ads_api_error",
+                "status_code": status_code,
+                "google_status": google_status,
+                "message": f"Google Ads API returned HTTP {status_code} for search terms."}
+
+    # Parse JSON array or NDJSON — same pattern as campaign query
+    raw_text = resp.text.strip()
+    parsed_chunks = []
+    if raw_text.startswith("["):
+        try:
+            parsed_chunks = json.loads(raw_text)
+            if not isinstance(parsed_chunks, list):
+                parsed_chunks = [parsed_chunks]
+        except Exception:
+            parsed_chunks = []
+    else:
+        for line in raw_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed_chunks.append(json.loads(line))
+            except Exception:
+                continue
+
+    rows = []
+    account_currency_code = None
+
+    for obj in parsed_chunks:
+        for r in (obj.get("results") or []):
+            stv = r.get("searchTermView") or r.get("search_term_view") or {}
+            camp = r.get("campaign") or {}
+            ag = r.get("adGroup") or r.get("ad_group") or {}
+            metrics = r.get("metrics") or {}
+            cust = r.get("customer") or {}
+
+            search_term = str(stv.get("searchTerm") or stv.get("search_term") or "").strip()
+            if not search_term:
+                continue
+
+            # Currency — pick up once from the first record
+            if not account_currency_code:
+                cc = str(cust.get("currencyCode") or cust.get("currency_code") or "").upper()
+                if cc:
+                    account_currency_code = cc
+
+            cost_micros = float(
+                metrics.get("costMicros") or metrics.get("cost_micros") or 0
+            )
+            cost = round(cost_micros / 1_000_000, 4)
+            clicks = int(metrics.get("clicks") or 0)
+            impressions = int(metrics.get("impressions") or 0)
+            conversions = float(metrics.get("conversions") or 0)
+            conv_value = float(
+                metrics.get("conversionsValue") or metrics.get("conversions_value") or 0
+            )
+            # ctr from API is 0–1 float (e.g. 0.0375 = 3.75%)
+            ctr_raw = float(metrics.get("ctr") or 0)
+            ctr = round(ctr_raw * 100, 4)
+            # average_cpc is in micros
+            avg_cpc_micros = float(
+                metrics.get("averageCpc") or metrics.get("average_cpc") or 0
+            )
+            avg_cpc = round(avg_cpc_micros / 1_000_000, 4)
+
+            # Derived metrics — safe division
+            cpa = round(cost / conversions, 4) if conversions > 0 and cost > 0 else None
+            roas = (
+                round(conv_value / cost, 4) if cost > 0 and conv_value > 0 else None
+            )
+            conv_rate = round(conversions / clicks * 100, 4) if clicks > 0 else None
+
+            targeting_status = str(
+                stv.get("status") or "NONE"
+            ).upper().replace("SEARCH_TERM_TARGETING_STATUS_", "")
+
+            rows.append({
+                "search_term": search_term,
+                "campaign_id": str(camp.get("id") or ""),
+                "campaign_name": str(camp.get("name") or ""),
+                "campaign_status": str(
+                    camp.get("status") or ""
+                ).upper().replace("CAMPAIGN_STATUS_", ""),
+                "ad_group_id": str(ag.get("id") or ""),
+                "ad_group_name": str(ag.get("name") or ""),
+                "impressions": impressions,
+                "clicks": clicks,
+                "cost": round(cost, 2),
+                "conversions": round(conversions, 2),
+                "conversion_value": round(conv_value, 2),
+                "ctr": ctr,
+                "avg_cpc": avg_cpc,
+                "cpa": cpa,
+                "roas": roas,
+                "conversion_rate": conv_rate,
+                "currency_code": account_currency_code,
+                "targeting_status": targeting_status,
+                "classification": None,
+                "reason": "",
+            })
+
+    return {
+        "success": True,
+        "rows": rows,
+        "date_range": date_range,
+        "account_currency_code": account_currency_code,
+        "terms_count": len(rows),
+    }
+
+
+def _gads_classify_search_term(row, account_avg_cpa=None, waste_cost_threshold=5.0):
+    """Classify a normalized search term row.
+
+    Returns (classification, reason) where classification is one of:
+      waste       — cost > threshold AND conversions == 0
+      winner      — conversions >= 1 AND good ROAS or efficient CPA
+      opportunity — high CTR with no conversions yet, OR high impressions low CTR
+      neutral     — none of the above
+    """
+    cost = float(row.get("cost") or 0)
+    conversions = float(row.get("conversions") or 0)
+    clicks = int(row.get("clicks") or 0)
+    impressions = int(row.get("impressions") or 0)
+    ctr = float(row.get("ctr") or 0)  # percentage, e.g. 3.75
+    roas = row.get("roas")
+    cpa = row.get("cpa")
+
+    # waste: cost above threshold, zero conversions
+    if cost > waste_cost_threshold and conversions == 0:
+        return "waste", "Spend with zero conversions"
+
+    # winner: has conversions, good ROAS or efficient CPA
+    if conversions >= 1:
+        if roas is not None and roas >= 3.0:
+            return "winner", f"Good ROAS ({roas:.2f}x)"
+        if (
+            account_avg_cpa
+            and cpa is not None
+            and cpa <= account_avg_cpa * 1.5
+        ):
+            return "winner", "CPA within account range"
+        if conversions >= 2:
+            return "winner", "Multiple conversions"
+        return "winner", "Has conversions"
+
+    # opportunity: high CTR, enough clicks, no conversions yet, low cost
+    if clicks >= 10 and ctr >= 2.0 and conversions == 0 and cost <= waste_cost_threshold:
+        return "opportunity", "High CTR, no conversions yet"
+
+    # opportunity: high impressions, very low CTR — ad relevance issue
+    if impressions >= 200 and ctr < 0.5 and cost < waste_cost_threshold:
+        return "opportunity", "High impressions, low CTR"
+
+    return "neutral", ""
+
+
+def _gads_apply_search_term_classifications(rows, account_avg_cpa=None, waste_cost_threshold=5.0):
+    """Apply classification to each row in-place and return rows."""
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cls, reason = _gads_classify_search_term(
+            row, account_avg_cpa=account_avg_cpa,
+            waste_cost_threshold=waste_cost_threshold,
+        )
+        row["classification"] = cls
+        row["reason"] = reason
+        # Apply currency_code if not already set (for mock rows)
+        # (live rows get currency_code from API, mock rows start with None)
+    return rows
+
+
+def _gads_compute_search_term_signals(rows, currency_ctx, has_pmax=False):
+    """Compute deterministic signals from classified search term rows.
+
+    Signals:
+      waste_search_terms          — cost > threshold, zero conversions
+      high_cost_low_roas_terms    — cost > threshold, roas > 0 but < 2.0
+      winner_search_terms         — conversions >= 1, good roas
+      high_ctr_no_conversion_terms — high CTR, no conversions
+      low_ctr_high_impression_terms — high impressions, low CTR
+      pmax_gap_notice             — PMax campaigns exist, search_term_view incomplete
+    """
+    rows = rows if isinstance(rows, list) else []
+    currency_code = (currency_ctx or {}).get("currency_code") or None
+
+    def _money(amount):
+        return _gads_format_currency_evidence(amount, currency_code)
+
+    signals = []
+
+    waste_rows = [r for r in rows if isinstance(r, dict) and r.get("classification") == "waste"]
+    winner_rows = [r for r in rows if isinstance(r, dict) and r.get("classification") == "winner"]
+    high_ctr_rows = [
+        r for r in rows
+        if isinstance(r, dict)
+        and r.get("classification") == "opportunity"
+        and "High CTR" in str(r.get("reason", ""))
+    ]
+    low_ctr_rows = [
+        r for r in rows
+        if isinstance(r, dict)
+        and r.get("classification") == "opportunity"
+        and "impressions" in str(r.get("reason", ""))
+    ]
+
+    # waste_search_terms
+    if waste_rows:
+        total_waste_cost = sum(float(r.get("cost") or 0) for r in waste_rows)
+        top_waste = sorted(waste_rows, key=lambda r: float(r.get("cost") or 0), reverse=True)
+        signals.append({
+            "id": "waste_search_terms",
+            "category": "waste",
+            "severity": "warning",
+            "label": f"{len(waste_rows)} search term{'s' if len(waste_rows) > 1 else ''} "
+                     f"with spend and zero conversions",
+            "evidence": {
+                "waste_terms_count": len(waste_rows),
+                "total_waste_cost": _money(total_waste_cost),
+                "top_term": top_waste[0].get("search_term", "") if top_waste else "",
+                "top_term_cost": _money(float(top_waste[0].get("cost") or 0)) if top_waste else None,
+            },
+            "recommendation": (
+                f"{len(waste_rows)} search term(s) spent {_money(total_waste_cost)['formatted']} "
+                "with zero conversions. Review these as potential negative keyword candidates. "
+                "No automatic changes — human review required."
+            ),
+        })
+
+    # high_cost_low_roas_terms — roas > 0 but < 2.0, cost > 10
+    low_roas_terms = [
+        r for r in rows
+        if isinstance(r, dict)
+        and float(r.get("cost") or 0) > 10
+        and r.get("roas") is not None
+        and float(r.get("roas") or 0) > 0
+        and float(r.get("roas") or 0) < 2.0
+    ]
+    if low_roas_terms:
+        total_low_roas_cost = sum(float(r.get("cost") or 0) for r in low_roas_terms)
+        signals.append({
+            "id": "high_cost_low_roas_terms",
+            "category": "waste",
+            "severity": "warning",
+            "label": f"{len(low_roas_terms)} term(s) with cost and ROAS below 2.0x",
+            "evidence": {
+                "terms_count": len(low_roas_terms),
+                "total_cost": _money(total_low_roas_cost),
+                "roas_threshold": 2.0,
+            },
+            "recommendation": (
+                f"{len(low_roas_terms)} search term(s) have spend and ROAS below 2.0x. "
+                "Review keyword match types, bids, and landing pages for these terms."
+            ),
+        })
+
+    # winner_search_terms
+    if winner_rows:
+        total_winner_conv = sum(float(r.get("conversions") or 0) for r in winner_rows)
+        top_winner = sorted(winner_rows, key=lambda r: float(r.get("roas") or 0), reverse=True)
+        signals.append({
+            "id": "winner_search_terms",
+            "category": "growth",
+            "severity": "info",
+            "label": f"{len(winner_rows)} high-performing search term{'s' if len(winner_rows) > 1 else ''}",
+            "evidence": {
+                "winner_terms_count": len(winner_rows),
+                "total_conversions": round(total_winner_conv, 1),
+                "top_term": top_winner[0].get("search_term", "") if top_winner else "",
+                "top_term_roas": round(float(top_winner[0].get("roas") or 0), 2) if top_winner else None,
+            },
+            "recommendation": (
+                f"{len(winner_rows)} search term(s) are converting well. "
+                "Consider adding as exact-match keywords in tightly-themed ad groups, "
+                "or reviewing for bid increase opportunities."
+            ),
+        })
+
+    # high_ctr_no_conversion_terms
+    if high_ctr_rows:
+        signals.append({
+            "id": "high_ctr_no_conversion_terms",
+            "category": "efficiency",
+            "severity": "warning",
+            "label": f"{len(high_ctr_rows)} high-CTR term(s) with no conversions",
+            "evidence": {
+                "terms_count": len(high_ctr_rows),
+                "top_term": high_ctr_rows[0].get("search_term", "") if high_ctr_rows else "",
+                "top_ctr": round(float((high_ctr_rows[0] or {}).get("ctr") or 0), 2),
+            },
+            "recommendation": (
+                f"{len(high_ctr_rows)} term(s) have high CTR but no conversions. "
+                "Check landing page relevance, load time, and intent match for these terms."
+            ),
+        })
+
+    # low_ctr_high_impression_terms
+    if low_ctr_rows:
+        signals.append({
+            "id": "low_ctr_high_impression_terms",
+            "category": "efficiency",
+            "severity": "warning",
+            "label": f"{len(low_ctr_rows)} term(s) with high impressions and low CTR",
+            "evidence": {
+                "terms_count": len(low_ctr_rows),
+                "top_term": low_ctr_rows[0].get("search_term", "") if low_ctr_rows else "",
+                "top_impressions": int((low_ctr_rows[0] or {}).get("impressions") or 0),
+                "top_ctr": round(float((low_ctr_rows[0] or {}).get("ctr") or 0), 2),
+            },
+            "recommendation": (
+                f"{len(low_ctr_rows)} term(s) have many impressions but low CTR (<0.5%). "
+                "Review ad headline relevance and consider improving Quality Score."
+            ),
+        })
+
+    # pmax_gap_notice — always include if has_pmax or as standing notice
+    if has_pmax:
+        signals.append({
+            "id": "pmax_gap_notice",
+            "category": "data_quality",
+            "severity": "info",
+            "label": "Performance Max search terms not included",
+            "evidence": {
+                "explanation": (
+                    "search_term_view does not include Performance Max search term data. "
+                    "PMax search terms require campaign_search_term_view (planned)."
+                ),
+            },
+            "recommendation": (
+                "This account has Performance Max campaigns. "
+                "PMax search term visibility requires a separate data path "
+                "and is not yet implemented. Standard Search terms shown only."
+            ),
+        })
+
+    # Sort: warning > info
+    _SEV_ORDER = {"critical": 0, "warning": 1, "info": 2}
+    signals.sort(key=lambda s: _SEV_ORDER.get(s.get("severity", "info"), 3))
+    return signals
+
+
+def _gads_resolve_live_search_terms(customer_id, mcc_id, days, limit, user_id=None):
+    """Unified resolver: fetch live search terms or return mock fallback.
+
+    Mirrors _gads_resolve_live_campaigns pattern.
+    Returns (rows, date_range, source, account_currency_code).
+    """
+    if user_id is None:
+        user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id)
+    safe_cid = re.sub(r"[^0-9]", "", str(customer_id or ""))
+    live_attempted = False
+
+    if (
+        meta
+        and meta.get("status") == "active"
+        and meta.get("api_validated")
+        and safe_cid
+        and safe_cid.isdigit()
+        and len(safe_cid) >= 8
+    ):
+        token_result = _gads_get_fresh_access_token(user_id)
+        if token_result.get("success"):
+            live_attempted = True
+            access_token = token_result["access_token"]
+            cfg = _gads_oauth_config_internal()
+            developer_token = cfg.get("developer_token", "")
+            login_cid = (
+                re.sub(r"[^0-9]", "", str(mcc_id or "")).strip()
+                or re.sub(r"[^0-9]", "",
+                          str((meta or {}).get("selected_manager_customer_id") or "")).strip()
+                or safe_cid
+            )
+            result = _gads_fetch_search_terms(
+                safe_cid, login_cid, access_token, developer_token,
+                days=days, limit=limit,
+            )
+            access_token = None  # wipe immediately
+            if result.get("success"):
+                return (
+                    result["rows"],
+                    result.get("date_range", "LAST_30_DAYS"),
+                    "google_ads_api",
+                    result.get("account_currency_code"),
+                )
+            print(f"gads_resolve_search_terms_error: {result.get('error')} acct={safe_cid}")
+
+    fallback_source = "mock_fallback" if live_attempted else "mock"
+    mock_currency = next(
+        (a.get("currency") for a in GOOGLE_ADS_MOCK_ACCOUNTS if a.get("id") == customer_id),
+        None,
+    )
+    # Return a copy of mock rows with currency_code filled in
+    import copy
+    mock_rows = copy.deepcopy(_GADS_MOCK_SEARCH_TERMS)
+    for row in mock_rows:
+        row["currency_code"] = mock_currency
+    return mock_rows, "LAST_30_DAYS", fallback_source, mock_currency
+
+
+@app.route("/api/connectors/google-ads/intelligence/search-terms", methods=["GET"])
+def google_ads_intelligence_search_terms():
+    """Search Terms Intelligence v0 — read-only search_term_view analysis.
+
+    Classifies terms as waste, winner, opportunity, or neutral.
+    Does NOT include Performance Max (search_term_view limitation).
+    Does NOT perform any keyword mutations.
+
+    Query params: customer_id (or account_id), days, limit, mcc_id
+    Returns standard module response with rows, signals, summary, recommendations.
+    """
+    customer_id = (
+        request.args.get("customer_id", "").strip()
+        or request.args.get("account_id", "").strip()
+    )
+    if not customer_id:
+        return jsonify({
+            "success": False,
+            "error": "customer_id_required",
+            "message": "customer_id is required.",
+        }), 400
+
+    mcc_id = request.args.get("mcc_id", "").strip()
+    days = request.args.get("days", 30, type=int)
+    limit = min(request.args.get("limit", 100, type=int), 500)
+    user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id) or {}
+    manager_cid = (
+        re.sub(r"[^0-9]", "", mcc_id).strip()
+        or re.sub(r"[^0-9]", "", str(meta.get("selected_manager_customer_id") or "")).strip()
+        or ""
+    )
+
+    rows, date_range, source, api_currency = _gads_resolve_live_search_terms(
+        customer_id, mcc_id, days, limit, user_id
+    )
+    currency_ctx = _gads_resolve_currency_context(
+        customer_id=customer_id,
+        manager_customer_id=manager_cid,
+        api_currency_code=api_currency,
+        rows=None,
+        user_id=user_id,
+    )
+    currency_code = currency_ctx.get("currency_code") or None
+
+    # Apply account-native currency_code to each row
+    for row in rows:
+        if isinstance(row, dict) and not row.get("currency_code") and currency_code:
+            row["currency_code"] = currency_code
+
+    # Compute account avg CPA for classification context
+    total_cost = sum(float(r.get("cost") or 0) for r in rows if isinstance(r, dict))
+    total_conv = sum(float(r.get("conversions") or 0) for r in rows if isinstance(r, dict))
+    account_avg_cpa = (total_cost / total_conv) if total_conv > 0 else None
+
+    # Check if account has PMax campaigns (from existing campaigns data — best effort)
+    campaigns, _, _, _ = _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id)
+    has_pmax = any(
+        "Performance Max" in str(c.get("channel") or "")
+        or "PERFORMANCE_MAX" in str(c.get("channel_type") or "")
+        for c in (campaigns or [])
+        if isinstance(c, dict)
+    )
+
+    # Classify rows
+    rows = _gads_apply_search_term_classifications(
+        rows, account_avg_cpa=account_avg_cpa, waste_cost_threshold=5.0
+    )
+
+    # Compute signals
+    signals = _gads_compute_search_term_signals(rows, currency_ctx, has_pmax=has_pmax)
+
+    # Summary
+    waste_rows = [r for r in rows if isinstance(r, dict) and r.get("classification") == "waste"]
+    winner_rows = [r for r in rows if isinstance(r, dict) and r.get("classification") == "winner"]
+    opportunity_rows = [
+        r for r in rows if isinstance(r, dict) and r.get("classification") == "opportunity"
+    ]
+    total_conv_value = sum(
+        float(r.get("conversion_value") or 0) for r in rows if isinstance(r, dict)
+    )
+    summary = {
+        "terms_count": len(rows),
+        "waste_terms_count": len(waste_rows),
+        "winner_terms_count": len(winner_rows),
+        "opportunity_terms_count": len(opportunity_rows),
+        "total_cost": round(total_cost, 2),
+        "total_conversions": round(total_conv, 2),
+        "total_conversion_value": round(total_conv_value, 2),
+        "pmax_gap": has_pmax,
+        "pmax_terms_note": (
+            "Performance Max search terms not included. "
+            "Requires campaign_search_term_view (planned)."
+        ) if has_pmax else None,
+    }
+
+    top_recs = [s["recommendation"] for s in signals[:5] if s.get("recommendation")]
+
+    warnings = []
+    if currency_ctx.get("warning"):
+        warnings.append(currency_ctx["warning"])
+    if source == "mock_fallback":
+        warnings.append(
+            "API call failed. Showing demo data. "
+            "Your account is connected but the API returned an error."
+        )
+    elif source == "mock":
+        warnings.append("No live Google Ads connection. Showing demo data.")
+    if has_pmax:
+        warnings.append(
+            "This account has Performance Max campaigns. "
+            "PMax search terms are not included in this view "
+            "(search_term_view limitation). Full PMax term visibility is planned."
+        )
+    # Negative keyword actions: not implemented
+    warnings.append(
+        "Negative keyword actions are not yet available. "
+        "Waste term signals are recommendations only — no changes are applied automatically."
+    )
+
+    return jsonify(
+        _gads_build_module_response(
+            module_id="search_terms",
+            module_label="Search Terms",
+            source=source,
+            customer_id=customer_id,
+            manager_customer_id=manager_cid,
+            date_range=date_range,
+            currency_ctx=currency_ctx,
+            summary=summary,
+            signals=signals,
+            recommendations=top_recs,
+            rows=rows,
             warnings=warnings,
         )
     )
