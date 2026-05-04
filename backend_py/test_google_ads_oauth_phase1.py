@@ -259,22 +259,29 @@ class TestGadsValidateRoute(unittest.TestCase):
         data = resp.get_json()
         self.assertEqual(data["status"], "oauth_required")
 
-    def test_validate_with_token_returns_token_stored(self):
+    def test_validate_with_token_attempts_api_validation(self):
+        # Phase 2A: validate now calls the token refresh + API.
+        # With a fake refresh token, the refresh call returns an error (mock 401).
         _gads_token_store(user_id=1, token_data={"refresh_token": "r3", "access_token": "a3"})
-        with patch.dict(os.environ, _set_gads_env()):
-            resp = self.client.post("/api/connectors/google-ads/validate")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        with patch("app.requests.post", return_value=mock_resp):
+            with patch.dict(os.environ, _set_gads_env()):
+                resp = self.client.post("/api/connectors/google-ads/validate")
         data = resp.get_json()
-        self.assertTrue(data["success"])
-        self.assertEqual(data["status"], "token_stored")
-        self.assertFalse(data["api_validated"])
-        self.assertFalse(data["connected_live"])
+        self.assertFalse(data["success"])
+        self.assertFalse(data.get("api_validated", True))
+        self.assertFalse(data.get("connected_live", True))
         # Clean up
         _gads_token_revoke(user_id=1)
 
     def test_validate_does_not_leak_secrets(self):
         _gads_token_store(user_id=1, token_data={"refresh_token": "REFRESH_LEAK_CHECK", "access_token": "ACCESS_LEAK_CHECK"})
-        with patch.dict(os.environ, _set_gads_env()):
-            resp = self.client.post("/api/connectors/google-ads/validate")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        with patch("app.requests.post", return_value=mock_resp):
+            with patch.dict(os.environ, _set_gads_env()):
+                resp = self.client.post("/api/connectors/google-ads/validate")
         resp_text = resp.get_data(as_text=True)
         self.assertNotIn("REFRESH_LEAK_CHECK", resp_text)
         self.assertNotIn("ACCESS_LEAK_CHECK", resp_text)

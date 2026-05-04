@@ -19809,7 +19809,43 @@ def _google_ads_mock_metrics_response(account_id, days):
 
 @app.route("/api/connectors/google-ads/accounts", methods=["GET"])
 def google_ads_accounts():
-    """Return Google Ads accounts (Coolbits gateway when enabled, fallback to mock)."""
+    """Return Google Ads accounts. Live data when connected_live, empty when token_stored, mock otherwise."""
+    user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id)
+    has_token = meta is not None and meta.get("status") == "active"
+    api_validated = has_token and bool((meta or {}).get("api_validated"))
+
+    if api_validated:
+        # connected_live: return real accessible customers from DB
+        customers = _gads_get_accessible_customers(user_id)
+        accounts = [
+            {
+                "id": c["customer_id"],
+                "name": c["display_name"],
+                "type": "Client",
+                "resource_name": c["resource_name"],
+            }
+            for c in customers
+        ]
+        return jsonify({
+            "accounts": accounts,
+            "source": "google_ads_api",
+            "connected_live": True,
+            "connected_mock": False,
+            "message": "Live Google Ads accounts.",
+        })
+
+    if has_token:
+        # token_stored: validated OAuth but API not yet validated — do not return mock as live
+        return jsonify({
+            "accounts": [],
+            "source": "none",
+            "connected_live": False,
+            "connected_mock": False,
+            "message": "OAuth token stored. Validate Google Ads API access to load accounts.",
+        })
+
+    # config_missing / oauth_required: Coolbits gateway or mock
     mcc_id = request.args.get("mcc_id", "").strip()
     gw_params = _google_ads_attach_mcc_params({}, mcc_id)
     path_candidates = [
@@ -20211,13 +20247,18 @@ def google_ads_reports():
 
 @app.route("/api/connectors/google-ads/test-call", methods=["POST"])
 def google_ads_test_call():
-    """Simulate a Google Ads API call with realistic response"""
+    """Simulate a Google Ads API call with realistic response. Returns latest validation state from DB when available."""
     data = request.get_json(force=True, silent=True) or {}
     endpoint = data.get('endpoint', '/v17/customers/123456/campaigns')
     method = data.get('method', 'GET')
 
     import time
     start = time.time()
+
+    # Check actual validation state — do not make a live API call
+    user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id)
+    is_api_validated = bool((meta or {}).get("api_validated"))
 
     # Simulate API response based on endpoint pattern
     if 'campaigns' in endpoint:
@@ -20255,6 +20296,15 @@ def google_ads_test_call():
 
     elapsed = round((time.time() - start) * 1000 + 127, 0)  # Add simulated latency
 
+    if is_api_validated:
+        customers = _gads_get_accessible_customers(user_id)
+        message = "Simulated Google Ads API response. Campaign read-only data is not implemented yet (Phase 2B)."
+        source = "simulated"
+    else:
+        customers = []
+        message = "Simulated Google Ads API response. API validation pending — click Validate Access first."
+        source = "mock"
+
     return jsonify({
         "request": {
             "method": method,
@@ -20276,9 +20326,10 @@ def google_ads_test_call():
         },
         "latency_ms": elapsed,
         "quota": {"operations_remaining": 14567, "daily_limit": 15000},
-        "source": "mock",
-        "api_validated": False,
-        "message": "Simulated Google Ads API response. No live API call was made.",
+        "source": source,
+        "api_validated": is_api_validated,
+        "accessible_customers_count": len(customers),
+        "message": message,
     })
 
 
@@ -20288,6 +20339,8 @@ _GADS_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 _GADS_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 _GADS_OAUTH_STATE_TTL_SECONDS = 600
 _GADS_SCOPES_DEFAULT = "https://www.googleapis.com/auth/adwords"
+_GADS_API_VERSION = "v17"
+_GADS_API_BASE = "https://googleads.googleapis.com"
 
 
 def _gads_oauth_configured():
@@ -20499,6 +20552,246 @@ def _gads_token_revoke(user_id):
         conn.close()
 
 
+def _gads_update_metadata(user_id, updates):
+    """Merge updates dict into provider_credentials metadata_json for the google-ads row."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT metadata_json FROM provider_credentials"
+            " WHERE user_id = ? AND provider_slug = 'google-ads' AND client_id = 0 LIMIT 1",
+            (int(user_id or 0),),
+        ).fetchone()
+        if not row:
+            return False
+        meta = _provider_credential_metadata_load(row["metadata_json"])
+        meta.update(updates)
+        conn.execute(
+            "UPDATE provider_credentials SET metadata_json = ?, updated_at = datetime('now')"
+            " WHERE user_id = ? AND provider_slug = 'google-ads' AND client_id = 0",
+            (json.dumps(meta, ensure_ascii=False), int(user_id or 0)),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def _gads_get_fresh_access_token(user_id):
+    """
+    Obtain a fresh access_token by posting to the Google token endpoint using the stored
+    refresh_token. The access_token is never stored. Returns a safe dict:
+      {"success": True, "access_token": <str>}
+      {"success": False, "error": <code>, "message": <safe_str>}
+    Never logs or returns refresh_token, client_secret, or developer_token.
+    """
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT secret_encrypted FROM provider_credentials"
+            " WHERE user_id = ? AND provider_slug = 'google-ads' AND client_id = 0 AND status = 'active' LIMIT 1",
+            (int(user_id or 0),),
+        ).fetchone()
+    except Exception:
+        row = None
+    finally:
+        conn.close()
+
+    if not row or not row["secret_encrypted"]:
+        return {"success": False, "error": "no_token", "message": "No active OAuth token found."}
+
+    try:
+        secret_payload_str = _decrypt_provider_secret(row["secret_encrypted"])
+        secret_payload = json.loads(secret_payload_str) if secret_payload_str else {}
+    except Exception:
+        _gads_update_metadata(user_id, {"token_validated": False, "api_validated": False})
+        return {"success": False, "error": "token_decrypt_error", "message": "Token decryption failed."}
+
+    refresh_token = str(secret_payload.get("refresh_token") or "").strip()
+    if not refresh_token:
+        _gads_update_metadata(user_id, {"token_validated": False, "api_validated": False})
+        return {"success": False, "error": "no_refresh_token", "message": "No refresh token in stored credentials."}
+
+    cfg = _gads_oauth_config_internal()
+    if not cfg.get("client_id") or not cfg.get("client_secret"):
+        return {"success": False, "error": "config_missing", "message": "OAuth config is incomplete."}
+
+    try:
+        resp = requests.post(
+            _GADS_TOKEN_ENDPOINT,
+            data={
+                "client_id": cfg["client_id"],
+                "client_secret": cfg["client_secret"],
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+            timeout=15,
+        )
+    except Exception:
+        return {"success": False, "error": "token_refresh_network_error", "message": "Network error during token refresh."}
+
+    if resp.status_code == 200:
+        try:
+            token_resp = resp.json()
+        except Exception:
+            return {"success": False, "error": "token_refresh_parse_error", "message": "Failed to parse token refresh response."}
+        access_token = str(token_resp.get("access_token") or "").strip()
+        if not access_token:
+            return {"success": False, "error": "token_refresh_no_access_token", "message": "Token refresh returned no access_token."}
+        return {"success": True, "access_token": access_token}
+    else:
+        _gads_update_metadata(user_id, {"token_validated": False, "api_validated": False})
+        safe_status = resp.status_code
+        # Do not include response body — may contain client_secret echo or other sensitive data
+        return {
+            "success": False,
+            "error": "token_refresh_failed",
+            "message": f"Token refresh failed (HTTP {safe_status}). Re-authorize via OAuth.",
+            "status_code": safe_status,
+        }
+
+
+def _gads_list_accessible_customers(access_token, developer_token):
+    """
+    Call Google Ads REST API ListAccessibleCustomers.
+    Returns safe dict — never includes access_token or developer_token in return value.
+    """
+    url = f"{_GADS_API_BASE}/{_GADS_API_VERSION}/customers:listAccessibleCustomers"
+    try:
+        resp = requests.get(
+            url,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "developer-token": developer_token,
+            },
+            timeout=20,
+        )
+    except Exception:
+        return {"success": False, "error": "api_network_error", "message": "Network error contacting Google Ads API."}
+
+    if resp.status_code == 200:
+        try:
+            data = resp.json()
+        except Exception:
+            return {"success": False, "error": "api_parse_error", "message": "Failed to parse Google Ads API response."}
+        resource_names = data.get("resourceNames") or []
+        customer_ids = []
+        for rn in resource_names:
+            # resource_name format: "customers/1234567890"
+            parts = str(rn).split("/")
+            if len(parts) == 2 and parts[0] == "customers" and parts[1].replace("-", "").isdigit():
+                customer_ids.append(parts[1].replace("-", ""))
+        return {
+            "success": True,
+            "customer_resource_names": resource_names,
+            "customer_ids": customer_ids,
+            "count": len(customer_ids),
+        }
+    else:
+        try:
+            err_body = resp.json()
+            # Extract only safe fields — never log the full body (may contain request details)
+            google_err = err_body.get("error", {})
+            safe_msg = str(google_err.get("message") or "Google Ads API error.")[:300]
+            err_status = str(google_err.get("status") or "UNKNOWN")
+        except Exception:
+            safe_msg = f"Google Ads API returned HTTP {resp.status_code}."
+            err_status = "UNKNOWN"
+        return {
+            "success": False,
+            "error": "google_ads_api_error",
+            "status_code": resp.status_code,
+            "google_status": err_status,
+            "message": safe_msg,
+        }
+
+
+def _gads_store_accessible_customers(user_id, customer_ids):
+    """
+    Upsert accessible customer IDs into google_ads_accessible_customers table.
+    Marks all previous rows for this user as not_seen, then inserts/updates the fresh list.
+    Returns count of active rows stored.
+    """
+    if not customer_ids:
+        return 0
+    conn = get_db()
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS google_ads_accessible_customers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                customer_id TEXT NOT NULL,
+                resource_name TEXT NOT NULL,
+                display_name TEXT,
+                status TEXT NOT NULL DEFAULT 'accessible',
+                source TEXT NOT NULL DEFAULT 'google_ads_api',
+                last_seen_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(user_id, customer_id)
+            )"""
+        )
+        conn.execute(
+            "UPDATE google_ads_accessible_customers SET status = 'not_seen', updated_at = datetime('now')"
+            " WHERE user_id = ?",
+            (int(user_id or 0),),
+        )
+        now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        for cid in customer_ids:
+            digits = str(cid).replace("-", "")
+            if len(digits) == 10:
+                formatted = f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+            else:
+                formatted = digits
+            display = f"Google Ads Customer {formatted}"
+            resource_name = f"customers/{digits}"
+            conn.execute(
+                "INSERT INTO google_ads_accessible_customers"
+                " (user_id, customer_id, resource_name, display_name, status, source, last_seen_at, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, 'accessible', 'google_ads_api', ?, datetime('now'), ?)"
+                " ON CONFLICT(user_id, customer_id) DO UPDATE SET"
+                "   status = 'accessible',"
+                "   display_name = excluded.display_name,"
+                "   last_seen_at = excluded.last_seen_at,"
+                "   updated_at = excluded.updated_at",
+                (int(user_id or 0), digits, resource_name, display, now, now),
+            )
+        conn.commit()
+        count = conn.execute(
+            "SELECT COUNT(*) FROM google_ads_accessible_customers WHERE user_id = ? AND status = 'accessible'",
+            (int(user_id or 0),),
+        ).fetchone()[0]
+        return count
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def _gads_get_accessible_customers(user_id):
+    """Return list of accessible customers from DB for the given user."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT customer_id, resource_name, display_name FROM google_ads_accessible_customers"
+            " WHERE user_id = ? AND status = 'accessible' ORDER BY customer_id",
+            (int(user_id or 0),),
+        ).fetchall()
+        return [
+            {
+                "customer_id": r["customer_id"],
+                "resource_name": r["resource_name"],
+                "display_name": r["display_name"] or f"Google Ads Customer {r['customer_id']}",
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
 # ─── Google Ads Routes ────────────────────────────────────────────────────────
 
 @app.route("/api/connectors/google-ads/reality/status", methods=["GET"])
@@ -20511,6 +20804,11 @@ def google_ads_reality_status():
     api_validated = has_token and bool((meta or {}).get("api_validated"))
     connected_live = api_validated
     connected_mock = not connected_live
+
+    accessible_customers_count = 0
+    if connected_live:
+        customers = _gads_get_accessible_customers(user_id)
+        accessible_customers_count = len(customers)
 
     if not oauth_configured:
         mode = "config_missing"
@@ -20526,13 +20824,14 @@ def google_ads_reality_status():
         mode = "connected_live"
         ui_label = "Live Connected"
         ui_badge_class = "success"
-        message = "Google Ads live connection active."
+        message = "Live Google Ads account access validated."
         connected_mock = False
     else:
         mode = "token_stored"
         ui_label = "Token Stored"
         ui_badge_class = "info"
-        message = "OAuth token stored. Click 'Validate Access' to confirm the connection. Demo data shown until validated."
+        connected_mock = True
+        message = "OAuth token stored. API validation pending. Click 'Validate Access' to verify Google Ads API access."
 
     if COOLBITS_GATEWAY_ENABLED and mode not in ("config_missing", "connected_live"):
         message += " (Coolbits gateway is enabled.)"
@@ -20548,7 +20847,8 @@ def google_ads_reality_status():
         "api_validated": api_validated,
         "customer_id": (meta or {}).get("customer_id") if has_token else None,
         "login_customer_id": (meta or {}).get("login_customer_id") if has_token else None,
-        "data_source": "live" if connected_live else "mock",
+        "accessible_customers_count": accessible_customers_count,
+        "data_source": "google_ads_api" if connected_live else "mock",
         "ui_label": ui_label,
         "ui_badge_class": ui_badge_class,
         "message": message,
@@ -20707,13 +21007,74 @@ def google_ads_validate():
             "status": "oauth_required",
             "message": "No active OAuth token. Connect via OAuth first.",
         }), 400
+
+    # Step 1: Get fresh access token via refresh_token
+    token_result = _gads_get_fresh_access_token(user_id)
+    if not token_result.get("success"):
+        err = token_result.get("error", "token_error")
+        return jsonify({
+            "success": False,
+            "status": err,
+            "api_validated": False,
+            "connected_live": False,
+            "message": token_result.get("message", "Token refresh failed."),
+        }), 400
+
+    access_token = token_result["access_token"]
+    cfg = _gads_oauth_config_internal()
+    developer_token = cfg.get("developer_token", "")
+
+    # Step 2: Call ListAccessibleCustomers
+    api_result = _gads_list_accessible_customers(access_token, developer_token)
+
+    if not api_result.get("success"):
+        _gads_update_metadata(user_id, {
+            "api_validated": False,
+            "last_validated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+        return jsonify({
+            "success": False,
+            "status": api_result.get("error", "api_error"),
+            "api_validated": False,
+            "connected_live": False,
+            "message": api_result.get("message", "Google Ads API validation failed."),
+        }), 400
+
+    customer_ids = api_result.get("customer_ids", [])
+    now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Step 3: Store accessible customers
+    stored_count = _gads_store_accessible_customers(user_id, customer_ids)
+
+    # Step 4: Update metadata — mark validated
+    first_customer_id = customer_ids[0] if customer_ids else None
+    _gads_update_metadata(user_id, {
+        "token_validated": True,
+        "api_validated": True,
+        "last_validated_at": now_iso,
+        "customer_id": first_customer_id,
+    })
+
+    # Step 5: Build safe customer list for response
+    customers_safe = [
+        {
+            "customer_id": cid,
+            "resource_name": f"customers/{cid}",
+            "display_name": f"Google Ads Customer {cid[:3]}-{cid[3:6]}-{cid[6:]}" if len(cid) == 10 else f"Google Ads Customer {cid}",
+        }
+        for cid in customer_ids
+    ]
+
     return jsonify({
         "success": True,
-        "status": "token_stored",
-        "token_validated": bool(meta.get("token_validated")),
-        "api_validated": False,
-        "connected_live": False,
-        "message": "Token stored. Full API validation (connected_live=true) requires Phase 2.",
+        "provider": "google_ads",
+        "status": "connected_live",
+        "token_validated": True,
+        "api_validated": True,
+        "connected_live": True,
+        "accessible_customers_count": stored_count,
+        "customers": customers_safe,
+        "message": "Google Ads access validated.",
     })
 
 

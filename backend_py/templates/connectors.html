@@ -890,9 +890,9 @@
             </div>
 
             <!-- Demo Data Notice (shown when no live OAuth connection) -->
-            <div id="gadsDemoNotice" class="alert alert-secondary border-secondary py-2 mb-3 d-flex align-items-center gap-2">
+            <div id="gadsDemoNotice" class="alert alert-secondary border-secondary py-2 mb-3 d-flex align-items-center gap-2" style="display:none!important">
               <i class="bi bi-info-circle-fill"></i>
-              <span><strong>Demo Data</strong> — Showing demo/mock Google Ads data. No live OAuth connection is active. <a href="#" onclick="return false;" class="alert-link">Connect with OAuth</a> to use your real account data.</span>
+              <span id="gadsDemoNoticeText"><strong>Demo Data</strong> — Showing demo/mock Google Ads data. <a href="#" onclick="return false;" class="alert-link">Connect with OAuth</a> to use your real account data.</span>
             </div>
 
             <!-- Account Selector Bar -->
@@ -5562,11 +5562,28 @@
         badge.textContent = rData.ui_label || 'Demo Data';
         badge.className = badgeClassMap[rData.ui_badge_class] || 'badge bg-secondary';
         const notice = document.getElementById('gadsDemoNotice');
-        if (notice) notice.style.display = (rData.connected_live === true) ? 'none' : '';
+        const noticeText = document.getElementById('gadsDemoNoticeText');
+        const mode = rData.mode || 'config_missing';
+        if (notice) {
+          if (mode === 'connected_live') {
+            notice.style.display = 'none';
+          } else if (mode === 'token_stored') {
+            notice.style.display = '';
+            notice.className = 'alert alert-info border-info py-2 mb-3 d-flex align-items-center gap-2';
+            if (noticeText) noticeText.innerHTML = '<strong>OAuth token stored.</strong> API validation pending. Click <em>Validate Access</em> to verify Google Ads API access.';
+          } else if (mode === 'oauth_required') {
+            notice.style.display = '';
+            notice.className = 'alert alert-secondary border-secondary py-2 mb-3 d-flex align-items-center gap-2';
+            if (noticeText) noticeText.innerHTML = '<strong>Demo Data</strong> — Showing demo/mock Google Ads data. <a href="#" onclick="gadsStartOAuth();return false;" class="alert-link">Connect with OAuth</a> to use your real account data.';
+          } else {
+            notice.style.display = '';
+            notice.className = 'alert alert-secondary border-secondary py-2 mb-3 d-flex align-items-center gap-2';
+            if (noticeText) noticeText.innerHTML = '<strong>Demo Data</strong> — Showing demo/mock Google Ads data. <a href="#" onclick="return false;" class="alert-link">Connect with OAuth</a> to use your real account data.';
+          }
+        }
         // Drive OAuth button state from reality mode
         const btnArea = document.getElementById('gadsOAuthButtonArea');
         if (btnArea) {
-          const mode = rData.mode || 'config_missing';
           if (mode === 'config_missing') {
             btnArea.innerHTML = '<button class="btn btn-sm btn-outline-secondary" disabled title="Set GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_DEVELOPER_TOKEN in environment to enable OAuth."><i class="bi bi-lock"></i> OAuth Not Configured</button>';
           } else if (mode === 'oauth_required') {
@@ -5644,17 +5661,24 @@
   }
 
   async function gadsValidateToken() {
+    const btnArea = document.getElementById('gadsOAuthButtonArea');
+    const prevHtml = btnArea ? btnArea.innerHTML : '';
+    if (btnArea) btnArea.innerHTML = '<button class="btn btn-sm btn-outline-info me-1" disabled><span class="spinner-border spinner-border-sm me-1"></span>Validating...</button>';
     try {
       const res = await fetch('/api/connectors/google-ads/validate', { method: 'POST' });
       const data = await res.json();
-      if (data.success) {
+      if (data.success && data.connected_live) {
+        const count = data.accessible_customers_count || 0;
+        if (window.showToast) window.showToast('Google Ads', `Google Ads access validated. ${count} account(s) accessible.`, 'success');
+      } else if (data.success) {
         if (window.showToast) window.showToast('Google Ads', data.message || 'Token validated.', 'success');
       } else {
         if (window.showToast) window.showToast('Google Ads', data.message || 'Validation failed.', 'warning');
       }
-      // Refresh badge/button state
-      gadsInit();
+      // Refresh badge/button state and accounts
+      await gadsInit();
     } catch (e) {
+      if (btnArea) btnArea.innerHTML = prevHtml;
       if (window.showToast) window.showToast('Google Ads', 'Validation error: ' + e.message, 'danger');
     }
   }
