@@ -20339,7 +20339,7 @@ _GADS_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 _GADS_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 _GADS_OAUTH_STATE_TTL_SECONDS = 600
 _GADS_SCOPES_DEFAULT = "https://www.googleapis.com/auth/adwords"
-_GADS_API_VERSION = "v17"
+_GADS_API_VERSION = "v20"
 _GADS_API_BASE = "https://googleads.googleapis.com"
 
 

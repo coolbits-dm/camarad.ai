@@ -525,7 +525,7 @@ class TestTestCallSimulated(unittest.TestCase):
 
     def test_test_call_token_stored_says_validation_pending(self):
         with app.test_client() as c:
-            r = c.post("/api/connectors/google-ads/test-call", json={"endpoint": "/v17/customers/123/campaigns"})
+            r = c.post("/api/connectors/google-ads/test-call", json={"endpoint": "/v20/customers/123/campaigns"})
         data = json.loads(r.data)
         self.assertFalse(data.get("api_validated"))
         self.assertIn("source", data)
@@ -547,7 +547,7 @@ class TestTestCallSimulated(unittest.TestCase):
 
         with app.test_client() as c:
             c.post("/api/connectors/google-ads/validate")
-            r = c.post("/api/connectors/google-ads/test-call", json={"endpoint": "/v17/customers/123/campaigns"})
+            r = c.post("/api/connectors/google-ads/test-call", json={"endpoint": "/v20/customers/123/campaigns"})
         data = json.loads(r.data)
         self.assertTrue(data.get("api_validated"))
         self.assertEqual(data.get("source"), "simulated")
