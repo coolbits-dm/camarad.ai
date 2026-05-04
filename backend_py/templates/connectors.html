@@ -1087,15 +1087,50 @@
                 <div id="gadsPacingContent"></div>
               </div>
 
-              <!-- ── Reports Tab ───────────────────────────────────── -->
+              <!-- ── Intelligence Modules / Reports Tab ─────────── -->
               <div class="tab-pane fade" id="gadsReports">
-                <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
-                  <span class="text-muted small me-1">Quick Reports:</span>
-                  <button class="btn btn-sm btn-outline-info" onclick="gadsRunPreset('account_health')"><i class="bi bi-heart-pulse"></i> Account Health</button>
-                  <button class="btn btn-sm btn-outline-warning" onclick="gadsRunPreset('waste_finder')"><i class="bi bi-trash"></i> Waste Finder</button>
-                  <button class="btn btn-sm btn-outline-success" onclick="gadsRunPreset('roas_leaders')"><i class="bi bi-trophy"></i> ROAS Leaders</button>
-                  <button class="btn btn-sm btn-outline-primary" onclick="gadsRunPreset('conversion_efficiency')"><i class="bi bi-bullseye"></i> Conv. Efficiency</button>
-                  <div class="ms-auto d-flex gap-2 align-items-center">
+                <!-- Module cards row -->
+                <div class="d-flex flex-wrap gap-2 mb-3 align-items-start" id="gadsModuleCards">
+                  <!-- Live modules -->
+                  <button class="btn btn-sm btn-outline-info position-relative" onclick="gadsOpenModule('account_health')" id="gadsModuleBtn_account_health">
+                    <i class="bi bi-heart-pulse"></i> Account Health
+                    <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
+                  </button>
+                  <button class="btn btn-sm btn-outline-warning position-relative" onclick="gadsOpenModule('waste_finder')" id="gadsModuleBtn_waste_finder">
+                    <i class="bi bi-trash"></i> Waste Finder
+                    <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
+                  </button>
+                  <button class="btn btn-sm btn-outline-success position-relative" onclick="gadsRunPreset('roas_leaders')" id="gadsModuleBtn_roas_leaders">
+                    <i class="bi bi-trophy"></i> ROAS Leaders
+                    <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
+                  </button>
+                  <button class="btn btn-sm btn-outline-primary position-relative" onclick="gadsRunPreset('conversion_efficiency')" id="gadsModuleBtn_conversion_efficiency">
+                    <i class="bi bi-bullseye"></i> Conv. Efficiency
+                    <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
+                  </button>
+                  <!-- Planned modules — visible but disabled -->
+                  <button class="btn btn-sm btn-outline-secondary position-relative" disabled title="Planned — Search Terms module coming soon">
+                    <i class="bi bi-search"></i> Search Terms
+                    <span class="badge bg-secondary ms-1" style="font-size:.6rem;">Planned</span>
+                  </button>
+                  <button class="btn btn-sm btn-outline-secondary position-relative" disabled title="Planned — Performance Max module coming soon">
+                    <i class="bi bi-lightning"></i> PMax
+                    <span class="badge bg-secondary ms-1" style="font-size:.6rem;">Planned</span>
+                  </button>
+                  <button class="btn btn-sm btn-outline-secondary position-relative" disabled title="Planned — Budget & Pacing module coming soon">
+                    <i class="bi bi-cash-stack"></i> Budget
+                    <span class="badge bg-secondary ms-1" style="font-size:.6rem;">Planned</span>
+                  </button>
+                  <button class="btn btn-sm btn-outline-secondary position-relative" disabled title="Planned — Assets & Creatives module coming soon">
+                    <i class="bi bi-image"></i> Assets
+                    <span class="badge bg-secondary ms-1" style="font-size:.6rem;">Planned</span>
+                  </button>
+                  <button class="btn btn-sm btn-outline-secondary position-relative" disabled title="Limited availability — Audiences module requires capability check">
+                    <i class="bi bi-people"></i> Audiences
+                    <span class="badge bg-warning text-dark ms-1" style="font-size:.6rem;">Limited</span>
+                  </button>
+                  <!-- Date + CSV row -->
+                  <div class="ms-auto d-flex gap-2 align-items-center flex-wrap">
                     <select id="gadsReportDateRange" class="form-select form-select-sm bg-dark text-light" style="width:auto;">
                       <option value="LAST_7_DAYS">Last 7 days</option>
                       <option value="LAST_14_DAYS">Last 14 days</option>
@@ -1104,13 +1139,13 @@
                       <option value="THIS_MONTH">This month</option>
                       <option value="LAST_MONTH">Last month</option>
                     </select>
-                    <select class="form-select form-select-sm bg-dark text-light" style="width:auto;" disabled title="Currency conversion coming later">
+                    <select class="form-select form-select-sm bg-dark text-light" style="width:auto;" disabled title="Native account currency only — conversion not available">
                       <option>Native account currency</option>
                     </select>
                     <button class="btn btn-sm btn-outline-secondary" onclick="gadsExportReportCSV()"><i class="bi bi-download"></i> CSV</button>
                   </div>
                 </div>
-                <div id="gadsReportResult"><p class="text-muted small">Select a preset above to run a report.</p></div>
+                <div id="gadsReportResult"><p class="text-muted small">Select a module above to run a report.</p></div>
               </div>
 
               <!-- ── Asset Generator Tab ───────────────────────────── -->
@@ -6479,7 +6514,7 @@
     `;
   }
 
-  // ── Reports ───────────────────────────────────────────────────────────────
+  // ── Reports & Intelligence Modules ────────────────────────────────────────
   const _GADS_REPORT_PRESETS = {
     account_health: {
       name: 'Account Health',
@@ -6512,7 +6547,180 @@
   };
 
   function gadsOnReportsTabOpen() {
-    // no auto-load — user picks preset
+    // no auto-load — user picks module/preset
+  }
+
+  // ── Intelligence Module opener ─────────────────────────────────────────
+  async function gadsOpenModule(moduleId) {
+    const { accountId } = _gadsQs();
+    const dateRange = (document.getElementById('gadsReportDateRange') || {}).value || 'LAST_30_DAYS';
+    const container = document.getElementById('gadsReportResult');
+    if (!accountId) {
+      container.innerHTML = '<p class="text-warning small">No account selected.</p>';
+      return;
+    }
+    const mccId = gadsState.mccId || '';
+    const days = {'LAST_7_DAYS':7,'LAST_14_DAYS':14,'LAST_30_DAYS':30,
+                  'LAST_90_DAYS':90,'THIS_MONTH':30,'LAST_MONTH':30}[dateRange] || 30;
+
+    const endpointMap = {
+      'account_health': '/api/connectors/google-ads/intelligence/account-health',
+      'waste_finder':   '/api/connectors/google-ads/intelligence/waste-finder',
+    };
+    const ep = endpointMap[moduleId];
+    if (!ep) return;
+
+    container.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Running module…</div>';
+    try {
+      let url = `${ep}?customer_id=${encodeURIComponent(accountId)}&days=${days}`;
+      if (mccId) url += `&mcc_id=${encodeURIComponent(mccId)}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (moduleId === 'account_health') gadsRenderAccountHealth(data);
+      else if (moduleId === 'waste_finder') gadsRenderWasteFinder(data);
+      else container.innerHTML = `<pre class="small text-muted">${JSON.stringify(data, null, 2)}</pre>`;
+    } catch (e) {
+      container.innerHTML = `<div class="alert alert-danger">Module failed: ${e.message}</div>`;
+    }
+  }
+
+  // ── Account Health renderer ─────────────────────────────────────────────
+  function gadsRenderAccountHealth(data) {
+    const container = document.getElementById('gadsReportResult');
+    const source = data.source || '';
+    const signals = data.signals || [];
+    const summary = data.summary || {};
+    const currency = (data.currency && data.currency.currency_code) || null;
+    const currBadge = currency
+      ? `<span class="badge bg-secondary">${currency}</span>`
+      : '<span class="badge bg-secondary text-muted">currency unknown</span>';
+    const warnings = data.warnings || [];
+    const counts = summary.signal_counts || {};
+
+    let warnHtml = warnings.map(w =>
+      `<div class="alert alert-warning py-1 px-2 small mb-2">${w}</div>`
+    ).join('');
+
+    const sevColor = {'critical':'danger','warning':'warning','info':'info'};
+    const sevIcon  = {'critical':'bi-exclamation-octagon','warning':'bi-exclamation-triangle','info':'bi-info-circle'};
+
+    const top5 = signals.slice(0, 5);
+    const signalHtml = top5.length ? top5.map(s => {
+      const col = sevColor[s.severity] || 'secondary';
+      const ico = sevIcon[s.severity] || 'bi-circle';
+      const ev = s.evidence || {};
+      let evidenceHtml = '';
+      if (ev.spend) evidenceHtml += `<span class="badge bg-dark border me-1">Spend: ${ev.spend.formatted}</span>`;
+      if (ev.campaign_cpa) evidenceHtml += `<span class="badge bg-dark border me-1">CPA: ${ev.campaign_cpa.formatted}</span>`;
+      if (ev.avg_cpc) evidenceHtml += `<span class="badge bg-dark border me-1">CPC: ${ev.avg_cpc.formatted}</span>`;
+      if (ev.roas != null) evidenceHtml += `<span class="badge bg-dark border me-1">ROAS: ${ev.roas}x</span>`;
+      if (ev.ctr_pct != null) evidenceHtml += `<span class="badge bg-dark border me-1">CTR: ${ev.ctr_pct}%</span>`;
+      if (ev.concentration_pct != null) evidenceHtml += `<span class="badge bg-dark border me-1">${ev.concentration_pct}% concentrated</span>`;
+      return `
+        <div class="alert alert-${col} py-2 px-3 mb-2 small">
+          <div class="d-flex align-items-start gap-2">
+            <i class="bi ${ico} mt-1 flex-shrink-0"></i>
+            <div>
+              <div class="fw-semibold">${s.label}</div>
+              ${ev.campaign_name ? `<div class="text-muted small">${ev.campaign_name}</div>` : ''}
+              ${evidenceHtml ? `<div class="mt-1">${evidenceHtml}</div>` : ''}
+              <div class="mt-1 fst-italic text-muted">${s.recommendation || ''}</div>
+            </div>
+          </div>
+        </div>`;
+    }).join('') : '<p class="text-muted small">No signals detected for this date range.</p>';
+
+    const moreCount = signals.length - top5.length;
+    const moreHtml = moreCount > 0
+      ? `<p class="text-muted small mt-1">…and ${moreCount} more signal${moreCount > 1 ? 's' : ''}.</p>`
+      : '';
+
+    container.innerHTML = `
+      ${warnHtml}
+      <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+        <span class="fw-semibold"><i class="bi bi-heart-pulse me-1"></i>Account Health</span>
+        ${_gadsSourceBadge(source)}
+        ${currBadge}
+        <span class="badge bg-danger ms-1">${counts.critical || 0} critical</span>
+        <span class="badge bg-warning text-dark ms-1">${counts.warning || 0} warning</span>
+        <span class="badge bg-info text-dark ms-1">${counts.info || 0} info</span>
+        <span class="badge bg-secondary ms-auto" title="Health Score v1 planned">Score: planned</span>
+      </div>
+      <div id="gadsHealthSignals">${signalHtml}${moreHtml}</div>
+    `;
+  }
+
+  // ── Waste Finder renderer ───────────────────────────────────────────────
+  function gadsRenderWasteFinder(data) {
+    const container = document.getElementById('gadsReportResult');
+    const source = data.source || '';
+    const signals = data.signals || [];
+    const rows = data.rows || [];
+    const summary = data.summary || {};
+    const currency = (data.currency && data.currency.currency_code) || null;
+    const currBadge = currency
+      ? `<span class="badge bg-secondary">${currency}</span>`
+      : '<span class="badge bg-secondary text-muted">currency unknown</span>';
+    const warnings = data.warnings || [];
+    const counts = (summary.signal_counts) || {};
+
+    let warnHtml = warnings.map(w =>
+      `<div class="alert alert-warning py-1 px-2 small mb-2">${w}</div>`
+    ).join('');
+
+    const sevColor = {'critical':'danger','warning':'warning','info':'info'};
+    const sevIcon  = {'critical':'bi-exclamation-octagon','warning':'bi-exclamation-triangle','info':'bi-info-circle'};
+    const signalHtml = signals.slice(0,5).map(s => {
+      const col = sevColor[s.severity] || 'secondary';
+      const ico = sevIcon[s.severity] || 'bi-circle';
+      const ev = s.evidence || {};
+      let evBadges = '';
+      if (ev.spend) evBadges += `<span class="badge bg-dark border me-1">Spend: ${ev.spend.formatted}</span>`;
+      if (ev.roas != null) evBadges += `<span class="badge bg-dark border me-1">ROAS: ${ev.roas}x</span>`;
+      if (ev.campaign_cpa) evBadges += `<span class="badge bg-dark border me-1">CPA: ${ev.campaign_cpa.formatted}</span>`;
+      return `<div class="alert alert-${col} py-2 px-3 mb-2 small">
+        <i class="bi ${ico} me-2"></i><strong>${s.label}</strong>
+        ${ev.campaign_name ? ` — <span class="text-muted">${ev.campaign_name}</span>` : ''}
+        ${evBadges ? `<div class="mt-1">${evBadges}</div>` : ''}
+        <div class="text-muted fst-italic mt-1">${s.recommendation || ''}</div>
+      </div>`;
+    }).join('');
+
+    let tableHtml = '';
+    if (rows.length) {
+      const trs = rows.map(r =>
+        `<tr>
+          <td>${r.campaign || '—'}</td>
+          <td><span class="badge bg-${r.status === 'ENABLED' ? 'success' : 'secondary'}">${r.status || '—'}</span></td>
+          <td>${(r.cost||{}).formatted || '—'}</td>
+          <td>${r.conversions != null ? r.conversions : '—'}</td>
+          <td>${r.roas != null ? r.roas + 'x' : '—'}</td>
+          <td>${r.cpa ? r.cpa.formatted : '—'}</td>
+        </tr>`
+      ).join('');
+      tableHtml = `<div class="table-responsive mt-3">
+        <table class="table table-dark table-sm table-hover" id="gadsReportTable">
+          <thead><tr><th>Campaign</th><th>Status</th><th>Spend</th><th>Conv.</th><th>ROAS</th><th>CPA</th></tr></thead>
+          <tbody>${trs}</tbody>
+        </table>
+      </div>`;
+    }
+
+    const wasteSpend = (summary.total_waste_spend || {}).formatted || '—';
+    container.innerHTML = `
+      ${warnHtml}
+      <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+        <span class="fw-semibold"><i class="bi bi-trash me-1"></i>Waste Finder</span>
+        ${_gadsSourceBadge(source)}
+        ${currBadge}
+        <span class="badge bg-danger ms-1">${counts.critical || 0} critical</span>
+        <span class="badge bg-warning text-dark ms-1">${counts.warning || 0} warning</span>
+        <span class="text-muted small ms-auto">Waste spend: <strong>${wasteSpend}</strong></span>
+      </div>
+      ${signals.length ? signalHtml : '<p class="text-muted small">No waste signals detected.</p>'}
+      ${tableHtml}
+    `;
   }
 
   async function gadsRunPreset(presetKey) {

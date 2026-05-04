@@ -21430,6 +21430,828 @@ def google_ads_report_query():
     })
 
 
+# ── Phase 2E: Google Ads Intelligence Modules Framework ──────────────────────
+
+_GADS_INTELLIGENCE_MODULE_REGISTRY = [
+    {
+        "id": "account_health",
+        "label": "Account Health",
+        "category": "health",
+        "status": "live_v0",
+        "description": "Account-level health signals from campaign performance.",
+        "endpoint": "/api/connectors/google-ads/intelligence/account-health",
+        "requires": ["campaign_rows"],
+        "source": "derived",
+        "currency_sensitive": True,
+        "campaign_types": ["ALL"],
+        "notes": [],
+    },
+    {
+        "id": "waste_finder",
+        "label": "Waste Finder",
+        "category": "waste",
+        "status": "live_basic",
+        "description": "Campaigns with spend and no conversions, low ROAS, or high CPA.",
+        "endpoint": "/api/connectors/google-ads/intelligence/waste-finder",
+        "requires": ["campaign_rows"],
+        "source": "derived",
+        "currency_sensitive": True,
+        "campaign_types": ["ALL"],
+        "notes": [],
+    },
+    {
+        "id": "roas_leaders",
+        "label": "ROAS Leaders",
+        "category": "growth",
+        "status": "live_basic",
+        "description": "Best ROAS and conversion value candidates for scaling.",
+        "endpoint": "/api/connectors/google-ads/report/query",
+        "requires": ["campaign_rows"],
+        "source": "derived",
+        "currency_sensitive": True,
+        "campaign_types": ["ALL"],
+        "notes": ["Uses /report/query with ROAS Leaders preset."],
+    },
+    {
+        "id": "conversion_efficiency",
+        "label": "Conversion Efficiency",
+        "category": "growth",
+        "status": "live_basic",
+        "description": "CPA, conversion rate, and value per conversion by campaign.",
+        "endpoint": "/api/connectors/google-ads/report/query",
+        "requires": ["campaign_rows"],
+        "source": "derived",
+        "currency_sensitive": True,
+        "campaign_types": ["ALL"],
+        "notes": ["Uses /report/query with Conversion Efficiency preset."],
+    },
+    {
+        "id": "search_terms",
+        "label": "Search Terms",
+        "category": "search_terms",
+        "status": "planned",
+        "description": (
+            "Search term performance. Standard Search uses search_term_view. "
+            "PMax requires campaign_search_term_view (excludes PMax from search_term_view)."
+        ),
+        "endpoint": None,
+        "requires": ["google_ads_api"],
+        "source": "planned",
+        "currency_sensitive": True,
+        "campaign_types": ["SEARCH", "PERFORMANCE_MAX"],
+        "notes": [
+            "search_term_view does not include Performance Max search term data.",
+            "PMax search terms require campaign_search_term_view.",
+        ],
+    },
+    {
+        "id": "performance_max",
+        "label": "Performance Max",
+        "category": "pmax",
+        "status": "planned",
+        "description": (
+            "PMax campaign, asset group, asset group asset, and listing group intelligence."
+        ),
+        "endpoint": None,
+        "requires": ["google_ads_api"],
+        "source": "planned",
+        "currency_sensitive": True,
+        "campaign_types": ["PERFORMANCE_MAX"],
+        "notes": [
+            "Requires separate reporting paths from standard Search/Shopping.",
+            "Asset group asset performance labels via asset_group_asset resource.",
+        ],
+    },
+    {
+        "id": "budget_pacing",
+        "label": "Budget & Pacing",
+        "category": "budget",
+        "status": "planned",
+        "description": "Budget usage, limited-by-budget signals, and pacing recommendations.",
+        "endpoint": None,
+        "requires": ["google_ads_api"],
+        "source": "planned",
+        "currency_sensitive": True,
+        "campaign_types": ["ALL"],
+        "notes": [],
+    },
+    {
+        "id": "assets_creatives",
+        "label": "Assets & Creatives",
+        "category": "assets",
+        "status": "planned",
+        "description": "Asset coverage, ad strength, asset group assets, and creative fatigue.",
+        "endpoint": None,
+        "requires": ["google_ads_api"],
+        "source": "planned",
+        "currency_sensitive": False,
+        "campaign_types": ["PERFORMANCE_MAX", "SEARCH", "DISPLAY"],
+        "notes": [],
+    },
+    {
+        "id": "audiences_targeting",
+        "label": "Audiences & Targeting",
+        "category": "audiences",
+        "status": "planned_limited",
+        "description": (
+            "Audience insights and targeting. "
+            "AudienceInsightsService may require allowlist access."
+        ),
+        "endpoint": None,
+        "requires": ["google_ads_api"],
+        "source": "planned",
+        "currency_sensitive": True,
+        "campaign_types": ["ALL"],
+        "notes": [
+            "AudienceInsightsService may require allowlist access.",
+            "Fallback via campaign_audience_view available without allowlist.",
+        ],
+    },
+    {
+        "id": "geo_device",
+        "label": "Geo & Device",
+        "category": "geo_device",
+        "status": "planned",
+        "description": "Geographic and device performance breakdown.",
+        "endpoint": None,
+        "requires": ["google_ads_api"],
+        "source": "planned",
+        "currency_sensitive": True,
+        "campaign_types": ["ALL"],
+        "notes": [],
+    },
+    {
+        "id": "landing_pages",
+        "label": "Landing Pages",
+        "category": "landing_pages",
+        "status": "planned",
+        "description": "Landing page performance and expanded landing pages.",
+        "endpoint": None,
+        "requires": ["google_ads_api"],
+        "source": "planned",
+        "currency_sensitive": True,
+        "campaign_types": ["ALL"],
+        "notes": [],
+    },
+    {
+        "id": "conversion_tracking",
+        "label": "Conversion Tracking",
+        "category": "conversion_tracking",
+        "status": "planned",
+        "description": (
+            "Conversion action sanity, conversion lag, and value tracking health."
+        ),
+        "endpoint": None,
+        "requires": ["google_ads_api"],
+        "source": "planned",
+        "currency_sensitive": False,
+        "campaign_types": ["ALL"],
+        "notes": [],
+    },
+]
+
+
+def _gads_intelligence_module_registry():
+    """Return the intelligence module registry list."""
+    return list(_GADS_INTELLIGENCE_MODULE_REGISTRY)
+
+
+_GADS_CURRENCY_SYMBOLS = {
+    "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CAD": "CA$",
+    "AUD": "A$", "CHF": "CHF ", "CNY": "¥", "SEK": "kr ", "NOK": "kr ",
+    "DKK": "kr ", "NZD": "NZ$", "SGD": "S$", "HKD": "HK$", "MXN": "MX$",
+    "BRL": "R$", "ZAR": "R ", "INR": "₹", "RUB": "₽", "RON": "lei ",
+    "PLN": "zł ", "CZK": "Kč ", "HUF": "Ft ", "TRY": "₺", "AED": "د.إ ",
+    "SAR": "﷼ ", "KRW": "₩", "THB": "฿", "MYR": "RM ", "PHP": "₱",
+    "IDR": "Rp ", "VND": "₫",
+}
+
+
+def _gads_format_currency_evidence(amount, currency_code):
+    """Format a monetary value with currency context for signal evidence.
+
+    Returns dict: {amount, currency_code, formatted}.
+    Never defaults to USD — if currency_code is None, formatted shows '[?]'.
+    """
+    safe_code = str(currency_code or "").strip().upper() or None
+    safe_amount = round(float(amount or 0), 2)
+    if safe_code:
+        sym = _GADS_CURRENCY_SYMBOLS.get(safe_code, safe_code + " ")
+        formatted = f"{sym}{safe_amount:,.2f}"
+    else:
+        formatted = f"[?] {safe_amount:,.2f}"
+        safe_code = None
+    return {
+        "amount": safe_amount,
+        "currency_code": safe_code,
+        "formatted": formatted,
+    }
+
+
+def _gads_compute_account_health_signals(campaigns, totals, currency_ctx):
+    """Compute deterministic intelligence signals from campaign rows.
+
+    Signals (sorted critical > warning > info):
+    - zero_conversion_spend (waste, critical/warning)
+    - enabled_loser (waste, critical)
+    - low_roas_spend (waste, warning)
+    - high_cpa_campaign (waste, warning)
+    - tracking_sanity_warning (tracking, critical)
+    - spend_concentration_risk (structure, warning)
+    - conversion_concentration_risk (structure, warning)
+    - no_active_campaigns (structure, warning)
+    - low_ctr_campaign (efficiency, warning)
+    - high_cpc_outlier (efficiency, warning)
+    - paused_winner (growth, info)
+
+    Monetary evidence uses account-native currency. Never defaults to USD.
+    """
+    campaigns = campaigns if isinstance(campaigns, list) else []
+    totals = totals if isinstance(totals, dict) else {}
+    currency_code = (currency_ctx or {}).get("currency_code") or None
+
+    def _money(amount):
+        return _gads_format_currency_evidence(amount, currency_code)
+
+    signals = []
+
+    total_spend = float(totals.get("spend") or 0)
+    total_conversions = float(totals.get("conversions") or 0)
+    account_cpa = float(totals.get("cpa") or 0)
+
+    # Median CPC across all campaigns (for high_cpc_outlier)
+    all_cpcs = sorted(
+        float(c.get("avg_cpc") or 0) for c in campaigns
+        if isinstance(c, dict) and float(c.get("avg_cpc") or 0) > 0
+    )
+    if all_cpcs:
+        mid = len(all_cpcs) // 2
+        median_cpc = (
+            (all_cpcs[mid - 1] + all_cpcs[mid]) / 2
+            if len(all_cpcs) % 2 == 0
+            else all_cpcs[mid]
+        )
+    else:
+        median_cpc = 0.0
+
+    enabled_campaigns = [
+        c for c in campaigns
+        if isinstance(c, dict) and str(c.get("status", "")).upper() == "ENABLED"
+    ]
+
+    # no_active_campaigns
+    if not enabled_campaigns:
+        signals.append({
+            "id": "no_active_campaigns",
+            "category": "structure",
+            "severity": "warning",
+            "label": "No active campaigns",
+            "evidence": {
+                "total_campaigns": len(campaigns),
+                "active_campaigns": 0,
+            },
+            "recommendation": (
+                "No enabled campaigns found. "
+                "Verify account status and campaign settings."
+            ),
+        })
+
+    # tracking_sanity_warning — spend > 100 but zero total conversions
+    enabled_with_spend = [
+        c for c in enabled_campaigns
+        if float(c.get("spent") or 0) > 0
+    ]
+    if total_spend > 100 and total_conversions == 0 and enabled_with_spend:
+        signals.append({
+            "id": "tracking_sanity_warning",
+            "category": "tracking",
+            "severity": "critical",
+            "label": "Zero conversions with significant spend",
+            "evidence": {
+                "total_spend": _money(total_spend),
+                "total_conversions": 0,
+                "enabled_campaigns_with_spend": len(enabled_with_spend),
+            },
+            "recommendation": (
+                "Account has significant spend but zero conversions recorded. "
+                "Verify conversion tracking is set up and firing on all conversion events."
+            ),
+        })
+
+    # spend_concentration_risk — one campaign > 80% total spend
+    if total_spend > 0:
+        for c in campaigns:
+            if not isinstance(c, dict):
+                continue
+            c_spend = float(c.get("spent") or 0)
+            if c_spend > 0 and (c_spend / total_spend) > 0.80:
+                signals.append({
+                    "id": "spend_concentration_risk",
+                    "category": "structure",
+                    "severity": "warning",
+                    "label": "Spend concentrated in one campaign",
+                    "evidence": {
+                        "campaign_name": str(c.get("name") or ""),
+                        "campaign_spend": _money(c_spend),
+                        "total_spend": _money(total_spend),
+                        "concentration_pct": round(c_spend / total_spend * 100, 1),
+                    },
+                    "recommendation": (
+                        f"'{c.get('name', '')}' accounts for over 80% of total spend. "
+                        "Review budget allocation across campaigns to reduce concentration risk."
+                    ),
+                })
+                break
+
+    # conversion_concentration_risk — one campaign > 90% total conversions
+    if total_conversions > 0:
+        for c in campaigns:
+            if not isinstance(c, dict):
+                continue
+            c_conv = float(c.get("conversions") or 0)
+            if c_conv > 0 and (c_conv / total_conversions) > 0.90:
+                signals.append({
+                    "id": "conversion_concentration_risk",
+                    "category": "structure",
+                    "severity": "warning",
+                    "label": "Conversions concentrated in one campaign",
+                    "evidence": {
+                        "campaign_name": str(c.get("name") or ""),
+                        "campaign_conversions": round(c_conv, 1),
+                        "total_conversions": round(total_conversions, 1),
+                        "concentration_pct": round(c_conv / total_conversions * 100, 1),
+                    },
+                    "recommendation": (
+                        f"'{c.get('name', '')}' accounts for over 90% of all conversions. "
+                        "Investigate and diversify to reduce single-campaign dependency."
+                    ),
+                })
+                break
+
+    # Per-campaign signals
+    for c in campaigns:
+        if not isinstance(c, dict):
+            continue
+        status = str(c.get("status", "")).upper()
+        enabled = status == "ENABLED"
+        paused = status == "PAUSED"
+        cost = float(c.get("spent") or 0)
+        conversions = float(c.get("conversions") or 0)
+        impressions = int(c.get("impressions") or 0)
+        roas = float(c.get("roas") or 0)
+        avg_cpc = float(c.get("avg_cpc") or 0)
+        ctr = float(c.get("ctr") or 0)
+        cpa = float(c.get("cpa") or 0)
+        cname = str(c.get("name") or "")
+
+        # zero_conversion_spend
+        if enabled and cost > 100 and conversions == 0:
+            signals.append({
+                "id": "zero_conversion_spend",
+                "category": "waste",
+                "severity": "critical",
+                "label": "Spend with zero conversions",
+                "evidence": {
+                    "campaign_name": cname,
+                    "spend": _money(cost),
+                    "conversions": 0,
+                    "status": status,
+                },
+                "recommendation": (
+                    f"'{cname}' has spent {_money(cost)['formatted']} with zero conversions. "
+                    "Investigate targeting, ad copy, landing page, and conversion tracking "
+                    "before increasing budget."
+                ),
+            })
+        elif enabled and cost > 20 and conversions == 0:
+            signals.append({
+                "id": "zero_conversion_spend",
+                "category": "waste",
+                "severity": "warning",
+                "label": "Spend with zero conversions",
+                "evidence": {
+                    "campaign_name": cname,
+                    "spend": _money(cost),
+                    "conversions": 0,
+                    "status": status,
+                },
+                "recommendation": (
+                    f"'{cname}' has spent {_money(cost)['formatted']} with zero conversions. "
+                    "Review targeting and consider pausing if spend continues without results."
+                ),
+            })
+
+        # enabled_loser — heavy spend, near-zero return
+        if enabled and cost > 200 and (roas < 0.5 or (roas == 0 and conversions == 0)):
+            already_critical = any(
+                s["id"] == "zero_conversion_spend"
+                and s.get("severity") == "critical"
+                and s["evidence"].get("campaign_name") == cname
+                for s in signals
+            )
+            if not already_critical:
+                signals.append({
+                    "id": "enabled_loser",
+                    "category": "waste",
+                    "severity": "critical",
+                    "label": "Heavy spend with near-zero return",
+                    "evidence": {
+                        "campaign_name": cname,
+                        "spend": _money(cost),
+                        "roas": round(roas, 2),
+                        "conversions": round(conversions, 1),
+                        "status": status,
+                    },
+                    "recommendation": (
+                        f"'{cname}' has spent {_money(cost)['formatted']} "
+                        f"with ROAS of {roas:.2f}x. "
+                        "Investigate performance and consider pausing while reviewing."
+                    ),
+                })
+
+        # low_roas_spend
+        if enabled and cost > 50 and roas > 0 and roas < 2.0:
+            signals.append({
+                "id": "low_roas_spend",
+                "category": "waste",
+                "severity": "warning",
+                "label": "Low ROAS campaign",
+                "evidence": {
+                    "campaign_name": cname,
+                    "spend": _money(cost),
+                    "roas": round(roas, 2),
+                    "roas_threshold": 2.0,
+                    "status": status,
+                },
+                "recommendation": (
+                    f"'{cname}' ROAS is {roas:.2f}x (below 2.0x threshold). "
+                    "Consider reviewing bids, negative keywords, or audience targeting."
+                ),
+            })
+
+        # high_cpa_campaign — CPA > 2x account average
+        if enabled and cost > 50 and cpa > 0 and account_cpa > 0 and cpa > (account_cpa * 2.0):
+            signals.append({
+                "id": "high_cpa_campaign",
+                "category": "waste",
+                "severity": "warning",
+                "label": "High CPA campaign",
+                "evidence": {
+                    "campaign_name": cname,
+                    "campaign_cpa": _money(cpa),
+                    "account_avg_cpa": _money(account_cpa),
+                    "cpa_ratio": round(cpa / account_cpa, 1),
+                    "status": status,
+                },
+                "recommendation": (
+                    f"'{cname}' CPA of {_money(cpa)['formatted']} is "
+                    f"{round(cpa / account_cpa, 1)}x the account average. "
+                    "Review targeting, bid strategy, or consider budget reallocation."
+                ),
+            })
+
+        # low_ctr_campaign — ctr < 0.5%, impressions > 500
+        if enabled and impressions > 500 and ctr < 0.5:
+            signals.append({
+                "id": "low_ctr_campaign",
+                "category": "efficiency",
+                "severity": "warning",
+                "label": "Low CTR campaign",
+                "evidence": {
+                    "campaign_name": cname,
+                    "ctr_pct": round(ctr, 2),
+                    "impressions": impressions,
+                    "threshold_pct": 0.5,
+                    "status": status,
+                },
+                "recommendation": (
+                    f"'{cname}' CTR is {ctr:.2f}% with {impressions:,} impressions "
+                    "(threshold: 0.5%). "
+                    "Review ad relevance, headlines, and keyword Quality Score."
+                ),
+            })
+
+        # high_cpc_outlier — avg_cpc > 2.5x account median
+        if enabled and avg_cpc > 0 and median_cpc > 0 and avg_cpc > (median_cpc * 2.5):
+            signals.append({
+                "id": "high_cpc_outlier",
+                "category": "efficiency",
+                "severity": "warning",
+                "label": "High CPC outlier",
+                "evidence": {
+                    "campaign_name": cname,
+                    "avg_cpc": _money(avg_cpc),
+                    "account_median_cpc": _money(median_cpc),
+                    "cpc_ratio": round(avg_cpc / median_cpc, 1),
+                    "status": status,
+                },
+                "recommendation": (
+                    f"'{cname}' avg CPC of {_money(avg_cpc)['formatted']} is "
+                    f"{round(avg_cpc / median_cpc, 1)}x the account median. "
+                    "Review bid strategy, keyword competitiveness, or Quality Score."
+                ),
+            })
+
+        # paused_winner — paused, conversions >= 5 or roas >= 3.0
+        if paused and (conversions >= 5 or roas >= 3.0):
+            signals.append({
+                "id": "paused_winner",
+                "category": "growth",
+                "severity": "info",
+                "label": "Paused campaign with strong historical performance",
+                "evidence": {
+                    "campaign_name": cname,
+                    "conversions": round(conversions, 1),
+                    "roas": round(roas, 2),
+                    "spend": _money(cost),
+                    "status": status,
+                },
+                "recommendation": (
+                    f"'{cname}' is paused but had {conversions:.0f} conversions "
+                    f"at {roas:.2f}x ROAS. "
+                    "Consider reactivating or applying learnings to active campaigns."
+                ),
+            })
+
+    # Sort: critical > warning > info
+    _SEV_ORDER = {"critical": 0, "warning": 1, "info": 2}
+    signals.sort(key=lambda s: _SEV_ORDER.get(s.get("severity", "info"), 3))
+    return signals
+
+
+def _gads_build_module_response(
+    module_id, module_label, source, customer_id, manager_customer_id,
+    date_range, currency_ctx, summary, signals, recommendations, rows, warnings
+):
+    """Build a standard intelligence module response envelope."""
+    live_data = source == "google_ads_api"
+    _SOURCE_LABELS = {
+        "google_ads_api": "Live Google Ads API",
+        "mock_fallback": "Fallback data (connected account, API error)",
+        "mock": "Demo data (no live connection)",
+        "google_ads_api_error": "API error",
+    }
+    return {
+        "success": True,
+        "module_id": module_id,
+        "module_label": module_label,
+        "source": source,
+        "live_data": live_data,
+        "source_label": _SOURCE_LABELS.get(source, source),
+        "customer_id": customer_id,
+        "manager_customer_id": manager_customer_id,
+        "date_range": date_range,
+        "currency": currency_ctx,
+        "summary": summary,
+        "signals": signals,
+        "recommendations": recommendations,
+        "rows": rows,
+        "warnings": warnings,
+    }
+
+
+_GADS_WASTE_SIGNAL_IDS = frozenset({
+    "zero_conversion_spend", "low_roas_spend", "high_cpa_campaign",
+    "enabled_loser", "tracking_sanity_warning",
+})
+
+
+@app.route("/api/connectors/google-ads/intelligence/modules", methods=["GET"])
+def google_ads_intelligence_modules():
+    """Return the intelligence module registry.
+
+    No authentication required — static schema.
+    """
+    registry = _gads_intelligence_module_registry()
+    live_modules = [m for m in registry if m["status"] in ("live_v0", "live_basic", "partial")]
+    planned_modules = [m for m in registry if m["status"] in ("planned", "planned_limited")]
+    return jsonify({
+        "success": True,
+        "modules": registry,
+        "visible_modules": live_modules,
+        "planned_modules": planned_modules,
+        "source_truth": {
+            "google_ads_api": "Live data from Google Ads API",
+            "mock_fallback": "Account connected but API call failed",
+            "mock": "Demo data — no live OAuth connection",
+        },
+        "currency": {
+            "native_account_currency": True,
+            "conversion_supported": False,
+        },
+    })
+
+
+@app.route("/api/connectors/google-ads/intelligence/account-health", methods=["GET"])
+def google_ads_intelligence_account_health():
+    """Account Health v0 — deterministic signals from campaign data.
+
+    Query params: customer_id (or account_id), days, mcc_id
+    Returns standard module response with signals, summary, recommendations.
+    Score computation is planned (score_status='planned').
+    """
+    customer_id = (
+        request.args.get("customer_id", "").strip()
+        or request.args.get("account_id", "").strip()
+    )
+    if not customer_id:
+        return jsonify({
+            "success": False,
+            "error": "customer_id_required",
+            "message": "customer_id is required.",
+        }), 400
+
+    mcc_id = request.args.get("mcc_id", "").strip()
+    days = request.args.get("days", 30, type=int)
+    user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id) or {}
+    manager_cid = (
+        re.sub(r"[^0-9]", "", mcc_id).strip()
+        or re.sub(r"[^0-9]", "", str(meta.get("selected_manager_customer_id") or "")).strip()
+        or ""
+    )
+
+    campaigns, date_range, source, api_currency = _gads_resolve_live_campaigns(
+        customer_id, mcc_id, days, user_id
+    )
+    totals = _gads_compute_overview_totals(campaigns, customer_id, manager_cid, date_range)
+    currency_ctx = _gads_resolve_currency_context(
+        customer_id=customer_id,
+        manager_customer_id=manager_cid,
+        api_currency_code=api_currency,
+        rows=None,
+        user_id=user_id,
+    )
+
+    signals = _gads_compute_account_health_signals(campaigns, totals, currency_ctx)
+
+    signal_counts = {
+        "critical": sum(1 for s in signals if s.get("severity") == "critical"),
+        "warning": sum(1 for s in signals if s.get("severity") == "warning"),
+        "info": sum(1 for s in signals if s.get("severity") == "info"),
+        "total": len(signals),
+    }
+    summary = {
+        "signal_counts": signal_counts,
+        "score_status": "planned",
+        "top_signal": signals[0]["id"] if signals else None,
+        "active_campaigns": totals.get("active_campaigns", 0),
+        "total_campaigns": totals.get("total_campaigns", 0),
+        "total_spend": totals.get("spend", 0),
+        "account_roas": totals.get("roas", 0),
+        "account_cpa": totals.get("cpa", 0),
+    }
+
+    top_recs = [s["recommendation"] for s in signals[:5] if s.get("recommendation")]
+
+    warnings = []
+    if currency_ctx.get("warning"):
+        warnings.append(currency_ctx["warning"])
+    if source == "mock_fallback":
+        warnings.append(
+            "API call failed. Signals based on fallback data. "
+            "Your account is connected but the API returned an error."
+        )
+    elif source == "mock":
+        warnings.append("No live Google Ads connection. Signals based on demo data.")
+
+    return jsonify(
+        _gads_build_module_response(
+            module_id="account_health",
+            module_label="Account Health",
+            source=source,
+            customer_id=customer_id,
+            manager_customer_id=manager_cid,
+            date_range=date_range,
+            currency_ctx=currency_ctx,
+            summary=summary,
+            signals=signals,
+            recommendations=top_recs,
+            rows=[],
+            warnings=warnings,
+        )
+    )
+
+
+@app.route("/api/connectors/google-ads/intelligence/waste-finder", methods=["GET"])
+def google_ads_intelligence_waste_finder():
+    """Waste Finder module — campaigns with spend and no/low return.
+
+    Query params: customer_id (or account_id), days, mcc_id
+    Returns standard module response focused on waste signals.
+    """
+    customer_id = (
+        request.args.get("customer_id", "").strip()
+        or request.args.get("account_id", "").strip()
+    )
+    if not customer_id:
+        return jsonify({
+            "success": False,
+            "error": "customer_id_required",
+            "message": "customer_id is required.",
+        }), 400
+
+    mcc_id = request.args.get("mcc_id", "").strip()
+    days = request.args.get("days", 30, type=int)
+    user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id) or {}
+    manager_cid = (
+        re.sub(r"[^0-9]", "", mcc_id).strip()
+        or re.sub(r"[^0-9]", "", str(meta.get("selected_manager_customer_id") or "")).strip()
+        or ""
+    )
+
+    campaigns, date_range, source, api_currency = _gads_resolve_live_campaigns(
+        customer_id, mcc_id, days, user_id
+    )
+    totals = _gads_compute_overview_totals(campaigns, customer_id, manager_cid, date_range)
+    currency_ctx = _gads_resolve_currency_context(
+        customer_id=customer_id,
+        manager_customer_id=manager_cid,
+        api_currency_code=api_currency,
+        rows=None,
+        user_id=user_id,
+    )
+    currency_code = currency_ctx.get("currency_code") or None
+
+    all_signals = _gads_compute_account_health_signals(campaigns, totals, currency_ctx)
+    waste_signals = [s for s in all_signals if s.get("id") in _GADS_WASTE_SIGNAL_IDS]
+
+    # Rows — campaigns flagged in waste signals
+    waste_campaign_names = {
+        s["evidence"].get("campaign_name", "")
+        for s in waste_signals
+        if isinstance(s.get("evidence"), dict)
+    }
+    waste_rows = []
+    for c in campaigns:
+        if not isinstance(c, dict):
+            continue
+        if str(c.get("name") or "") in waste_campaign_names:
+            cost = float(c.get("spent") or 0)
+            roas = float(c.get("roas") or 0)
+            cpa = float(c.get("cpa") or 0)
+            waste_rows.append({
+                "campaign": str(c.get("name") or ""),
+                "status": str(c.get("status") or ""),
+                "cost": _gads_format_currency_evidence(cost, currency_code),
+                "conversions": round(float(c.get("conversions") or 0), 1),
+                "roas": round(roas, 2),
+                "cpa": (
+                    _gads_format_currency_evidence(cpa, currency_code)
+                    if cpa > 0 else None
+                ),
+            })
+    waste_rows.sort(
+        key=lambda r: float((r.get("cost") or {}).get("amount") or 0),
+        reverse=True,
+    )
+
+    total_waste_spend = sum(
+        float((r.get("cost") or {}).get("amount") or 0) for r in waste_rows
+    )
+    signal_counts = {
+        "critical": sum(1 for s in waste_signals if s.get("severity") == "critical"),
+        "warning": sum(1 for s in waste_signals if s.get("severity") == "warning"),
+        "info": sum(1 for s in waste_signals if s.get("severity") == "info"),
+        "total": len(waste_signals),
+    }
+    summary = {
+        "signal_counts": signal_counts,
+        "waste_campaigns_count": len(waste_rows),
+        "total_waste_spend": _gads_format_currency_evidence(total_waste_spend, currency_code),
+        "total_account_spend": _gads_format_currency_evidence(
+            float(totals.get("spend") or 0), currency_code
+        ),
+    }
+    top_recs = [s["recommendation"] for s in waste_signals[:5] if s.get("recommendation")]
+
+    warnings = []
+    if currency_ctx.get("warning"):
+        warnings.append(currency_ctx["warning"])
+    if source == "mock_fallback":
+        warnings.append("API call failed. Showing fallback data.")
+    elif source == "mock":
+        warnings.append("No live Google Ads connection. Showing demo data.")
+
+    return jsonify(
+        _gads_build_module_response(
+            module_id="waste_finder",
+            module_label="Waste Finder",
+            source=source,
+            customer_id=customer_id,
+            manager_customer_id=manager_cid,
+            date_range=date_range,
+            currency_ctx=currency_ctx,
+            summary=summary,
+            signals=waste_signals,
+            recommendations=top_recs,
+            rows=waste_rows,
+            warnings=warnings,
+        )
+    )
+
+
 @app.route("/api/connectors/google-ads/keywords", methods=["GET"])
 def google_ads_keywords():
     """Return keywords for a campaign (Coolbits gateway when enabled, fallback to mock)."""
