@@ -19859,12 +19859,15 @@ def google_ads_accounts():
         # Backward-compatible "accounts" field: client accounts from hierarchy if loaded,
         # else direct-access accounts
         client_accounts = [a for a in mcc_accounts if not a.get("is_manager")]
+        manager_accounts_list = [a for a in mcc_accounts if a.get("is_manager")]
         accounts_compat = client_accounts if mcc_hierarchy_loaded else direct_access_accounts
 
         return jsonify({
             "accounts": accounts_compat,
             "direct_access_accounts": direct_access_accounts,
             "mcc_accounts": mcc_accounts,
+            "client_accounts": client_accounts,
+            "manager_accounts": manager_accounts_list,
             "selected_manager_customer_id": selected_manager or None,
             "mcc_hierarchy_loaded": mcc_hierarchy_loaded,
             "source": "google_ads_api",
@@ -20573,6 +20576,7 @@ def _gads_token_get_meta(user_id):
             "scopes": meta.get("scopes"),
             "last_validated_at": meta.get("last_validated_at"),
             "updated_at": row["updated_at"],
+            "selected_manager_customer_id": meta.get("selected_manager_customer_id"),
         }
     except Exception:
         return None
@@ -21450,6 +21454,8 @@ def google_ads_mcc_hierarchy_load():
 
     manager_count = sum(1 for a in accounts if a.get("account_type") == "manager")
     client_count = sum(1 for a in accounts if a.get("account_type") == "client")
+    client_accounts_list = [a for a in accounts if a.get("account_type") == "client"]
+    manager_accounts_list = [a for a in accounts if a.get("account_type") == "manager"]
 
     return jsonify({
         "success": True,
@@ -21462,6 +21468,8 @@ def google_ads_mcc_hierarchy_load():
         "manager_accounts_count": manager_count,
         "client_accounts_count": client_count,
         "accounts": accounts,
+        "client_accounts": client_accounts_list,
+        "manager_accounts": manager_accounts_list,
         "message": f"MCC hierarchy loaded: {client_count} client account(s), {manager_count} manager account(s).",
     })
 
@@ -21491,6 +21499,8 @@ def google_ads_mcc_hierarchy_get():
     accounts = _gads_get_customer_hierarchy(user_id, manager_customer_id)
     manager_count = sum(1 for a in accounts if a.get("account_type") == "manager")
     client_count = sum(1 for a in accounts if a.get("account_type") == "client")
+    client_accounts_list = [a for a in accounts if a.get("account_type") == "client"]
+    manager_accounts_list = [a for a in accounts if a.get("account_type") == "manager"]
 
     return jsonify({
         "success": True,
@@ -21503,6 +21513,8 @@ def google_ads_mcc_hierarchy_get():
         "manager_accounts_count": manager_count,
         "client_accounts_count": client_count,
         "accounts": accounts,
+        "client_accounts": client_accounts_list,
+        "manager_accounts": manager_accounts_list,
     })
 
 

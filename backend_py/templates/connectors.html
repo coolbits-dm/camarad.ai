@@ -5526,7 +5526,9 @@
         // Populate directly-accessible dropdown
         const directAccounts = Array.isArray(data.direct_access_accounts) ? data.direct_access_accounts : [];
         const allAccounts = Array.isArray(data.accounts) ? data.accounts : [];
-        gadsState.directAccessAccounts = directAccounts.length ? directAccounts : allAccounts;
+        // direct_access_accounts is authoritative; never fall back to allAccounts in live mode
+        gadsState.directAccessAccounts = directAccounts.length ? directAccounts
+          : (data.connected_live ? [] : allAccounts);
         gadsState.mccHierarchyLoaded = !!data.mcc_hierarchy_loaded;
         gadsState.selectedManagerCustomerId = data.selected_manager_customer_id || '';
 
@@ -5552,13 +5554,24 @@
 
         // Populate client account dropdown from hierarchy
         const mccAccounts = Array.isArray(data.mcc_accounts) ? data.mcc_accounts : [];
-        const clientAccounts = mccAccounts.filter(a => !a.is_manager);
-        gadsState.accounts = clientAccounts.length ? clientAccounts.map(normalizeGadsAccount).filter(Boolean)
-          : gadsState.directAccessAccounts.map(normalizeGadsAccount).filter(Boolean);
+        // Prefer explicit client_accounts array (Phase 2A.2+), else filter mcc_accounts
+        const clientAccountsFromResp = Array.isArray(data.client_accounts) ? data.client_accounts : [];
+        const clientAccounts = clientAccountsFromResp.length
+          ? clientAccountsFromResp
+          : mccAccounts.filter(a => !a.is_manager);
+        if (clientAccounts.length) {
+          gadsState.accounts = clientAccounts.map(normalizeGadsAccount).filter(Boolean);
+        } else if (!data.connected_live) {
+          // Not live (mock/demo): allow direct-access accounts in client slot for backward compat
+          gadsState.accounts = gadsState.directAccessAccounts.map(normalizeGadsAccount).filter(Boolean);
+        } else {
+          // Live but no hierarchy loaded — keep dropdown empty
+          gadsState.accounts = [];
+        }
 
         sel.innerHTML = clientAccounts.length
           ? '<option value="">— Select Client Account —</option>'
-          : '<option value="">— Load MCC Hierarchy first —</option>';
+          : (data.connected_live ? '<option value="">— Load MCC Hierarchy first —</option>' : '<option value="">— Select Account —</option>');
         gadsState.accounts.forEach(a => {
           const opt = document.createElement('option');
           opt.value = a.id;
@@ -5637,6 +5650,19 @@
           const managerCount = data.manager_accounts_count ?? 0;
           if (window.showToast) window.showToast('Google Ads', `MCC hierarchy loaded: ${clientCount} client account(s), ${managerCount} manager account(s).`, 'success');
           if (mccStatus) mccStatus.innerHTML = `<span class="text-success"><i class="bi bi-check-circle-fill"></i> ${clientCount} client, ${managerCount} manager loaded</span>`;
+          // Immediately populate client account dropdown from POST response (avoids extra round-trip)
+          const clientAcctsFromPost = Array.isArray(data.client_accounts) ? data.client_accounts
+            : (Array.isArray(data.accounts) ? data.accounts.filter(a => !a.is_manager) : []);
+          const clientSel = document.getElementById('gadsAccountSelect');
+          if (clientSel && clientAcctsFromPost.length) {
+            clientSel.innerHTML = '<option value="">— Select Client Account —</option>';
+            clientAcctsFromPost.forEach(a => {
+              const opt = document.createElement('option');
+              opt.value = a.customer_id || a.id;
+              opt.textContent = `${a.descriptive_name || a.name || a.customer_id || a.id} (${a.customer_id || a.id})`;
+              clientSel.appendChild(opt);
+            });
+          }
           await refreshAccounts(true);
         } else {
           const safeMsg = data.message || data.status || 'Failed to load MCC hierarchy.';
