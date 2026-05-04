@@ -19755,6 +19755,144 @@ def _google_ads_mock_accounts_response():
     }
 
 
+# ── Phase 2B: Real Google Ads Campaigns via searchStream ─────────────────────
+
+def _gads_searchstream_campaigns(account_id, access_token, developer_token, login_customer_id, days=30):
+    """
+    POST GAQL campaign+metrics query to Google Ads searchStream for a client account.
+    login_customer_id should be the MCC manager customer ID.
+    Returns {"success": True, "campaigns": [...], "date_range": <str>} or error dict.
+    Never returns access_token or developer_token in any response.
+    """
+    safe_cid = re.sub(r"[^0-9]", "", str(account_id or ""))
+    if not safe_cid or not safe_cid.isdigit() or len(safe_cid) < 8:
+        return {"success": False, "error": "invalid_account_id",
+                "message": "Invalid client account ID."}
+
+    _DATE_RANGE_MAP = {7: "LAST_7_DAYS", 14: "LAST_14_DAYS", 30: "LAST_30_DAYS", 90: "LAST_90_DAYS"}
+    date_range = _DATE_RANGE_MAP.get(int(days or 30), "LAST_30_DAYS")
+
+    safe_login_cid = re.sub(r"[^0-9]", "", str(login_customer_id or safe_cid))
+    url = f"{_GADS_API_BASE}/{_GADS_API_VERSION}/customers/{safe_cid}/googleAds:searchStream"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "developer-token": developer_token,
+        "login-customer-id": safe_login_cid,
+        "Content-Type": "application/json",
+    }
+    gaql = (
+        "SELECT campaign.id, campaign.name, campaign.advertising_channel_type,"
+        " campaign.status, campaign.bidding_strategy_type,"
+        " metrics.impressions, metrics.clicks, metrics.cost_micros,"
+        " metrics.conversions, metrics.conversions_value"
+        f" FROM campaign WHERE segments.date DURING {date_range}"
+        " ORDER BY metrics.cost_micros DESC LIMIT 50"
+    )
+    try:
+        resp = requests.post(url, headers=headers, json={"query": gaql}, timeout=20)
+    except Exception as exc:
+        return {"success": False, "error": "api_network_error",
+                "message": f"Network error querying campaigns: {str(exc)[:60]}"}
+
+    if resp.status_code != 200:
+        status_code = resp.status_code
+        try:
+            err = (resp.json().get("error") or {})
+            google_status = str(err.get("status") or "UNKNOWN")[:50]
+        except Exception:
+            google_status = "UNKNOWN"
+        return {"success": False, "error": "google_ads_api_error", "status_code": status_code,
+                "google_status": google_status,
+                "message": f"Google Ads API returned HTTP {status_code} for campaigns."}
+
+    # Parse JSON array or NDJSON (same pattern as _gads_fetch_customer_hierarchy)
+    raw_text = resp.text.strip()
+    parsed_chunks = []
+    if raw_text.startswith("["):
+        try:
+            parsed_chunks = json.loads(raw_text)
+            if not isinstance(parsed_chunks, list):
+                parsed_chunks = [parsed_chunks]
+        except Exception:
+            parsed_chunks = []
+    else:
+        for line in raw_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed_chunks.append(json.loads(line))
+            except Exception:
+                continue
+
+    _CHANNEL_TYPE_MAP = {
+        "SEARCH": "Search", "DISPLAY": "Display", "SHOPPING": "Shopping",
+        "VIDEO": "Video", "MULTI_CHANNEL": "Performance Max",
+        "APP": "App", "LOCAL": "Local", "SMART": "Smart",
+        "PERFORMANCE_MAX": "Performance Max", "DISCOVERY": "Discovery",
+        "HOTEL": "Hotel", "LOCAL_SERVICES": "Local Services", "UNKNOWN": "Unknown",
+    }
+
+    campaigns = []
+    for obj in parsed_chunks:
+        for r in (obj.get("results") or []):
+            camp = r.get("campaign") or {}
+            metrics = r.get("metrics") or {}
+            if not camp:
+                continue
+            cid = str(camp.get("id") or "")
+            if not cid:
+                continue
+
+            cost_micros = float(metrics.get("costMicros") or metrics.get("cost_micros") or 0)
+            cost = round(cost_micros / 1_000_000, 2)
+            impressions = int(metrics.get("impressions") or 0)
+            clicks = int(metrics.get("clicks") or 0)
+            conversions = float(metrics.get("conversions") or 0)
+            conv_value = float(
+                metrics.get("conversionsValue") or metrics.get("conversions_value") or 0
+            )
+
+            channel_raw = str(
+                camp.get("advertisingChannelType")
+                or camp.get("advertising_channel_type")
+                or "UNKNOWN"
+            )
+            channel = _CHANNEL_TYPE_MAP.get(channel_raw, channel_raw.replace("_", " ").title())
+
+            ctr = round(clicks / impressions * 100, 2) if impressions > 0 else 0.0
+            avg_cpc = round(cost / clicks, 2) if clicks > 0 else 0.0
+            cost_per_conv = round(cost / conversions, 2) if conversions > 0 else 0.0
+            roas = round(conv_value / cost, 2) if cost > 0 else 0.0
+
+            campaigns.append({
+                "id": cid,
+                "name": camp.get("name") or f"Campaign {cid}",
+                "status": str(camp.get("status") or camp.get("Status") or "UNKNOWN"),
+                "type": channel,
+                "channel": channel_raw,
+                "bidding": str(
+                    camp.get("biddingStrategyType")
+                    or camp.get("bidding_strategy_type")
+                    or ""
+                ),
+                "budget_daily": 0.0,
+                "budget_total": 0.0,
+                "spent": cost,
+                "impressions": impressions,
+                "clicks": clicks,
+                "conversions": round(conversions, 1),
+                "conversion_value": round(conv_value, 2),
+                "cost_per_conv": cost_per_conv,
+                "roas": roas,
+                "ctr": ctr,
+                "avg_cpc": avg_cpc,
+            })
+
+    return {"success": True, "campaigns": campaigns, "account_id": safe_cid,
+            "date_range": date_range}
+
+
 def _google_ads_mock_campaigns_response(account_id):
     campaigns = GOOGLE_ADS_MOCK_CAMPAIGNS.get(account_id, [])
     return {
@@ -19918,10 +20056,54 @@ def google_ads_accounts():
 
 @app.route("/api/connectors/google-ads/campaigns", methods=["GET"])
 def google_ads_campaigns():
-    """Return campaigns for an account (Coolbits gateway when enabled, fallback to mock)."""
+    """Return campaigns for an account.
+    Phase 2B: when OAuth is active + api_validated, call Google Ads searchStream directly
+    against the selected client account with login-customer-id = MCC manager.
+    Falls back to Coolbits gateway (if enabled) or mock.
+    """
     account_id = request.args.get('account_id', '123-456-7890')
     mcc_id = request.args.get("mcc_id", "").strip()
     days = request.args.get('days', 30, type=int)
+
+    # ── Live Google Ads API path (Phase 2B) ──────────────────────────────────
+    user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id)
+    if meta and meta.get("status") == "active" and meta.get("api_validated"):
+        safe_account_id = re.sub(r"[^0-9]", "", str(account_id or ""))
+        if safe_account_id and safe_account_id.isdigit() and len(safe_account_id) >= 8:
+            token_result = _gads_get_fresh_access_token(user_id)
+            if token_result.get("success"):
+                access_token = token_result["access_token"]
+                cfg = _gads_oauth_config_internal()
+                developer_token = cfg.get("developer_token", "")
+                # login-customer-id: mcc_id param > stored selected_manager > account itself
+                login_cid = (
+                    re.sub(r"[^0-9]", "", str(mcc_id or "")).strip()
+                    or re.sub(r"[^0-9]", "",
+                              str((meta or {}).get("selected_manager_customer_id") or "")).strip()
+                    or safe_account_id
+                )
+                result = _gads_searchstream_campaigns(
+                    safe_account_id, access_token, developer_token, login_cid, days=days
+                )
+                # Wipe access_token from scope immediately
+                access_token = None
+                if result.get("success"):
+                    campaigns = result["campaigns"]
+                    return jsonify({
+                        "account_id": account_id,
+                        "campaigns": campaigns,
+                        "summary": _google_ads_build_summary(campaigns),
+                        "date_range": result.get("date_range", "LAST_30_DAYS"),
+                        "source": "google_ads_api",
+                        "connected_live": True,
+                        "connected_mock": False,
+                    })
+                # API returned an error — log safely and fall through to mock
+                print(f"gads_campaigns_api_error: {result.get('error')} {result.get('status_code')} "
+                      f"acct={safe_account_id} login={login_cid}")
+
+    # ── Coolbits gateway fallback (when enabled) ─────────────────────────────
     range_from, range_to = _google_ads_iso_date_window(days)
     _google_ads_set_active_customer(account_id, mcc_id)
     gw_params = _google_ads_attach_mcc_params({
