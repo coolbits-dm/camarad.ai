@@ -20870,15 +20870,29 @@ def _gads_fetch_customer_hierarchy(manager_customer_id, access_token, developer_
 
     if resp.status_code == 200:
         accounts = []
-        # searchStream returns NDJSON — one JSON object per line
-        for line in resp.text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
+        # searchStream may return a JSON array or NDJSON — handle both
+        raw_text = resp.text.strip()
+        parsed_chunks = []
+        if raw_text.startswith("["):
+            # JSON array of result-chunks: [{results:[...]}, ...]
             try:
-                obj = json.loads(line)
+                parsed_chunks = json.loads(raw_text)
+                if not isinstance(parsed_chunks, list):
+                    parsed_chunks = [parsed_chunks]
             except Exception:
-                continue
+                parsed_chunks = []
+        else:
+            # NDJSON fallback — one JSON object per line
+            for line in raw_text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed_chunks.append(json.loads(line))
+                except Exception:
+                    continue
+
+        for obj in parsed_chunks:
             # Each chunk: {"results": [...], ...}
             results = obj.get("results") or []
             for r in results:

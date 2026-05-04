@@ -119,10 +119,19 @@ def _mock_token_refresh():
 
 
 def _mock_searchstream_response(ndjson_body):
+    """Build a mock response matching the real searchStream JSON array format."""
+    # ndjson_body may be NDJSON lines — convert to JSON array for realism
+    chunks = []
+    for line in ndjson_body.strip().splitlines():
+        line = line.strip()
+        if line:
+            try:
+                chunks.append(json.loads(line))
+            except Exception:
+                pass
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.text = ndjson_body
-    mock_resp.iter_lines.return_value = iter(ndjson_body.encode().split(b"\n"))
+    mock_resp.text = json.dumps(chunks) if chunks else "[]"
     return mock_resp
 
 
