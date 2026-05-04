@@ -19744,6 +19744,10 @@ def _google_ads_set_active_customer(account_id, mcc_id):
 def _google_ads_mock_accounts_response():
     return {
         "accounts": GOOGLE_ADS_MOCK_ACCOUNTS,
+        "direct_access_accounts": [],
+        "mcc_accounts": [],
+        "selected_manager_customer_id": None,
+        "mcc_hierarchy_loaded": False,
         "source": "mock",
         "connected_live": False,
         "connected_mock": True,
@@ -19809,26 +19813,60 @@ def _google_ads_mock_metrics_response(account_id, days):
 
 @app.route("/api/connectors/google-ads/accounts", methods=["GET"])
 def google_ads_accounts():
-    """Return Google Ads accounts. Live data when connected_live, empty when token_stored, mock otherwise."""
+    """Return Google Ads accounts grouped by direct-access and MCC hierarchy."""
     user_id = get_current_user_id()
     meta = _gads_token_get_meta(user_id)
     has_token = meta is not None and meta.get("status") == "active"
     api_validated = has_token and bool((meta or {}).get("api_validated"))
 
     if api_validated:
-        # connected_live: return real accessible customers from DB
-        customers = _gads_get_accessible_customers(user_id)
-        accounts = [
+        # connected_live: return grouped data
+        # 1. Directly accessible accounts from ListAccessibleCustomers
+        direct_customers = _gads_get_accessible_customers(user_id)
+        direct_access_accounts = [
             {
                 "id": c["customer_id"],
                 "name": c["display_name"],
-                "type": "Client",
+                "account_type": "direct_access",
                 "resource_name": c["resource_name"],
             }
-            for c in customers
+            for c in direct_customers
         ]
+
+        # 2. MCC hierarchy (if loaded)
+        selected_manager = str((meta or {}).get("selected_manager_customer_id") or "").strip()
+        mcc_accounts = []
+        mcc_hierarchy_loaded = False
+        if selected_manager:
+            hier = _gads_get_customer_hierarchy(user_id, selected_manager)
+            if hier:
+                mcc_hierarchy_loaded = True
+                mcc_accounts = [
+                    {
+                        "id": a["customer_id"],
+                        "name": a["descriptive_name"],
+                        "account_type": a["account_type"],
+                        "is_manager": a["is_manager"],
+                        "level": a["level"],
+                        "status": a["status"],
+                        "currency_code": a["currency_code"],
+                        "time_zone": a["time_zone"],
+                        "resource_name": a["resource_name"],
+                    }
+                    for a in hier
+                ]
+
+        # Backward-compatible "accounts" field: client accounts from hierarchy if loaded,
+        # else direct-access accounts
+        client_accounts = [a for a in mcc_accounts if not a.get("is_manager")]
+        accounts_compat = client_accounts if mcc_hierarchy_loaded else direct_access_accounts
+
         return jsonify({
-            "accounts": accounts,
+            "accounts": accounts_compat,
+            "direct_access_accounts": direct_access_accounts,
+            "mcc_accounts": mcc_accounts,
+            "selected_manager_customer_id": selected_manager or None,
+            "mcc_hierarchy_loaded": mcc_hierarchy_loaded,
             "source": "google_ads_api",
             "connected_live": True,
             "connected_mock": False,
@@ -19839,6 +19877,10 @@ def google_ads_accounts():
         # token_stored: validated OAuth but API not yet validated — do not return mock as live
         return jsonify({
             "accounts": [],
+            "direct_access_accounts": [],
+            "mcc_accounts": [],
+            "selected_manager_customer_id": None,
+            "mcc_hierarchy_loaded": False,
             "source": "none",
             "connected_live": False,
             "connected_mock": False,
@@ -19865,7 +19907,9 @@ def google_ads_accounts():
         mapped_accounts = _google_ads_map_accounts(accounts)
         mapped_accounts = _google_ads_enrich_accounts_names(mapped_accounts, mcc_id)
         if mapped_accounts:
-            return jsonify({"accounts": mapped_accounts, "source": "coolbits", "gateway": gw})
+            return jsonify({"accounts": mapped_accounts, "source": "coolbits", "gateway": gw,
+                            "direct_access_accounts": [], "mcc_accounts": [],
+                            "mcc_hierarchy_loaded": False, "connected_live": False})
     return jsonify(_google_ads_mock_accounts_response())
 
 
@@ -20792,6 +20836,242 @@ def _gads_get_accessible_customers(user_id):
         conn.close()
 
 
+def _gads_fetch_customer_hierarchy(manager_customer_id, access_token, developer_token, login_customer_id=None):
+    """
+    POST searchStream against manager_customer_id to fetch customer_client rows.
+    Returns {"success": True, "accounts": [...]} or safe error dict.
+    Never returns token values.
+    """
+    safe_manager_id = str(manager_customer_id or "").replace("-", "").strip()
+    if not safe_manager_id.isdigit() or len(safe_manager_id) < 8:
+        return {"success": False, "error": "invalid_manager_customer_id",
+                "message": "Invalid manager customer ID."}
+
+    url = f"{_GADS_API_BASE}/{_GADS_API_VERSION}/customers/{safe_manager_id}/googleAds:searchStream"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "developer-token": developer_token,
+        "login-customer-id": str(login_customer_id or safe_manager_id),
+        "Content-Type": "application/json",
+    }
+    gaql = (
+        "SELECT customer_client.client_customer, customer_client.id,"
+        " customer_client.descriptive_name, customer_client.manager,"
+        " customer_client.status, customer_client.level,"
+        " customer_client.currency_code, customer_client.time_zone"
+        " FROM customer_client"
+    )
+    try:
+        resp = requests.post(url, headers=headers, json={"query": gaql}, timeout=20)
+    except Exception as exc:
+        _safe_exc = str(exc)[:60]
+        return {"success": False, "error": "api_network_error",
+                "message": f"Network error querying hierarchy: {_safe_exc}"}
+
+    if resp.status_code == 200:
+        accounts = []
+        # searchStream returns NDJSON — one JSON object per line
+        for line in resp.text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            # Each chunk: {"results": [...], ...}
+            results = obj.get("results") or []
+            for r in results:
+                cc = r.get("customerClient") or {}
+                if not cc:
+                    continue
+                # Extract numeric customer_id from resource name
+                client_customer = cc.get("clientCustomer") or cc.get("client_customer") or ""
+                cid_match = re.search(r"/(\d+)$", client_customer)
+                cid = cid_match.group(1) if cid_match else str(cc.get("id") or "")
+                if not cid:
+                    continue
+                is_manager = bool(cc.get("manager"))
+                accounts.append({
+                    "customer_id": cid,
+                    "resource_name": client_customer or f"customers/{cid}",
+                    "descriptive_name": cc.get("descriptiveName") or cc.get("descriptive_name") or f"Account {cid}",
+                    "account_type": "manager" if is_manager else "client",
+                    "is_manager": is_manager,
+                    "level": cc.get("level"),
+                    "status": cc.get("status") or "UNKNOWN",
+                    "currency_code": cc.get("currencyCode") or cc.get("currency_code") or "",
+                    "time_zone": cc.get("timeZone") or cc.get("time_zone") or "",
+                })
+        return {
+            "success": True,
+            "accounts": accounts,
+            "manager_customer_id": safe_manager_id,
+        }
+
+    # Error path — sanitize
+    status_code = resp.status_code
+    try:
+        err_body = resp.json()
+        err = err_body.get("error") or {}
+        google_status = str(err.get("status") or "UNKNOWN")[:50]
+        err_msg = str(err.get("message") or "")[:200]
+    except Exception:
+        google_status = "UNKNOWN"
+        err_msg = ""
+
+    if status_code == 403:
+        return {"success": False, "error": "google_ads_api_error", "status_code": 403,
+                "google_status": google_status,
+                "message": f"Google Ads API denied hierarchy access (HTTP 403). Reason: {google_status}. "
+                           "Check developer token approval and that this account is a manager."}
+    if status_code == 404:
+        return {"success": False, "error": "not_manager_or_no_children", "status_code": 404,
+                "message": "No child accounts found or this account is not a manager account."}
+    return {"success": False, "error": "google_ads_api_error", "status_code": status_code,
+            "google_status": google_status,
+            "message": f"Google Ads API returned HTTP {status_code}."}
+
+
+def _gads_store_customer_hierarchy(user_id, manager_customer_id, accounts):
+    """
+    Upsert customer_client hierarchy rows. Marks old rows for this user+manager not_seen,
+    then inserts/updates fresh batch. Returns count of stored rows.
+    """
+    safe_manager_id = str(manager_customer_id or "").replace("-", "").strip()
+    if not accounts:
+        return 0
+    conn = get_db()
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS google_ads_customer_hierarchy (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL DEFAULT 0,
+                manager_customer_id TEXT NOT NULL,
+                customer_id TEXT NOT NULL,
+                resource_name TEXT NOT NULL DEFAULT '',
+                descriptive_name TEXT,
+                status TEXT NOT NULL DEFAULT 'UNKNOWN',
+                account_type TEXT NOT NULL DEFAULT 'unknown',
+                is_manager INTEGER NOT NULL DEFAULT 0,
+                level INTEGER,
+                currency_code TEXT,
+                time_zone TEXT,
+                source TEXT NOT NULL DEFAULT 'google_ads_api',
+                last_seen_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(user_id, manager_customer_id, customer_id)
+            )"""
+        )
+        now = __import__('datetime').datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute(
+            "UPDATE google_ads_customer_hierarchy SET status = 'NOT_SEEN', updated_at = datetime('now')"
+            " WHERE user_id = ? AND manager_customer_id = ?",
+            (int(user_id or 0), safe_manager_id),
+        )
+        for acct in accounts:
+            conn.execute(
+                """INSERT INTO google_ads_customer_hierarchy
+                   (user_id, manager_customer_id, customer_id, resource_name, descriptive_name,
+                    status, account_type, is_manager, level, currency_code, time_zone,
+                    source, last_seen_at, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'google_ads_api', ?, datetime('now'), datetime('now'))
+                   ON CONFLICT(user_id, manager_customer_id, customer_id) DO UPDATE SET
+                     resource_name = excluded.resource_name,
+                     descriptive_name = excluded.descriptive_name,
+                     status = excluded.status,
+                     account_type = excluded.account_type,
+                     is_manager = excluded.is_manager,
+                     level = excluded.level,
+                     currency_code = excluded.currency_code,
+                     time_zone = excluded.time_zone,
+                     last_seen_at = excluded.last_seen_at,
+                     updated_at = datetime('now')""",
+                (
+                    int(user_id or 0),
+                    safe_manager_id,
+                    str(acct.get("customer_id") or ""),
+                    str(acct.get("resource_name") or ""),
+                    str(acct.get("descriptive_name") or ""),
+                    str(acct.get("status") or "UNKNOWN"),
+                    str(acct.get("account_type") or "unknown"),
+                    1 if acct.get("is_manager") else 0,
+                    acct.get("level"),
+                    str(acct.get("currency_code") or ""),
+                    str(acct.get("time_zone") or ""),
+                    now,
+                ),
+            )
+        conn.commit()
+        count = conn.execute(
+            "SELECT COUNT(*) FROM google_ads_customer_hierarchy"
+            " WHERE user_id = ? AND manager_customer_id = ? AND status != 'NOT_SEEN'",
+            (int(user_id or 0), safe_manager_id),
+        ).fetchone()[0]
+        return int(count or 0)
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def _gads_get_customer_hierarchy(user_id, manager_customer_id):
+    """Return stored hierarchy rows for user + manager from DB."""
+    safe_manager_id = str(manager_customer_id or "").replace("-", "").strip()
+    conn = get_db()
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS google_ads_customer_hierarchy (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL DEFAULT 0,
+                manager_customer_id TEXT NOT NULL,
+                customer_id TEXT NOT NULL,
+                resource_name TEXT NOT NULL DEFAULT '',
+                descriptive_name TEXT,
+                status TEXT NOT NULL DEFAULT 'UNKNOWN',
+                account_type TEXT NOT NULL DEFAULT 'unknown',
+                is_manager INTEGER NOT NULL DEFAULT 0,
+                level INTEGER,
+                currency_code TEXT,
+                time_zone TEXT,
+                source TEXT NOT NULL DEFAULT 'google_ads_api',
+                last_seen_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(user_id, manager_customer_id, customer_id)
+            )"""
+        )
+        rows = conn.execute(
+            "SELECT customer_id, resource_name, descriptive_name, account_type, is_manager,"
+            " level, status, currency_code, time_zone"
+            " FROM google_ads_customer_hierarchy"
+            " WHERE user_id = ? AND manager_customer_id = ? AND status != 'NOT_SEEN'"
+            " ORDER BY level, customer_id",
+            (int(user_id or 0), safe_manager_id),
+        ).fetchall()
+        return [
+            {
+                "customer_id": r["customer_id"],
+                "resource_name": r["resource_name"],
+                "descriptive_name": r["descriptive_name"] or f"Account {r['customer_id']}",
+                "account_type": r["account_type"] or "unknown",
+                "is_manager": bool(r["is_manager"]),
+                "level": r["level"],
+                "status": r["status"],
+                "currency_code": r["currency_code"] or "",
+                "time_zone": r["time_zone"] or "",
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
 # ─── Google Ads Routes ────────────────────────────────────────────────────────
 
 @app.route("/api/connectors/google-ads/reality/status", methods=["GET"])
@@ -21078,6 +21358,138 @@ def google_ads_validate():
     })
 
 
+@app.route("/api/connectors/google-ads/mcc/hierarchy", methods=["POST"])
+def google_ads_mcc_hierarchy_load():
+    """
+    Load MCC hierarchy by querying customer_client for the given manager account.
+    Read-only. No mutations. Requires api_validated=True.
+    """
+    user_id = get_current_user_id()
+    if not _gads_oauth_configured():
+        return jsonify({
+            "success": False,
+            "status": "config_missing",
+            "message": "Google Ads OAuth is not configured.",
+        }), 400
+    meta = _gads_token_get_meta(user_id)
+    if meta is None or meta.get("status") != "active":
+        return jsonify({
+            "success": False,
+            "status": "oauth_required",
+            "message": "No active OAuth token. Connect via OAuth first.",
+        }), 400
+    if not meta.get("api_validated"):
+        return jsonify({
+            "success": False,
+            "status": "validation_required",
+            "message": "Validate Google Ads API access first before loading MCC hierarchy.",
+        }), 400
+
+    body = request.get_json(force=True, silent=True) or {}
+    manager_customer_id = str(body.get("manager_customer_id") or "").replace("-", "").strip()
+    if not manager_customer_id.isdigit() or len(manager_customer_id) < 8:
+        return jsonify({
+            "success": False,
+            "status": "invalid_manager_customer_id",
+            "message": "Provide a valid manager_customer_id (numeric, 8-12 digits).",
+        }), 400
+
+    # Get fresh access token
+    token_result = _gads_get_fresh_access_token(user_id)
+    if not token_result.get("success"):
+        return jsonify({
+            "success": False,
+            "status": token_result.get("error", "token_error"),
+            "connected_live": False,
+            "message": token_result.get("message", "Token refresh failed."),
+        }), 400
+
+    access_token = token_result["access_token"]
+    cfg = _gads_oauth_config_internal()
+    developer_token = cfg.get("developer_token", "")
+    login_customer_id = str(os.environ.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "") or "").replace("-", "").strip()
+
+    # Query customer_client hierarchy
+    hierarchy_result = _gads_fetch_customer_hierarchy(
+        manager_customer_id=manager_customer_id,
+        access_token=access_token,
+        developer_token=developer_token,
+        login_customer_id=login_customer_id or manager_customer_id,
+    )
+
+    if not hierarchy_result.get("success"):
+        return jsonify({
+            "success": False,
+            "status": hierarchy_result.get("error", "api_error"),
+            "manager_customer_id": manager_customer_id,
+            "connected_live": True,
+            "message": hierarchy_result.get("message", "Failed to load MCC hierarchy."),
+        }), 400
+
+    accounts = hierarchy_result.get("accounts", [])
+    stored_count = _gads_store_customer_hierarchy(user_id, manager_customer_id, accounts)
+
+    # Update selected manager in metadata
+    _gads_update_metadata(user_id, {
+        "selected_manager_customer_id": manager_customer_id,
+    })
+
+    manager_count = sum(1 for a in accounts if a.get("account_type") == "manager")
+    client_count = sum(1 for a in accounts if a.get("account_type") == "client")
+
+    return jsonify({
+        "success": True,
+        "provider": "google_ads",
+        "status": "mcc_hierarchy_loaded",
+        "source": "google_ads_api",
+        "connected_live": True,
+        "manager_customer_id": manager_customer_id,
+        "accounts_count": stored_count,
+        "manager_accounts_count": manager_count,
+        "client_accounts_count": client_count,
+        "accounts": accounts,
+        "message": f"MCC hierarchy loaded: {client_count} client account(s), {manager_count} manager account(s).",
+    })
+
+
+@app.route("/api/connectors/google-ads/mcc/hierarchy", methods=["GET"])
+def google_ads_mcc_hierarchy_get():
+    """Return cached MCC hierarchy from DB. No live API call."""
+    user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id)
+    api_validated = bool((meta or {}).get("api_validated"))
+
+    manager_customer_id = str(
+        request.args.get("manager_customer_id") or
+        (meta or {}).get("selected_manager_customer_id") or ""
+    ).replace("-", "").strip()
+
+    if not manager_customer_id:
+        return jsonify({
+            "success": True,
+            "accounts": [],
+            "manager_customer_id": None,
+            "mcc_hierarchy_loaded": False,
+            "connected_live": api_validated,
+            "message": "No manager_customer_id specified.",
+        })
+
+    accounts = _gads_get_customer_hierarchy(user_id, manager_customer_id)
+    manager_count = sum(1 for a in accounts if a.get("account_type") == "manager")
+    client_count = sum(1 for a in accounts if a.get("account_type") == "client")
+
+    return jsonify({
+        "success": True,
+        "provider": "google_ads",
+        "source": "google_ads_api",
+        "connected_live": api_validated,
+        "manager_customer_id": manager_customer_id,
+        "mcc_hierarchy_loaded": len(accounts) > 0,
+        "accounts_count": len(accounts),
+        "manager_accounts_count": manager_count,
+        "client_accounts_count": client_count,
+        "accounts": accounts,
+    })
 
 
 GA4_MOCK_PROPERTIES = [

@@ -895,32 +895,64 @@
               <span id="gadsDemoNoticeText"><strong>Demo Data</strong> — Showing demo/mock Google Ads data. <a href="#" onclick="return false;" class="alert-link">Connect with OAuth</a> to use your real account data.</span>
             </div>
 
-            <!-- Account Selector Bar -->
+            <!-- Account Selector Bar — three-row layout -->
             <div class="card bg-dark border-secondary mb-3">
               <div class="card-body py-2">
-                <div class="row align-items-center g-2">
-                  <div class="col-auto"><label class="form-label mb-0 small text-muted">Account:</label></div>
-                  <div class="col-md-4">
-                    <select id="gadsAccountSelect" class="form-select form-select-sm bg-dark text-light" onchange="gadsLoadAccount()">
+
+                <!-- Row 1: Directly Accessible Accounts -->
+                <div class="row align-items-center g-2 mb-2">
+                  <div class="col-auto">
+                    <label class="form-label mb-0 small text-muted" data-bs-toggle="tooltip" title="Accounts directly accessible to your authenticated Google user via ListAccessibleCustomers. These may include manager (MCC) accounts.">
+                      <i class="bi bi-person-check text-info"></i> Directly Accessible Accounts:
+                    </label>
+                  </div>
+                  <div class="col-md-5">
+                    <select id="gadsDirectAccessSelect" class="form-select form-select-sm bg-dark text-light" onchange="gadsOnDirectAccessChange()">
                       <option value="">— Select Account —</option>
                     </select>
                   </div>
-                  <div class="col-md-3">
-                    <div class="input-group input-group-sm">
-                      <span class="input-group-text bg-dark text-light border-secondary" data-bs-toggle="tooltip" title="Paste exact Manager Account ID (MCC), e.g. 123-456-7890. We use it to list child client accounts from that manager.">
-                        MCC ID
-                      </span>
-                      <input id="gadsMccId" type="text" class="form-control bg-dark text-light border-secondary" placeholder="123-456-7890" onblur="gadsApplyMccId()">
-                      <button class="btn btn-outline-info" type="button" onclick="gadsApplyMccId()"><i class="bi bi-arrow-repeat"></i></button>
-                    </div>
-                  </div>
                   <div class="col-auto" id="gadsOAuthButtonArea">
                     <button class="btn btn-sm btn-outline-secondary" disabled id="gadsOAuthBtn"><span class="spinner-border spinner-border-sm"></span></button>
+                  </div>
+                </div>
+
+                <!-- Row 2: MCC Manager Context -->
+                <div class="row align-items-center g-2 mb-2">
+                  <div class="col-auto">
+                    <label class="form-label mb-0 small text-muted" data-bs-toggle="tooltip" title="Enter a Manager (MCC) account ID to load all client accounts under it. This performs a read-only customer_client query.">
+                      <i class="bi bi-diagram-3 text-warning"></i> Manager / MCC:
+                    </label>
+                  </div>
+                  <div class="col-md-4">
+                    <div class="input-group input-group-sm">
+                      <input id="gadsMccId" type="text" class="form-control bg-dark text-light border-secondary" placeholder="e.g. 892-416-3684">
+                      <button class="btn btn-outline-warning" type="button" id="gadsLoadHierarchyBtn" onclick="gadsLoadMccHierarchy()">
+                        <i class="bi bi-diagram-3"></i> Load MCC Hierarchy
+                      </button>
+                    </div>
+                  </div>
+                  <div class="col-auto">
+                    <span id="gadsMccStatus" class="small text-muted"></span>
+                  </div>
+                </div>
+
+                <!-- Row 3: Client Account from hierarchy -->
+                <div class="row align-items-center g-2">
+                  <div class="col-auto">
+                    <label class="form-label mb-0 small text-muted" data-bs-toggle="tooltip" title="Client accounts from the loaded MCC hierarchy. Campaigns will use the selected client account.">
+                      <i class="bi bi-building text-success"></i> Client Account:
+                    </label>
+                  </div>
+                  <div class="col-md-5">
+                    <select id="gadsAccountSelect" class="form-select form-select-sm bg-dark text-light" onchange="gadsLoadAccount()">
+                      <option value="">— Load MCC Hierarchy first —</option>
+                    </select>
                   </div>
                   <div class="col-auto ms-auto">
                     <span id="gadsAccountInfo" class="small text-muted"></span>
                   </div>
                 </div>
+
               </div>
             </div>
 
@@ -5485,14 +5517,48 @@
 
     async function refreshAccounts(preserveSelection) {
       const sel = document.getElementById('gadsAccountSelect');
+      const directSel = document.getElementById('gadsDirectAccessSelect');
       const prevSelected = preserveSelection ? String(sel.value || '') : '';
       try {
-        const qs = gadsState.mccId ? (`?mcc_id=${encodeURIComponent(gadsState.mccId)}`) : '';
-        const res = await fetch('/api/connectors/google-ads/accounts' + qs);
+        const res = await fetch('/api/connectors/google-ads/accounts');
         const data = await res.json();
-        const rawAccounts = Array.isArray(data.accounts) ? data.accounts : [];
-        gadsState.accounts = rawAccounts.map(normalizeGadsAccount).filter(Boolean);
-        sel.innerHTML = '<option value="">— Select Account —</option>';
+
+        // Populate directly-accessible dropdown
+        const directAccounts = Array.isArray(data.direct_access_accounts) ? data.direct_access_accounts : [];
+        const allAccounts = Array.isArray(data.accounts) ? data.accounts : [];
+        gadsState.directAccessAccounts = directAccounts.length ? directAccounts : allAccounts;
+        gadsState.mccHierarchyLoaded = !!data.mcc_hierarchy_loaded;
+        gadsState.selectedManagerCustomerId = data.selected_manager_customer_id || '';
+
+        if (directSel) {
+          directSel.innerHTML = '<option value="">— Select Account —</option>';
+          gadsState.directAccessAccounts.forEach(a => {
+            const opt = document.createElement('option');
+            opt.value = a.id;
+            const icon = a.account_type === 'direct_access' ? '' : (a.is_manager ? '👑 ' : '');
+            opt.textContent = `${icon}${a.name || a.id} (${a.id})`;
+            directSel.appendChild(opt);
+          });
+          // Prefill MCC input if only one direct account and it looks like a manager
+          if (gadsState.directAccessAccounts.length === 1 && !gadsState.mccId) {
+            const sole = gadsState.directAccessAccounts[0];
+            const mccInput = document.getElementById('gadsMccId');
+            if (mccInput && !mccInput.value) {
+              const digits = String(sole.id || '').replace(/\D/g, '');
+              mccInput.value = digits.length === 10 ? `${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6)}` : sole.id;
+            }
+          }
+        }
+
+        // Populate client account dropdown from hierarchy
+        const mccAccounts = Array.isArray(data.mcc_accounts) ? data.mcc_accounts : [];
+        const clientAccounts = mccAccounts.filter(a => !a.is_manager);
+        gadsState.accounts = clientAccounts.length ? clientAccounts.map(normalizeGadsAccount).filter(Boolean)
+          : gadsState.directAccessAccounts.map(normalizeGadsAccount).filter(Boolean);
+
+        sel.innerHTML = clientAccounts.length
+          ? '<option value="">— Select Client Account —</option>'
+          : '<option value="">— Load MCC Hierarchy first —</option>';
         gadsState.accounts.forEach(a => {
           const opt = document.createElement('option');
           opt.value = a.id;
@@ -5503,25 +5569,89 @@
         if (hasPrev) {
           sel.value = prevSelected;
         } else {
-          const firstClient = gadsState.accounts.find(a => a.type === 'Client');
+          const firstClient = gadsState.accounts.find(a => a.type !== 'MCC');
           if (firstClient) sel.value = firstClient.id;
         }
+
+        // Update MCC status label
+        const mccStatus = document.getElementById('gadsMccStatus');
+        if (mccStatus) {
+          if (data.mcc_hierarchy_loaded) {
+            const clientCount = mccAccounts.filter(a => !a.is_manager).length;
+            const managerCount = mccAccounts.filter(a => a.is_manager).length;
+            mccStatus.innerHTML = `<span class="text-success"><i class="bi bi-check-circle-fill"></i> ${clientCount} client, ${managerCount} manager account(s) loaded</span>`;
+          } else if (data.connected_live) {
+            mccStatus.innerHTML = '<span class="text-muted">Not loaded — enter Manager ID and click Load MCC Hierarchy.</span>';
+          } else {
+            mccStatus.textContent = '';
+          }
+        }
+
+        // Prefill MCC input from persisted manager
+        if (gadsState.selectedManagerCustomerId) {
+          const mccInput = document.getElementById('gadsMccId');
+          if (mccInput && !mccInput.value) {
+            const digits = gadsState.selectedManagerCustomerId.replace(/\D/g, '');
+            mccInput.value = digits.length === 10 ? `${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6)}` : gadsState.selectedManagerCustomerId;
+          }
+        }
+
       } catch (e) { console.error('Failed to load accounts:', e); }
     }
 
-    window.gadsApplyMccId = async function gadsApplyMccId() {
-      const input = document.getElementById('gadsMccId');
-      const nextMccId = normalizeMccId(input ? input.value : '');
-      gadsState.mccId = nextMccId;
-      if (input) input.value = nextMccId;
-      try { localStorage.setItem('gads_mcc_id', nextMccId || ''); } catch (e) {}
-      await refreshAccounts(true);
-      if (window.showToast) {
-        if (nextMccId) {
-          window.showToast('Google Ads', `MCC filter applied: ${nextMccId}`, 'info');
+    // Removed: gadsApplyMccId (replaced by gadsLoadMccHierarchy)
+
+    window.gadsOnDirectAccessChange = function() {
+      // When user picks a direct-access account, prefill MCC input with that account ID
+      const directSel = document.getElementById('gadsDirectAccessSelect');
+      const mccInput = document.getElementById('gadsMccId');
+      if (!directSel || !mccInput) return;
+      const val = directSel.value;
+      if (val && !mccInput.value) {
+        const digits = String(val).replace(/\D/g, '');
+        mccInput.value = digits.length === 10 ? `${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6)}` : val;
+      }
+    };
+
+    window.gadsLoadMccHierarchy = async function() {
+      const mccInput = document.getElementById('gadsMccId');
+      const btn = document.getElementById('gadsLoadHierarchyBtn');
+      const mccStatus = document.getElementById('gadsMccStatus');
+      const rawId = mccInput ? mccInput.value.trim() : '';
+      const digits = rawId.replace(/\D/g, '');
+      if (!digits || digits.length < 8) {
+        if (window.showToast) window.showToast('Google Ads', 'Enter a valid Manager Account ID first.', 'warning');
+        return;
+      }
+      if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Loading…'; }
+      if (mccStatus) mccStatus.innerHTML = '<span class="text-muted"><i class="bi bi-arrow-repeat spin"></i> Querying Google Ads API…</span>';
+      try {
+        const res = await fetch('/api/connectors/google-ads/mcc/hierarchy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ manager_customer_id: digits }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          const clientCount = data.client_accounts_count ?? 0;
+          const managerCount = data.manager_accounts_count ?? 0;
+          if (window.showToast) window.showToast('Google Ads', `MCC hierarchy loaded: ${clientCount} client account(s), ${managerCount} manager account(s).`, 'success');
+          if (mccStatus) mccStatus.innerHTML = `<span class="text-success"><i class="bi bi-check-circle-fill"></i> ${clientCount} client, ${managerCount} manager loaded</span>`;
+          await refreshAccounts(true);
         } else {
-          window.showToast('Google Ads', 'MCC filter cleared.', 'info');
+          const safeMsg = data.message || data.status || 'Failed to load MCC hierarchy.';
+          if (window.showToast) window.showToast('Google Ads Error', safeMsg, 'danger');
+          if (mccStatus) mccStatus.innerHTML = `<span class="text-danger"><i class="bi bi-exclamation-circle-fill"></i> ${safeMsg}</span>`;
+          if (data.status === 'not_manager_or_no_children') {
+            if (mccStatus) mccStatus.innerHTML = '<span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> No child accounts found or this account is not a manager.</span>';
+          }
         }
+      } catch (e) {
+        const msg = 'Network error loading MCC hierarchy.';
+        if (window.showToast) window.showToast('Google Ads Error', msg, 'danger');
+        if (mccStatus) mccStatus.innerHTML = `<span class="text-danger"><i class="bi bi-exclamation-circle-fill"></i> ${msg}</span>`;
+      } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-diagram-3"></i> Load MCC Hierarchy'; }
       }
     };
 
@@ -5566,7 +5696,9 @@
         const mode = rData.mode || 'config_missing';
         if (notice) {
           if (mode === 'connected_live') {
-            notice.style.display = 'none';
+            notice.style.display = '';
+            notice.className = 'alert alert-success border-success py-2 mb-3 d-flex align-items-center gap-2';
+            if (noticeText) noticeText.innerHTML = '<strong>Live Google Ads API access validated.</strong> Load an MCC hierarchy to choose a client account.';
           } else if (mode === 'token_stored') {
             notice.style.display = '';
             notice.className = 'alert alert-info border-info py-2 mb-3 d-flex align-items-center gap-2';
