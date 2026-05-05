@@ -12,10 +12,41 @@
 
         <!-- Content Area -->
         <div id="contentArea">
+
+          <!-- Agency Workspace Hero — outside connectorsList so status refresh never hides it -->
+          <div class="card border-primary mb-4" id="agencyWorkspaceBanner" style="background:rgba(var(--bs-primary-rgb),0.08);">
+            <div class="card-body py-3">
+              <div class="row align-items-center g-3">
+                <div class="col-md-7">
+                  <div class="d-flex align-items-center gap-2 mb-1">
+                    <span class="badge bg-primary">Agency</span>
+                    <span class="badge bg-secondary">Business</span>
+                    <span class="text-muted small">Marketing Intelligence Workspace</span>
+                  </div>
+                  <h5 class="mb-1 text-light">Connect your tools. Get your audit. See what matters.</h5>
+                  <p class="text-muted small mb-2">Google Ads + GA4 are live. Connect both to run a full marketing audit.</p>
+                  <div class="d-flex flex-wrap gap-2">
+                    <span class="badge bg-success" id="auditBadgeGads"><i class="bi bi-circle-fill me-1" style="font-size:0.55em;"></i>Google Ads</span>
+                    <span class="badge bg-success" id="auditBadgeGa4"><i class="bi bi-circle-fill me-1" style="font-size:0.55em;"></i>GA4</span>
+                    <span class="badge bg-warning text-dark"><i class="bi bi-clock me-1" style="font-size:0.55em;"></i>Search Console — Soon</span>
+                    <span class="badge bg-warning text-dark"><i class="bi bi-clock me-1" style="font-size:0.55em;"></i>Tag Manager — Soon</span>
+                  </div>
+                </div>
+                <div class="col-md-5 text-md-end">
+                  <button class="btn btn-primary btn-lg" id="auditRunBtn" onclick="runMarketingAudit()">
+                    <i class="bi bi-lightning-charge-fill me-1" id="auditRunIcon"></i> Run Marketing Audit
+                  </button>
+                  <p class="text-muted small mt-1 mb-0" id="auditRunHint">Requires Google Ads connected below</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Connectors List -->
           <div id="connectorsList">
+
             <!-- Google Stack -->
-            <h6 class="text-muted mb-3 mt-4">Google Stack</h6>
+            <h6 class="text-muted mb-3 mt-2">Google Stack</h6>
             <div class="row g-3 mb-4">
               <div class="col-md-6 col-lg-4">
                 <div class="card bg-dark border-secondary h-100">
@@ -23,7 +54,7 @@
                     <h6 class="card-title">Google Ads</h6>
                     <p class="card-text text-muted small">Campaign reporting and spend insights</p>
                     <div class="d-flex justify-content-between align-items-center">
-                      <span class="badge bg-warning text-dark connector-status" data-slug="google-ads">Soon</span>
+                      <span class="badge bg-secondary connector-status" data-slug="google-ads">Available</span>
                       <button class="btn btn-sm btn-outline-primary" data-slug="google-ads" onclick="configureConnector('google-ads', 'Google Ads')">Configure</button>
                     </div>
                   </div>
@@ -35,7 +66,7 @@
                     <h6 class="card-title">Google Analytics 4 (GA4)</h6>
                     <p class="card-text text-muted small">Traffic, engagement, and events analytics</p>
                     <div class="d-flex justify-content-between align-items-center">
-                      <span class="badge bg-warning text-dark connector-status" data-slug="ga4">Soon</span>
+                      <span class="badge bg-secondary connector-status" data-slug="ga4">Available</span>
                       <button class="btn btn-sm btn-outline-primary" data-slug="ga4" onclick="configureConnector('ga4', 'Google Analytics 4 (GA4)')">Configure</button>
                     </div>
                   </div>
@@ -823,6 +854,121 @@
             </div>
           </div>
 
+          <!-- Marketing Audit Panel -->
+          <div id="marketingAuditPanel" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+              <div>
+                <h4 class="mb-0"><i class="bi bi-lightning-charge-fill text-primary me-2"></i>Marketing Audit</h4>
+                <p class="text-muted small mb-0" id="auditSubtitle">Analyzing your Google Ads and GA4 data…</p>
+              </div>
+              <button class="btn btn-outline-secondary" onclick="closeAuditPanel()"><i class="bi bi-arrow-left me-1"></i> Back to Connectors</button>
+            </div>
+
+            <!-- Audit account selector -->
+            <div class="card bg-dark border-secondary mb-3" id="auditAccountBar">
+              <div class="card-body py-2">
+                <div class="d-flex flex-wrap align-items-center gap-3">
+                  <span class="text-muted small">Google Ads account:</span>
+                  <span id="auditAccountName" class="text-light small fw-semibold">—</span>
+                  <span id="auditAccountCurrency" class="badge bg-secondary small">—</span>
+                  <span id="auditSourceBadge" class="badge bg-secondary small">—</span>
+                  <span class="text-muted small ms-auto">Last 30 days</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Audit sections grid -->
+            <div class="row g-3" id="auditSectionsGrid">
+
+              <!-- Account Overview -->
+              <div class="col-12">
+                <div class="card bg-dark border-secondary">
+                  <div class="card-header d-flex justify-content-between align-items-center py-2">
+                    <span class="fw-semibold"><i class="bi bi-speedometer2 me-2 text-info"></i>Account Overview</span>
+                    <span id="auditHealthBadge" class="badge bg-secondary">—</span>
+                  </div>
+                  <div class="card-body" id="auditOverviewBody">
+                    <div class="text-center py-3"><span class="spinner-border spinner-border-sm text-secondary"></span></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Campaign Performance -->
+              <div class="col-md-6">
+                <div class="card bg-dark border-secondary h-100">
+                  <div class="card-header py-2">
+                    <span class="fw-semibold"><i class="bi bi-bar-chart me-2 text-primary"></i>Campaign Performance</span>
+                  </div>
+                  <div class="card-body p-0" id="auditCampaignsBody">
+                    <div class="text-center py-3"><span class="spinner-border spinner-border-sm text-secondary"></span></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Wasted Spend -->
+              <div class="col-md-6">
+                <div class="card bg-dark border-secondary h-100">
+                  <div class="card-header py-2">
+                    <span class="fw-semibold"><i class="bi bi-exclamation-triangle me-2 text-warning"></i>Wasted Spend</span>
+                  </div>
+                  <div class="card-body" id="auditWasteBody">
+                    <div class="text-center py-3"><span class="spinner-border spinner-border-sm text-secondary"></span></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Search Terms -->
+              <div class="col-md-6">
+                <div class="card bg-dark border-secondary h-100">
+                  <div class="card-header py-2">
+                    <span class="fw-semibold"><i class="bi bi-search me-2 text-success"></i>Search Terms</span>
+                  </div>
+                  <div class="card-body" id="auditSearchTermsBody">
+                    <div class="text-center py-3"><span class="spinner-border spinner-border-sm text-secondary"></span></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- GA4 Context -->
+              <div class="col-md-6">
+                <div class="card bg-dark border-secondary h-100">
+                  <div class="card-header py-2">
+                    <span class="fw-semibold"><i class="bi bi-graph-up me-2 text-info"></i>GA4 Context</span>
+                  </div>
+                  <div class="card-body" id="auditGa4Body">
+                    <div class="text-center py-3"><span class="spinner-border spinner-border-sm text-secondary"></span></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Signals & Recommended Actions -->
+              <div class="col-12">
+                <div class="card bg-dark border-secondary">
+                  <div class="card-header py-2">
+                    <span class="fw-semibold"><i class="bi bi-lightbulb me-2 text-warning"></i>Signals &amp; Recommended Actions</span>
+                  </div>
+                  <div class="card-body" id="auditSignalsBody">
+                    <div class="text-center py-3"><span class="spinner-border spinner-border-sm text-secondary"></span></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- PPC Specialist Action Plan -->
+              <div class="col-12" id="auditPpcSection" style="display:none;">
+                <div class="card bg-dark border-primary">
+                  <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                    <span class="fw-semibold"><i class="bi bi-cpu me-2 text-primary"></i>PPC Specialist — Action Plan</span>
+                    <span id="auditPpcBadge" class="badge bg-secondary">—</span>
+                  </div>
+                  <div class="card-body" id="auditPpcBody">
+                    <div class="text-center py-3"><span class="spinner-border spinner-border-sm text-secondary"></span></div>
+                  </div>
+                </div>
+              </div>
+
+            </div><!-- end auditSectionsGrid -->
+          </div><!-- end marketingAuditPanel -->
+
           <!-- Generic Connector Panel (non Google Ads) -->
           <div id="connectorPanel" style="display: none;">
             <div class="d-flex justify-content-between align-items-center mb-3">
@@ -960,13 +1106,13 @@
             <ul class="nav nav-tabs nav-fill mb-3" id="gadsTabs">
               <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#gadsOverview" type="button"><i class="bi bi-speedometer2"></i> Overview</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsCampaigns" type="button"><i class="bi bi-megaphone"></i> Campaigns</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsDiagnostics" type="button"><i class="bi bi-exclamation-triangle"></i> Diagnostics</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsDiagnostics" type="button" title="Live alerts detected from account data."><i class="bi bi-exclamation-triangle"></i> Diagnostics</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsAiBrief" type="button"><i class="bi bi-robot"></i> AI Brief</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsSettings" type="button"><i class="bi bi-gear"></i> Settings</button></li>
               <!-- Dev-only tabs — hidden in production -->
               <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsApiTest" type="button"><i class="bi bi-terminal"></i> Test API</button></li>
               <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsPacing" type="button"><i class="bi bi-graph-up"></i> Budget Pacing</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsReports" type="button" onclick="gadsOnReportsTabOpen()"><i class="bi bi-file-earmark-bar-graph"></i> Reports</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsReports" type="button" onclick="gadsOnReportsTabOpen()" title="Focused audit modules you can run on demand."><i class="bi bi-cpu"></i> Intelligence</button></li>
               <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsAssets" type="button"><i class="bi bi-pencil-square"></i> Asset Generator</button></li>
             </ul>
 
@@ -1087,50 +1233,16 @@
                 <div id="gadsPacingContent"></div>
               </div>
 
-              <!-- ── Intelligence Modules / Reports Tab ─────────── -->
+              <!-- ── Intelligence Modules Tab ────────────────────────── -->
               <div class="tab-pane fade" id="gadsReports">
-                <!-- Module cards row -->
-                <div class="d-flex flex-wrap gap-2 mb-3 align-items-start" id="gadsModuleCards">
-                  <!-- Live modules -->
-                  <button class="btn btn-sm btn-outline-info position-relative" onclick="gadsOpenModule('account_health')" id="gadsModuleBtn_account_health">
-                    <i class="bi bi-heart-pulse"></i> Account Health
-                    <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
-                  </button>
-                  <button class="btn btn-sm btn-outline-warning position-relative" onclick="gadsOpenModule('waste_finder')" id="gadsModuleBtn_waste_finder">
-                    <i class="bi bi-trash"></i> Waste Finder
-                    <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
-                  </button>
-                  <button class="btn btn-sm btn-outline-success position-relative" onclick="gadsRunPreset('roas_leaders')" id="gadsModuleBtn_roas_leaders">
-                    <i class="bi bi-trophy"></i> ROAS Leaders
-                    <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
-                  </button>
-                  <button class="btn btn-sm btn-outline-primary position-relative" onclick="gadsRunPreset('conversion_efficiency')" id="gadsModuleBtn_conversion_efficiency">
-                    <i class="bi bi-bullseye"></i> Conv. Efficiency
-                    <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
-                  </button>
-                  <!-- Planned modules — visible but disabled -->
-                  <button class="btn btn-sm btn-outline-primary position-relative" onclick="gadsOpenModule('search_terms')" id="gadsModuleBtn_search_terms">
-                    <i class="bi bi-search"></i> Search Terms
-                    <span class="badge bg-warning text-dark ms-1" style="font-size:.6rem;">Partial</span>
-                  </button>
-                  <button class="btn btn-sm btn-outline-secondary position-relative" disabled title="Planned — Performance Max module coming soon">
-                    <i class="bi bi-lightning"></i> PMax
-                    <span class="badge bg-secondary ms-1" style="font-size:.6rem;">Planned</span>
-                  </button>
-                  <button class="btn btn-sm btn-outline-secondary position-relative" disabled title="Planned — Budget & Pacing module coming soon">
-                    <i class="bi bi-cash-stack"></i> Budget
-                    <span class="badge bg-secondary ms-1" style="font-size:.6rem;">Planned</span>
-                  </button>
-                  <button class="btn btn-sm btn-outline-secondary position-relative" disabled title="Planned — Assets & Creatives module coming soon">
-                    <i class="bi bi-image"></i> Assets
-                    <span class="badge bg-secondary ms-1" style="font-size:.6rem;">Planned</span>
-                  </button>
-                  <button class="btn btn-sm btn-outline-secondary position-relative" disabled title="Limited availability — Audiences module requires capability check">
-                    <i class="bi bi-people"></i> Audiences
-                    <span class="badge bg-warning text-dark ms-1" style="font-size:.6rem;">Limited</span>
-                  </button>
-                  <!-- Date + CSV row -->
-                  <div class="ms-auto d-flex gap-2 align-items-center flex-wrap">
+
+                <!-- Header + date controls -->
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+                  <div>
+                    <h6 class="mb-0 text-light"><i class="bi bi-cpu text-primary me-2"></i>Google Ads Intelligence Modules</h6>
+                    <p class="text-muted small mt-1 mb-0">Run focused checks for this selected client account.</p>
+                  </div>
+                  <div class="d-flex gap-2 align-items-center flex-wrap">
                     <select id="gadsReportDateRange" class="form-select form-select-sm bg-dark text-light" style="width:auto;">
                       <option value="LAST_7_DAYS">Last 7 days</option>
                       <option value="LAST_14_DAYS">Last 14 days</option>
@@ -1145,7 +1257,70 @@
                     <button class="btn btn-sm btn-outline-secondary" onclick="gadsExportReportCSV()"><i class="bi bi-download"></i> CSV</button>
                   </div>
                 </div>
-                <div id="gadsReportResult"><p class="text-muted small">Select a module above to run a report.</p></div>
+
+                <!-- Module groups -->
+                <div class="d-flex flex-wrap gap-4 mb-3" id="gadsModuleCards">
+
+                  <!-- Core Checks -->
+                  <div>
+                    <div class="text-uppercase text-muted mb-2" style="font-size:0.68rem;letter-spacing:.08em;">Core Checks</div>
+                    <div class="d-flex flex-wrap gap-2">
+                      <button class="btn btn-sm btn-outline-secondary gads-module-chip" onclick="_gadsSelectModule('account_health'); gadsOpenModule('account_health')" id="gadsModuleBtn_account_health">
+                        <i class="bi bi-heart-pulse"></i> Account Health
+                        <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
+                      </button>
+                      <button class="btn btn-sm btn-outline-secondary gads-module-chip" onclick="_gadsSelectModule('waste_finder'); gadsOpenModule('waste_finder')" id="gadsModuleBtn_waste_finder">
+                        <i class="bi bi-trash"></i> Waste Finder
+                        <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
+                      </button>
+                      <button class="btn btn-sm btn-outline-secondary gads-module-chip" onclick="_gadsSelectModule('search_terms'); gadsOpenModule('search_terms')" id="gadsModuleBtn_search_terms">
+                        <i class="bi bi-search"></i> Search Terms
+                        <span class="badge bg-warning text-dark ms-1" style="font-size:.6rem;">Partial</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Performance -->
+                  <div>
+                    <div class="text-uppercase text-muted mb-2" style="font-size:0.68rem;letter-spacing:.08em;">Performance</div>
+                    <div class="d-flex flex-wrap gap-2">
+                      <button class="btn btn-sm btn-outline-secondary gads-module-chip" onclick="_gadsSelectModule('roas_leaders'); gadsRunPreset('roas_leaders')" id="gadsModuleBtn_roas_leaders">
+                        <i class="bi bi-trophy"></i> ROAS Leaders
+                        <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
+                      </button>
+                      <button class="btn btn-sm btn-outline-secondary gads-module-chip" onclick="_gadsSelectModule('conversion_efficiency'); gadsRunPreset('conversion_efficiency')" id="gadsModuleBtn_conversion_efficiency">
+                        <i class="bi bi-bullseye"></i> Conv. Efficiency
+                        <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Planned -->
+                  <div>
+                    <div class="text-uppercase text-muted mb-2" style="font-size:0.68rem;letter-spacing:.08em;">Planned</div>
+                    <div class="d-flex flex-wrap gap-2">
+                      <button class="btn btn-sm btn-outline-secondary gads-module-chip" disabled title="Planned — Performance Max module coming soon">
+                        <i class="bi bi-lightning"></i> PMax
+                        <span class="badge bg-secondary ms-1" style="font-size:.6rem;">Planned</span>
+                      </button>
+                      <button class="btn btn-sm btn-outline-secondary gads-module-chip" disabled title="Planned — Budget &amp; Pacing module coming soon">
+                        <i class="bi bi-cash-stack"></i> Budget
+                        <span class="badge bg-secondary ms-1" style="font-size:.6rem;">Planned</span>
+                      </button>
+                      <button class="btn btn-sm btn-outline-secondary gads-module-chip" disabled title="Planned — Assets &amp; Creatives module coming soon">
+                        <i class="bi bi-image"></i> Assets
+                        <span class="badge bg-secondary ms-1" style="font-size:.6rem;">Planned</span>
+                      </button>
+                      <button class="btn btn-sm btn-outline-secondary gads-module-chip" disabled title="Limited availability — Audiences module requires capability check">
+                        <i class="bi bi-people"></i> Audiences
+                        <span class="badge bg-warning text-dark ms-1" style="font-size:.6rem;">Limited</span>
+                      </button>
+                    </div>
+                  </div>
+
+                </div><!-- end gadsModuleCards -->
+
+                <div id="gadsReportResult"><p class="text-muted small">Select a module above to run a focused check.</p></div>
               </div>
 
               <!-- ── Asset Generator Tab ───────────────────────────── -->
@@ -1303,12 +1478,10 @@
             <!-- Tabs -->
             <ul class="nav nav-tabs nav-fill mb-3" id="ga4Tabs">
               <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#ga4Overview" type="button"><i class="bi bi-speedometer2"></i> Overview</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ga4Pages" type="button"><i class="bi bi-file-earmark-text"></i> Pages</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ga4Sources" type="button"><i class="bi bi-signpost-2"></i> Sources</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ga4Events" type="button"><i class="bi bi-lightning"></i> Events</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ga4Funnel" type="button"><i class="bi bi-funnel"></i> Funnels</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ga4Audience" type="button"><i class="bi bi-people"></i> Audience</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ga4ApiTest" type="button"><i class="bi bi-terminal"></i> Test API</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ga4Sources" type="button" title="Traffic sources, channels, and paid acquisition breakdown"><i class="bi bi-signpost-2"></i> Acquisition</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ga4Pages" type="button" title="Landing page performance — bounce rates, engagement, conversions"><i class="bi bi-file-earmark-text"></i> Landing Pages</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ga4Events" type="button" title="Key events and custom events tracked in GA4"><i class="bi bi-lightning"></i> Events</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ga4Intelligence" type="button" title="AI-assisted GA4 signal analysis"><i class="bi bi-cpu"></i> Intelligence</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ga4Settings" type="button"><i class="bi bi-gear"></i> Settings</button></li>
             </ul>
 
@@ -1429,6 +1602,60 @@
                   </div>
                 </div>
                 <div id="ga4ApiResult"></div>
+              </div>
+
+              <!-- ── Intelligence Tab ──────────────────────────────── -->
+              <div class="tab-pane fade" id="ga4Intelligence">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <div>
+                    <h6 class="mb-0"><i class="bi bi-cpu text-info me-2"></i>GA4 Intelligence Modules</h6>
+                    <p class="text-muted small mb-0">Behavioral analysis from your GA4 property. Answers: what happens after the ad click?</p>
+                  </div>
+                </div>
+
+                <!-- Traffic Quality -->
+                <div class="card bg-dark border-secondary mb-3">
+                  <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                    <span class="fw-semibold small"><i class="bi bi-graph-up me-2 text-info"></i>Traffic Quality</span>
+                    <span class="badge bg-secondary" id="ga4IntelTrafficBadge">—</span>
+                  </div>
+                  <div class="card-body" id="ga4IntelTrafficBody">
+                    <p class="text-muted small mb-0">Load a property to analyse traffic quality.</p>
+                  </div>
+                </div>
+
+                <!-- Landing Page Performance -->
+                <div class="card bg-dark border-secondary mb-3">
+                  <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                    <span class="fw-semibold small"><i class="bi bi-file-earmark-text me-2 text-warning"></i>Landing Page Performance</span>
+                    <span class="badge bg-secondary" id="ga4IntelLandingBadge">—</span>
+                  </div>
+                  <div class="card-body" id="ga4IntelLandingBody">
+                    <p class="text-muted small mb-0">Load a property to see landing page signals.</p>
+                  </div>
+                </div>
+
+                <!-- Acquisition Quality -->
+                <div class="card bg-dark border-secondary mb-3">
+                  <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                    <span class="fw-semibold small"><i class="bi bi-signpost-2 me-2 text-success"></i>Acquisition Quality</span>
+                    <span class="badge bg-secondary" id="ga4IntelAcqBadge">—</span>
+                  </div>
+                  <div class="card-body" id="ga4IntelAcqBody">
+                    <p class="text-muted small mb-0">Load a property to see acquisition channel signals.</p>
+                  </div>
+                </div>
+
+                <!-- Key Events -->
+                <div class="card bg-dark border-secondary mb-3">
+                  <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                    <span class="fw-semibold small"><i class="bi bi-lightning-charge me-2 text-primary"></i>Key Events</span>
+                    <span class="badge bg-secondary" id="ga4IntelEventsBadge">—</span>
+                  </div>
+                  <div class="card-body" id="ga4IntelEventsBody">
+                    <p class="text-muted small mb-0">Load a property to see key event coverage.</p>
+                  </div>
+                </div>
               </div>
 
               <!-- ── Settings Tab ──────────────────────────────────── -->
@@ -4868,6 +5095,8 @@
 
       ensureConnectorEmptyState(!!activeClientId && scopedList.length === 0);
       updateConnectorSectionVisibility();
+      // Keep hero banner badges in sync with real connector state
+      if (typeof _auditUpdateHeroBadges === 'function') _auditUpdateHeroBadges();
     } catch (err) {
       console.error('Error loading connector status', err);
     }
@@ -4894,6 +5123,8 @@
   function configureConnector(slug, name) {
     currentConnector = { slug, name };
     document.getElementById('connectorsList').style.display = 'none';
+    document.getElementById('agencyWorkspaceBanner').style.display = 'none';
+    document.getElementById('marketingAuditPanel').style.display = 'none';
 
     // Google Ads gets its own rich panel
     if (slug === 'google-ads') {
@@ -5489,7 +5720,9 @@
     document.getElementById('telegramPanel').style.display = 'none';
     document.getElementById('awsPanel').style.display = 'none';
     document.getElementById('vercelPanel').style.display = 'none';
+    document.getElementById('marketingAuditPanel').style.display = 'none';
     document.getElementById('connectorsList').style.display = 'block';
+    document.getElementById('agencyWorkspaceBanner').style.display = '';
     currentConnector = null;
   }
 
@@ -5774,6 +6007,7 @@
       const res = await fetch('/api/connectors/google-ads');
       const data = await res.json();
       gadsState.connected = data.status === 'Connected';
+      if (typeof _auditUpdateHeroBadges === 'function') _auditUpdateHeroBadges();
       const cfg = (data && typeof data.config === 'object' && data.config) ? data.config : {};
       const cfgDaysRaw = String(cfg.date_range || '').toLowerCase();
       const daysSelect = document.getElementById('gadsDateRange');
@@ -6014,10 +6248,62 @@
   }
 
   function _gadsSourceBadge(source) {
-    if (source === 'google_ads_api') return '<span class="badge bg-success ms-2" title="Live Google Ads API">Live</span>';
-    if (source === 'mock_fallback') return '<span class="badge bg-warning text-dark ms-2" title="Google Ads API error — showing fallback data. Your account is connected but the API call failed.">API Error · Fallback</span>';
-    if (source === 'mock') return '<span class="badge bg-secondary ms-2" title="Mock data — connect account to see live data">Mock</span>';
-    return `<span class="badge bg-info ms-2">${source}</span>`;
+    if (source === 'google_ads_api') return '<span class="badge bg-success ms-2" title="Live data from Google Ads API">Live</span>';
+    if (source === 'partial_live')   return '<span class="badge bg-info text-dark ms-2" title="Partial live data">Partial</span>';
+    if (source === 'mock_fallback')  return '<span class="badge bg-danger ms-2" title="Account connected but API call failed — no demo rows shown by default">API Error</span>';
+    if (source === 'mock')           return '<span class="badge bg-secondary ms-2" title="Demo data — not from a connected account">Demo</span>';
+    if (source === 'mock_demo')      return '<span class="badge bg-secondary ms-2" title="Demo data shown by user request">Demo</span>';
+    if (source === 'empty')          return '<span class="badge bg-dark border ms-2">Empty</span>';
+    return `<span class="badge bg-info ms-2">${source || '—'}</span>`;
+  }
+
+  // ── Data mode state — gates demo/fallback rows behind explicit user action ──
+  const _gadsModuleDemoAllowed = {};  // { moduleId: true } — set when user clicks "Show demo data"
+  const _GADS_DEMO_BANNER = `<div class="alert alert-warning py-2 px-3 mb-3 d-flex align-items-center gap-2" role="alert">
+    <i class="bi bi-exclamation-triangle-fill text-warning flex-shrink-0"></i>
+    <span><strong>Demo data</strong> — not from the selected account. These rows are for illustration only and must not be used as evidence.</span>
+  </div>`;
+
+  function _gadsApiErrorState(container, moduleId, moduleLabel) {
+    container.innerHTML = `<div class="alert alert-danger py-3 px-3 mb-0">
+      <div class="d-flex align-items-start gap-2">
+        <i class="bi bi-exclamation-octagon fs-5 flex-shrink-0 mt-1"></i>
+        <div>
+          <div class="fw-semibold">${moduleLabel} data could not be loaded from Google Ads.</div>
+          <div class="text-muted small mt-1">Your account is connected, but this module returned an API error.</div>
+          <div class="mt-2 d-flex gap-2 flex-wrap">
+            <button class="btn btn-sm btn-outline-primary" onclick="gadsOpenModule('${moduleId}')"><i class="bi bi-arrow-clockwise me-1"></i>Retry</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="_gadsAllowDemo('${moduleId}')"><i class="bi bi-eye me-1"></i>Show demo data</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function _gadsAllowDemo(moduleId) {
+    _gadsModuleDemoAllowed[moduleId] = true;
+    gadsOpenModule(moduleId);
+  }
+
+  function _gadsPresetApiErrorState(container, presetKey, presetName) {
+    container.innerHTML = `<div class="alert alert-danger py-3 px-3 mb-0">
+      <div class="d-flex align-items-start gap-2">
+        <i class="bi bi-exclamation-octagon fs-5 flex-shrink-0 mt-1"></i>
+        <div>
+          <div class="fw-semibold">${presetName} data could not be loaded from Google Ads.</div>
+          <div class="text-muted small mt-1">Your account is connected, but this report returned an API error.</div>
+          <div class="mt-2 d-flex gap-2 flex-wrap">
+            <button class="btn btn-sm btn-outline-primary" onclick="_gadsSelectModule('${presetKey}'); gadsRunPreset('${presetKey}')"><i class="bi bi-arrow-clockwise me-1"></i>Retry</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="_gadsAllowDemoPreset('${presetKey}')"><i class="bi bi-eye me-1"></i>Show demo data</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function _gadsAllowDemoPreset(presetKey) {
+    _gadsModuleDemoAllowed[presetKey] = true;
+    gadsRunPreset(presetKey);
   }
 
   // ── Overview (Phase 2C) ──────────────────────────────────────────────────
@@ -6550,6 +6836,19 @@
     // no auto-load — user picks module/preset
   }
 
+  // ── Module chip active-state helper ───────────────────────────────────
+  function _gadsSelectModule(moduleKey) {
+    document.querySelectorAll('.gads-module-chip').forEach(function(btn) {
+      btn.classList.remove('active', 'btn-primary');
+      btn.classList.add('btn-outline-secondary');
+    });
+    var btn = document.getElementById('gadsModuleBtn_' + moduleKey);
+    if (btn) {
+      btn.classList.remove('btn-outline-secondary');
+      btn.classList.add('btn-primary');
+    }
+  }
+
   // ── Intelligence Module opener ─────────────────────────────────────────
   async function gadsOpenModule(moduleId) {
     const { accountId } = _gadsQs();
@@ -6578,6 +6877,12 @@
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      const dataSrc = (data && data.source) || '';
+      if (dataSrc === 'mock_fallback' && !_gadsModuleDemoAllowed[moduleId]) {
+        const modLabels = { account_health: 'Account Health', waste_finder: 'Waste Finder', search_terms: 'Search Terms' };
+        _gadsApiErrorState(container, moduleId, modLabels[moduleId] || moduleId.replace(/_/g, ' '));
+        return;
+      }
       if (moduleId === 'account_health') gadsRenderAccountHealth(data);
       else if (moduleId === 'waste_finder') gadsRenderWasteFinder(data);
       else if (moduleId === 'search_terms') gadsRenderSearchTerms(data);
@@ -6600,9 +6905,14 @@
     const warnings = data.warnings || [];
     const counts = summary.signal_counts || {};
 
-    let warnHtml = warnings.map(w =>
+    // Filter out generic mock/fallback warnings — handled by the demo banner below
+    const filteredWarningsAH = warnings.filter(w =>
+      !w.includes('Showing demo data') && !w.includes('No live Google Ads') && !w.includes('API call failed')
+    );
+    let warnHtml = filteredWarningsAH.map(w =>
       `<div class="alert alert-warning py-1 px-2 small mb-2">${w}</div>`
     ).join('');
+    const demoBanner = (source === 'mock' || source === 'mock_fallback') ? _GADS_DEMO_BANNER : '';
 
     const sevColor = {'critical':'danger','warning':'warning','info':'info'};
     const sevIcon  = {'critical':'bi-exclamation-octagon','warning':'bi-exclamation-triangle','info':'bi-info-circle'};
@@ -6639,7 +6949,7 @@
       : '';
 
     container.innerHTML = `
-      ${warnHtml}
+      ${demoBanner}${warnHtml}
       <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
         <span class="fw-semibold"><i class="bi bi-heart-pulse me-1"></i>Account Health</span>
         ${_gadsSourceBadge(source)}
@@ -6667,9 +6977,14 @@
     const warnings = data.warnings || [];
     const counts = (summary.signal_counts) || {};
 
-    let warnHtml = warnings.map(w =>
+    // Filter out generic mock/fallback warnings — handled by the demo banner below
+    const filteredWarningsWF = warnings.filter(w =>
+      !w.includes('Showing demo data') && !w.includes('No live Google Ads') && !w.includes('API call failed')
+    );
+    let warnHtml = filteredWarningsWF.map(w =>
       `<div class="alert alert-warning py-1 px-2 small mb-2">${w}</div>`
     ).join('');
+    const demoBanner = (source === 'mock' || source === 'mock_fallback') ? _GADS_DEMO_BANNER : '';
 
     const sevColor = {'critical':'danger','warning':'warning','info':'info'};
     const sevIcon  = {'critical':'bi-exclamation-octagon','warning':'bi-exclamation-triangle','info':'bi-info-circle'};
@@ -6711,7 +7026,7 @@
 
     const wasteSpend = (summary.total_waste_spend || {}).formatted || '—';
     container.innerHTML = `
-      ${warnHtml}
+      ${demoBanner}${warnHtml}
       <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
         <span class="fw-semibold"><i class="bi bi-trash me-1"></i>Waste Finder</span>
         ${_gadsSourceBadge(source)}
@@ -6738,9 +7053,14 @@
       : '<span class="badge bg-secondary text-muted">currency unknown</span>';
     const warnings = data.warnings || [];
 
-    let warnHtml = warnings.map(w =>
+    // Filter out generic mock/fallback warnings — handled by the demo banner below
+    const filteredWarningsST = warnings.filter(w =>
+      !w.includes('Showing demo data') && !w.includes('No live Google Ads') && !w.includes('API call failed')
+    );
+    let warnHtml = filteredWarningsST.map(w =>
       `<div class="alert alert-warning py-1 px-2 small mb-2">${w}</div>`
     ).join('');
+    const demoBanner = (source === 'mock' || source === 'mock_fallback') ? _GADS_DEMO_BANNER : '';
 
     const sevColor = {'critical':'danger','warning':'warning','info':'info'};
     const sevIcon  = {'critical':'bi-exclamation-octagon','warning':'bi-exclamation-triangle','info':'bi-info-circle'};
@@ -6830,7 +7150,7 @@
       </div>`;
 
     container.innerHTML = `
-      ${warnHtml}
+      ${demoBanner}${warnHtml}
       <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
         <span class="fw-semibold"><i class="bi bi-search me-1"></i>Search Terms</span>
         ${_gadsSourceBadge(source)}
@@ -6876,6 +7196,10 @@
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (data.source === 'mock_fallback' && !_gadsModuleDemoAllowed[presetKey]) {
+        _gadsPresetApiErrorState(container, presetKey, preset.name);
+        return;
+      }
       gadsRenderReport(data, preset.name);
     } catch (e) {
       container.innerHTML = `<div class="alert alert-danger">Report failed: ${e.message}</div>`;
@@ -6893,16 +7217,21 @@
       ? `<span class="badge bg-secondary">${currency}</span>`
       : '<span class="badge bg-secondary text-muted">currency unknown</span>';
     const warnings = data.warnings || [];
+    // Filter out generic mock/fallback warnings — handled by demo banner
+    const filteredWarningsRpt = warnings.filter(w =>
+      !w.includes('Showing demo data') && !w.includes('No live Google Ads') && !w.includes('API call failed')
+    );
+    const demoBanner = (source === 'mock' || source === 'mock_fallback') ? _GADS_DEMO_BANNER : '';
 
     let warnHtml = '';
-    if (warnings.length) {
-      warnHtml = warnings.map(w =>
+    if (filteredWarningsRpt.length) {
+      warnHtml = filteredWarningsRpt.map(w =>
         `<div class="alert alert-warning py-1 px-2 small mb-2">${w}</div>`
       ).join('');
     }
 
     if (!rows.length) {
-      container.innerHTML = warnHtml + '<p class="text-muted">No rows returned for this report.</p>';
+      container.innerHTML = demoBanner + warnHtml + '<p class="text-muted">No rows returned for this report.</p>';
       return;
     }
 
@@ -6930,7 +7259,7 @@
       '</tr>';
 
     container.innerHTML = `
-      ${warnHtml}
+      ${demoBanner}${warnHtml}
       <div class="d-flex align-items-center gap-2 mb-2">
         <span class="fw-semibold">${presetName}</span>
         ${_gadsSourceBadge(source)}
@@ -7129,6 +7458,7 @@
       ga4State.connected = false;
     }
     ga4SetBadge(ga4State.connected);
+    if (typeof _auditUpdateHeroBadges === 'function') _auditUpdateHeroBadges();
     await ga4LoadProperties(preferredPropertyId);
     if (ga4State.connected && ga4State.selectedPropertyId) {
       ga4LoadProperty();
@@ -7288,6 +7618,7 @@
       ga4RenderEvents();
       ga4RenderDevices();
       ga4RenderCountries();
+      ga4RenderIntelligence();
       ga4LoadFunnel();
     } catch (e) {
       console.error('GA4 load error:', e);
@@ -7487,7 +7818,149 @@
     });
   }
 
-  // ── Test API ────────────────────────────────────────────────────────────
+  // ── GA4 Intelligence ─────────────────────────────────────────────────────
+  function ga4RenderIntelligence() {
+    // ── Traffic Quality ────────────────────────────────────────────────
+    const ov = ga4State.overview;
+    const trafficBody = document.getElementById('ga4IntelTrafficBody');
+    const trafficBadge = document.getElementById('ga4IntelTrafficBadge');
+    if (!ov) {
+      if (trafficBody) trafficBody.innerHTML = ga4MockNotice + '<p class="text-muted small mb-0">No data. Load a property first.</p>';
+    } else {
+      const bounceRaw = parseFloat(String(ov.bounce_rate || '').replace('%', ''));
+      const engRaw    = parseFloat(String(ov.engagement_rate || '').replace('%', ''));
+      const signals   = [];
+
+      if (Number.isFinite(bounceRaw)) {
+        const cls = bounceRaw > 65 ? 'danger' : (bounceRaw > 50 ? 'warning' : 'success');
+        signals.push({ sev: cls, msg: `Bounce rate: <strong>${ov.bounce_rate}</strong>` + (bounceRaw > 65 ? ' — high. Likely landing page or audience mismatch.' : bounceRaw > 50 ? ' — elevated. Monitor.' : ' — healthy range.') });
+      }
+      if (Number.isFinite(engRaw)) {
+        const cls = engRaw < 40 ? 'warning' : 'success';
+        signals.push({ sev: cls, msg: `Engagement rate: <strong>${ov.engagement_rate}</strong>` + (engRaw < 40 ? ' — low. Users are not engaging after landing.' : ' — acceptable.') });
+      }
+      if (ov.sessions != null && ov.conversions != null) {
+        const cvr = ov.sessions > 0 ? (ov.conversions / ov.sessions * 100) : 0;
+        const cls = cvr < 1 ? 'warning' : (cvr < 3 ? 'info' : 'success');
+        signals.push({ sev: cls, msg: `Session CVR: <strong>${cvr.toFixed(2)}%</strong> (${ga4FmtInt(ov.conversions)} conversions / ${ga4FmtInt(ov.sessions)} sessions)` });
+      }
+
+      const critCount = signals.filter(s => s.sev === 'danger').length;
+      const warnCount = signals.filter(s => s.sev === 'warning').length;
+      if (trafficBadge) {
+        trafficBadge.textContent = critCount ? `${critCount} issue${critCount > 1 ? 's' : ''}` : warnCount ? `${warnCount} warning${warnCount > 1 ? 's' : ''}` : 'Healthy';
+        trafficBadge.className = `badge ${critCount ? 'bg-danger' : warnCount ? 'bg-warning text-dark' : 'bg-success'}`;
+      }
+      if (trafficBody) trafficBody.innerHTML = ga4MockNotice + (signals.length
+        ? signals.map(s => `<div class="alert alert-${s.sev} py-2 px-3 mb-2 small">${s.msg}</div>`).join('')
+        : '<p class="text-success small mb-0">Traffic quality looks healthy.</p>');
+    }
+
+    // ── Landing Page Performance ───────────────────────────────────────
+    const landingBody  = document.getElementById('ga4IntelLandingBody');
+    const landingBadge = document.getElementById('ga4IntelLandingBadge');
+    const pages = ga4State.pages || [];
+    if (!pages.length) {
+      if (landingBody) landingBody.innerHTML = ga4MockNotice + '<p class="text-muted small mb-0">No page data loaded.</p>';
+    } else {
+      const highBounce = pages.filter(p => parseFloat(String(p.bounce_rate || '').replace('%', '')) > 60 && (p.sessions || 0) > 20);
+      const zeroConv   = pages.filter(p => (p.sessions || 0) > 100 && (p.conversions || 0) === 0);
+
+      if (landingBadge) {
+        const issues = highBounce.length + zeroConv.length;
+        landingBadge.textContent = issues ? `${issues} signal${issues > 1 ? 's' : ''}` : 'OK';
+        landingBadge.className = `badge ${issues > 2 ? 'bg-warning text-dark' : issues ? 'bg-info' : 'bg-success'}`;
+      }
+
+      let html = '';
+      if (highBounce.length) {
+        html += `<div class="alert alert-warning py-2 px-3 mb-2 small">
+          <strong>${highBounce.length} page${highBounce.length > 1 ? 's' : ''} with high bounce rate (&gt;60%):</strong>
+          <div class="mt-1">${highBounce.slice(0, 4).map(p => `<span class="badge bg-dark border me-1">${p.path} (${p.bounce_rate})</span>`).join('')}</div>
+        </div>`;
+      }
+      if (zeroConv.length) {
+        html += `<div class="alert alert-info py-2 px-3 mb-2 small">
+          <strong>${zeroConv.length} high-traffic page${zeroConv.length > 1 ? 's' : ''} with 0 conversions:</strong>
+          <div class="mt-1">${zeroConv.slice(0, 4).map(p => `<span class="badge bg-dark border me-1">${p.path} (${ga4FmtInt(p.sessions)} sess)</span>`).join('')}</div>
+        </div>`;
+      }
+      if (!html) html = '<p class="text-success small mb-0">Landing pages look healthy based on available data.</p>';
+      if (landingBody) landingBody.innerHTML = ga4MockNotice + html;
+    }
+
+    // ── Acquisition Quality ────────────────────────────────────────────
+    const acqBody  = document.getElementById('ga4IntelAcqBody');
+    const acqBadge = document.getElementById('ga4IntelAcqBadge');
+    const sources = ga4State.sources || [];
+    if (!sources.length) {
+      if (acqBody) acqBody.innerHTML = ga4MockNotice + '<p class="text-muted small mb-0">No acquisition data loaded.</p>';
+    } else {
+      const paidZero = sources.filter(s => ['cpc','paid','ppc'].includes(String(s.medium||'').toLowerCase()) && (s.conversions||0) === 0 && (s.sessions||0) > 0);
+      const paidWeak = sources.filter(s => ['cpc','paid','ppc'].includes(String(s.medium||'').toLowerCase()) && (s.conversions||0) > 0 && (s.sessions||0) > 0);
+      const organic  = sources.filter(s => String(s.medium||'').toLowerCase() === 'organic');
+
+      if (acqBadge) {
+        acqBadge.textContent = paidZero.length ? `${paidZero.length} paid channel${paidZero.length>1?'s':''} — 0 conv.` : 'OK';
+        acqBadge.className = `badge ${paidZero.length ? 'bg-danger' : 'bg-success'}`;
+      }
+
+      let html = '';
+      if (paidZero.length) {
+        html += `<div class="alert alert-danger py-2 px-3 mb-2 small">
+          <strong>Paid traffic with 0 conversions in GA4:</strong>
+          <div class="mt-1">${paidZero.slice(0, 3).map(s => `<span class="badge bg-dark border me-1">${s.source}/${s.medium} (${ga4FmtInt(s.sessions)} sess)</span>`).join('')}</div>
+          <div class="text-muted mt-1">Google Ads spend may not be reaching conversion-ready audiences.</div>
+        </div>`;
+      }
+      if (paidWeak.length) {
+        html += paidWeak.slice(0, 2).map(s => {
+          const cvr = s.sessions > 0 ? (s.conversions/s.sessions*100).toFixed(2) : '0.00';
+          return `<div class="alert alert-info py-2 px-3 mb-2 small">Paid: <strong>${s.source}/${s.medium}</strong> — ${ga4FmtInt(s.sessions)} sessions, ${ga4FmtInt(s.conversions)} conv. (${cvr}% CVR)</div>`;
+        }).join('');
+      }
+      if (organic.length) {
+        const org = organic[0];
+        const cvr = org.sessions > 0 ? (org.conversions/org.sessions*100).toFixed(2) : '0.00';
+        html += `<div class="alert alert-success py-2 px-3 mb-2 small">Organic: <strong>${org.source}</strong> — ${ga4FmtInt(org.sessions)} sessions, ${cvr}% CVR</div>`;
+      }
+      if (!html) html = '<p class="text-success small mb-0">Acquisition channels look healthy.</p>';
+      if (acqBody) acqBody.innerHTML = ga4MockNotice + html;
+    }
+
+    // ── Key Events ─────────────────────────────────────────────────────
+    const eventsBody  = document.getElementById('ga4IntelEventsBody');
+    const eventsBadge = document.getElementById('ga4IntelEventsBadge');
+    const events = ga4State.events || [];
+    if (!events.length) {
+      if (eventsBody) eventsBody.innerHTML = ga4MockNotice + '<p class="text-muted small mb-0">No events data loaded.</p>';
+    } else {
+      const keyEvents = events.filter(e => ['ecommerce','custom'].includes(String(e.category||'').toLowerCase()));
+      const autoOnly  = !keyEvents.length;
+
+      if (eventsBadge) {
+        eventsBadge.textContent = autoOnly ? 'No custom events' : `${keyEvents.length} key event${keyEvents.length>1?'s':''}`;
+        eventsBadge.className = `badge ${autoOnly ? 'bg-warning text-dark' : 'bg-success'}`;
+      }
+
+      let html = '';
+      if (autoOnly) {
+        html = '<div class="alert alert-warning py-2 px-3 small">Only auto-collected events found. No custom or ecommerce events are tracked. Consider adding key event tracking for purchases, sign-ups, or form submissions.</div>';
+      } else {
+        html = keyEvents.slice(0, 6).map(e => {
+          const cat = String(e.category || 'Custom');
+          const catCls = cat.toLowerCase() === 'ecommerce' ? 'bg-success' : 'bg-primary';
+          return `<div class="d-flex justify-content-between align-items-center py-1 border-bottom border-secondary">
+            <span class="small"><i class="bi bi-lightning-charge text-warning me-1"></i>${e.name||'?'} <span class="badge ${catCls} ms-1">${cat}</span></span>
+            <span class="small text-muted">${ga4FmtInt(e.count)} events · ${ga4FmtInt(e.users)} users</span>
+          </div>`;
+        }).join('');
+      }
+      if (eventsBody) eventsBody.innerHTML = ga4MockNotice + html;
+    }
+  }
+
+
   async function ga4TestApiCall() {
     const method = document.getElementById('ga4ApiMethod').value;
     const endpoint = document.getElementById('ga4ApiEndpoint').value;
@@ -13524,6 +13997,550 @@
   // Load statuses on page load
   window.addEventListener('DOMContentLoaded', loadConnectorStatuses);
   window.addEventListener('camarad:client-changed', function() { loadConnectorStatuses(); });
+
+  // ── Marketing Audit ────────────────────────────────────────────────────
+
+  function _auditHideAllPanels() {
+    const ids = [
+      'connectorPanel','googleAdsPanel','ga4Panel','gscPanel','gtmPanel',
+      'metaAdsPanel','tiktokAdsPanel','linkedinAdsPanel','stripePanel',
+      'shopifyPanel','hubspotPanel','salesforcePanel','quickbooksPanel',
+      'mailchimpPanel','paypalPanel','notionPanel','githubPanel',
+      'todoistPanel','telegramPanel','awsPanel','vercelPanel','marketingAuditPanel'
+    ];
+    ids.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+  }
+
+  function closeAuditPanel() {
+    document.getElementById('marketingAuditPanel').style.display = 'none';
+    document.getElementById('connectorsList').style.display = 'block';
+    document.getElementById('agencyWorkspaceBanner').style.display = '';
+  }
+
+  function _auditFmt(v, decimals) {
+    if (v == null || v === '') return '—';
+    const n = parseFloat(v);
+    if (!Number.isFinite(n)) return String(v);
+    return decimals != null ? n.toFixed(decimals) : n.toLocaleString();
+  }
+
+  function _auditSignalSeverityClass(sev) {
+    if (!sev) return 'secondary';
+    switch (sev.toLowerCase()) {
+      case 'critical': return 'danger';
+      case 'warning':  return 'warning';
+      case 'info':     return 'info';
+      default:         return 'secondary';
+    }
+  }
+
+  function _auditSetRunning(running) {
+    const btn  = document.getElementById('auditRunBtn');
+    const icon = document.getElementById('auditRunIcon');
+    const hint = document.getElementById('auditRunHint');
+    if (!btn) return;
+    if (running) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Running Audit…';
+      if (hint) hint.textContent = 'Fetching data from all connected sources…';
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-lightning-charge-fill me-1" id="auditRunIcon"></i> Run Marketing Audit';
+      if (hint) hint.textContent = 'Requires Google Ads connected below';
+    }
+  }
+
+  function _auditUpdateHeroBadges() {
+    const gadsEl = document.getElementById('auditBadgeGads');
+    const ga4El  = document.getElementById('auditBadgeGa4');
+    if (gadsEl) {
+      const connected = gadsState && gadsState.connected;
+      gadsEl.className = connected ? 'badge bg-success' : 'badge bg-secondary';
+      gadsEl.innerHTML = `<i class="bi bi-circle-fill me-1" style="font-size:0.55em;"></i>${connected ? 'Google Ads — Connected' : 'Google Ads — Available'}`;
+    }
+    if (ga4El) {
+      const connected = ga4State && ga4State.connected;
+      ga4El.className = connected ? 'badge bg-success' : 'badge bg-secondary';
+      ga4El.innerHTML = `<i class="bi bi-circle-fill me-1" style="font-size:0.55em;"></i>${connected ? 'GA4 — Connected' : 'GA4 — Available'}`;
+    }
+  }
+
+  async function runMarketingAudit() {
+    // Resolve active Google Ads account
+    const acct = gadsState.selectedAccount;
+    if (!acct || !acct.id) {
+      // Not yet configured — open Google Ads connector first
+      configureConnector('google-ads', 'Google Ads');
+      if (window.showToast) window.showToast('Marketing Audit', 'Please select a Google Ads account, then click "Run Marketing Audit" again.', 'warning');
+      return;
+    }
+
+    const cid   = String(acct.id).replace(/\D/g, '');
+    const mccId = String(gadsState.mccId || '').replace(/\D/g, '');
+    const qs    = `customer_id=${cid}${mccId ? '&mcc_id=' + mccId : ''}`;
+
+    // Disable CTA, show spinner
+    _auditSetRunning(true);
+
+    // Show audit panel
+    _auditHideAllPanels();
+    document.getElementById('connectorsList').style.display = 'none';
+    document.getElementById('agencyWorkspaceBanner').style.display = 'none';
+    document.getElementById('marketingAuditPanel').style.display = 'block';
+
+    // Fill account bar
+    document.getElementById('auditAccountName').textContent = acct.name || cid;
+    document.getElementById('auditAccountCurrency').textContent = acct.currency || '—';
+    document.getElementById('auditSubtitle').textContent = `Analyzing ${acct.name || cid} — last 30 days`;
+
+    // Hide PPC section until ready
+    const ppcSection = document.getElementById('auditPpcSection');
+    if (ppcSection) ppcSection.style.display = 'none';
+
+    // Reset all sections to loading spinners
+    ['auditOverviewBody','auditCampaignsBody','auditWasteBody','auditSearchTermsBody','auditGa4Body','auditSignalsBody'].forEach(id => {
+      document.getElementById(id).innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm text-secondary"></span></div>';
+    });
+    document.getElementById('auditHealthBadge').textContent = '—';
+    document.getElementById('auditSourceBadge').textContent = '—';
+
+    // Helper: safely fetch + parse; returns {ok, data} where ok=false means fetch or parse failed
+    async function _auditFetch(url) {
+      try {
+        const r = await fetch(url);
+        const json = await r.json();
+        return { ok: true, data: json };
+      } catch (e) {
+        return { ok: false, data: null };
+      }
+    }
+
+    // ── Phase 1: Fire all Google Ads + GA4 fetches in parallel ──────────────
+    const ga4PropId = ga4State.selectedPropertyId || '';
+    const ga4Qs     = ga4PropId ? `property_id=${ga4PropId}&range=30days` : 'range=30days';
+
+    const [healthResult, campaignsResult, wasteResult, termsResult,
+           ga4OvResult, ga4PagesResult, ga4SrcResult] = await Promise.all([
+      _auditFetch(`/api/connectors/google-ads/intelligence/account-health?${qs}`),
+      _auditFetch(`/api/connectors/google-ads/campaigns?${qs}&days=30`),
+      _auditFetch(`/api/connectors/google-ads/intelligence/waste-finder?${qs}`),
+      _auditFetch(`/api/connectors/google-ads/intelligence/search-terms?${qs}`),
+      _auditFetch(`/api/connectors/ga4/overview?${ga4Qs}`),
+      _auditFetch(`/api/connectors/ga4/pages?${ga4Qs}`),
+      _auditFetch(`/api/connectors/ga4/sources?${ga4Qs}`),
+    ]);
+
+    const health    = healthResult.ok    ? healthResult.data    : null;
+    const campaigns = campaignsResult.ok ? campaignsResult.data : null;
+    const waste     = wasteResult.ok     ? wasteResult.data     : null;
+    const terms     = termsResult.ok     ? termsResult.data     : null;
+    const ga4Ov     = ga4OvResult.ok     ? ga4OvResult.data     : null;
+    const ga4Pages  = ga4PagesResult.ok  ? ga4PagesResult.data  : null;
+    const ga4Src    = ga4SrcResult.ok    ? ga4SrcResult.data    : null;
+
+    // Source badge — prefer health source; fall back to search terms
+    const src = (health && health.source) || (terms && terms.source) || null;
+    const srcBadgeEl = document.getElementById('auditSourceBadge');
+    if (src === 'google_ads_api') {
+      srcBadgeEl.textContent = 'Live'; srcBadgeEl.className = 'badge bg-success small';
+    } else if (src === 'mock_fallback') {
+      srcBadgeEl.textContent = 'API Error'; srcBadgeEl.className = 'badge bg-danger small';
+    } else if (src === 'mock') {
+      srcBadgeEl.textContent = 'Demo'; srcBadgeEl.className = 'badge bg-secondary small';
+    } else if (src) {
+      srcBadgeEl.textContent = src; srcBadgeEl.className = 'badge bg-info small';
+    } else {
+      srcBadgeEl.textContent = 'Unavailable'; srcBadgeEl.className = 'badge bg-danger small';
+    }
+
+    // ── Phase 2: Render Google Ads + GA4 sections independently ─────────────
+    _auditRenderOverview(health,    !healthResult.ok);
+    _auditRenderCampaigns(campaigns, !campaignsResult.ok);
+    _auditRenderWaste(waste,         !wasteResult.ok);
+    _auditRenderSearchTerms(terms,   !termsResult.ok);
+    _auditRenderGa4Context(ga4Ov, ga4Pages, ga4Src);
+    _auditRenderSignals(health, waste, terms);
+
+    // Helper: mark mock/fallback data so downstream APIs exclude it as live evidence
+    function _auditMockWrap(d) {
+      if (!d) return {};
+      const s = d.source || '';
+      if (s === 'mock_fallback' || s === 'mock') {
+        return { _data_mode: 'mock_demo', is_live: false, _mock_warning: 'Demo/fallback data. Not used as live evidence.' };
+      }
+      return d;
+    }
+
+    // ── Phase 3: Build Unified Context + call PPC Agent ──────────────────────
+    try {
+      const mktCtxPayload = {
+        account_id:  cid,
+        client_name: acct.name || null,
+        google_ads: {
+          account_health: _auditMockWrap(health),
+          campaigns:      _auditMockWrap(campaigns),
+          waste_finder:   _auditMockWrap(waste),
+          search_terms:   _auditMockWrap(terms),
+        },
+        ga4: {
+          overview:      ga4Ov                                         || {},
+          acquisition:   (ga4Src && ga4Src.sources)   ? ga4Src        : {},
+          landing_pages: (ga4Pages && ga4Pages.pages) ? ga4Pages       : {},
+          events:        ga4State.events && ga4State.events.length ? { events: ga4State.events } : {},
+        },
+      };
+
+      // POST to unified context builder (fast — local computation, no LLM)
+      const ctxRes  = await fetch('/api/intelligence/marketing/context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mktCtxPayload),
+      });
+      const mktCtx  = ctxRes.ok ? await ctxRes.json() : null;
+
+      // POST to PPC Specialist Agent
+      const ppcPayload = {
+        account_id:  cid,
+        client_name: acct.name || null,
+        policy:      'deep',
+        context: {
+          account_health: _auditMockWrap(health),
+          campaigns:      _auditMockWrap(campaigns),
+          waste_finder:   _auditMockWrap(waste),
+          search_terms:   _auditMockWrap(terms),
+          ga4_overview:   ga4Ov      || {},
+        },
+      };
+      const ppcRes  = await fetch('/api/agents/ppc/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ppcPayload),
+      });
+      const ppcData = ppcRes.ok ? await ppcRes.json() : null;
+
+      if (ppcData && ppcData.agent === 'ppc') {
+        // Update subtitle with agent summary
+        const subtitleEl = document.getElementById('auditSubtitle');
+        if (subtitleEl && ppcData.summary) {
+          subtitleEl.textContent = ppcData.summary;
+        }
+        _auditRenderPpcPlan(ppcData, mktCtx);
+        if (ppcSection) ppcSection.style.display = 'block';
+      }
+    } catch (ppcErr) {
+      console.warn('PPC agent or unified context failed:', ppcErr);
+      // Non-fatal — other sections are already rendered
+    }
+
+    // Re-enable CTA
+    _auditSetRunning(false);
+  }
+
+  function _auditRenderOverview(data, fetchFailed) {
+    const el = document.getElementById('auditOverviewBody');
+    const badge = document.getElementById('auditHealthBadge');
+    if (fetchFailed) {
+      el.innerHTML = '<p class="text-warning small p-2"><i class="bi bi-wifi-off me-1"></i>Could not reach the server for account overview. Check your connection and try again.</p>';
+      return;
+    }
+    if (!data || data.success === false) {
+      el.innerHTML = '<p class="text-muted small p-2">No account overview data. Connect Google Ads to see live data.</p>';
+      return;
+    }
+    if (data.source === 'mock_fallback') {
+      el.innerHTML = '<div class="alert alert-danger py-2 px-3 small mb-0 m-2"><i class="bi bi-exclamation-octagon me-1"></i><strong>Account Health data could not be loaded from Google Ads.</strong> Your account is connected, but this module returned an API error. Run the audit again to retry.</div>';
+      return;
+    }
+    if (data.source === 'mock') {
+      el.innerHTML = '<p class="text-muted small p-2">No live Google Ads connection. Connect an account to see live overview data.</p>';
+      return;
+    }
+    const summary = data.summary || {};
+    // signal count badge — health score is planned, show signal count instead
+    const sigTotal = (summary.signal_counts || {}).total;
+    const sigWarn  = ((summary.signal_counts || {}).warning || 0) + ((summary.signal_counts || {}).critical || 0);
+    if (sigTotal != null) {
+      badge.textContent = sigWarn > 0 ? `${sigWarn} issue${sigWarn !== 1 ? 's' : ''} found` : 'No issues';
+      badge.className = sigWarn > 0 ? 'badge bg-warning text-dark' : 'badge bg-success';
+    }
+    // Fields from account-health summary + totals
+    const stats = [
+      { label: 'Active Campaigns', value: _auditFmt(summary.active_campaigns) },
+      { label: 'Total Spend (30d)', value: _auditFmt(summary.total_spend, 2) },
+      { label: 'Account ROAS',      value: _auditFmt(summary.account_roas, 2) },
+      { label: 'Account CPA',       value: _auditFmt(summary.account_cpa, 2) },
+      { label: 'Signals',           value: sigTotal != null ? String(sigTotal) : '—' },
+      { label: 'Data source',       value: data.live_data ? 'Live' : 'Demo' },
+    ];
+    el.innerHTML = '<div class="row g-2 p-2">' + stats.map(s =>
+      `<div class="col-6 col-md-4 col-lg-2">
+         <div class="text-muted small">${s.label}</div>
+         <div class="fw-semibold text-light">${s.value}</div>
+       </div>`
+    ).join('') + '</div>';
+    // Show warnings from the module
+    const warns = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+    if (warns.length) {
+      el.innerHTML += warns.map(w =>
+        `<div class="alert alert-secondary py-1 px-2 mx-2 mb-2 small">${w}</div>`
+      ).join('');
+    }
+  }
+
+  function _auditRenderCampaigns(data, fetchFailed) {
+    const el = document.getElementById('auditCampaignsBody');
+    if (fetchFailed) {
+      el.innerHTML = '<p class="text-warning small p-3"><i class="bi bi-wifi-off me-1"></i>Could not reach campaigns data. Try again.</p>'; return;
+    }
+    const campaigns = Array.isArray(data) ? data : (data && Array.isArray(data.campaigns) ? data.campaigns : []);
+    if (!campaigns.length) {
+      el.innerHTML = '<p class="text-muted small p-3">No campaign data available.</p>'; return;
+    }
+    const top = campaigns.slice(0, 8);
+    el.innerHTML = '<div class="table-responsive"><table class="table table-dark table-sm table-hover mb-0 small">'
+      + '<thead><tr><th>Campaign</th><th class="text-end">Spend</th><th class="text-end">Conv</th><th class="text-end">ROAS</th></tr></thead><tbody>'
+      + top.map(c => {
+          // 'spent' is the canonical field from the campaigns endpoint
+          const spend = parseFloat(c.spent || c.cost || c.spend || 0);
+          const roas  = parseFloat(c.roas || 0);
+          const roasClass = roas >= 3 ? 'text-success' : roas >= 1 ? 'text-warning' : (spend > 0 ? 'text-danger' : '');
+          return `<tr>
+            <td class="text-truncate" style="max-width:130px;">${c.name || c.campaign_name || '—'}</td>
+            <td class="text-end">${spend ? spend.toFixed(2) : '—'}</td>
+            <td class="text-end">${_auditFmt(c.conversions)}</td>
+            <td class="text-end ${roasClass}">${roas ? roas.toFixed(2) : '—'}</td>
+          </tr>`;
+        }).join('')
+      + '</tbody></table></div>';
+  }
+
+  function _auditRenderWaste(data, fetchFailed) {
+    const el = document.getElementById('auditWasteBody');
+    if (fetchFailed) {
+      el.innerHTML = '<p class="text-warning small"><i class="bi bi-wifi-off me-1"></i>Could not reach waste data. Try again.</p>'; return;
+    }
+    if (!data || data.success === false) {
+      el.innerHTML = '<p class="text-muted small">No waste data available.</p>'; return;
+    }
+    if (data.source === 'mock_fallback') {
+      el.innerHTML = '<div class="alert alert-danger py-2 px-3 small mb-0"><i class="bi bi-exclamation-octagon me-1"></i><strong>Waste Finder data could not be loaded from Google Ads.</strong> Your account is connected, but this module returned an API error.</div>';
+      return;
+    }
+    if (data.source === 'mock') {
+      el.innerHTML = '<p class="text-muted small">No live Google Ads connection. Connect an account to see real waste data.</p>';
+      return;
+    }
+    const summary = data.summary || {};
+    const signals = Array.isArray(data.signals) ? data.signals.filter(s => s.severity === 'warning' || s.severity === 'critical') : [];
+    const parts = [];
+    // total_waste_spend is a currency evidence object {amount, currency_code, formatted}
+    const tws = summary.total_waste_spend;
+    if (tws) {
+      const fmt = typeof tws === 'object' ? (tws.formatted || tws.amount) : tws;
+      parts.push(`<div class="mb-2"><span class="text-muted small">Estimated wasted spend:</span> <strong class="text-danger">${fmt}</strong></div>`);
+    }
+    if (summary.waste_campaigns_count != null) {
+      parts.push(`<div class="mb-2 text-muted small">Waste campaigns: <span class="text-warning">${summary.waste_campaigns_count}</span></div>`);
+    }
+    if (signals.length) {
+      parts.push(signals.slice(0, 4).map(s =>
+        `<div class="alert alert-${_auditSignalSeverityClass(s.severity)} py-1 px-2 mb-1 small">${s.message || s.id || s.signal_id}</div>`
+      ).join(''));
+    }
+    el.innerHTML = parts.length ? parts.join('') : '<p class="text-muted small">No waste signals detected. Good news!</p>';
+  }
+
+  function _auditRenderSearchTerms(data, fetchFailed) {
+    const el = document.getElementById('auditSearchTermsBody');
+    if (fetchFailed) {
+      el.innerHTML = '<p class="text-warning small"><i class="bi bi-wifi-off me-1"></i>Could not reach search terms data. Try again.</p>'; return;
+    }
+    if (!data || data.success === false) {
+      el.innerHTML = '<p class="text-muted small">No search terms data available.</p>'; return;
+    }
+    if (data.source === 'mock_fallback') {
+      el.innerHTML = '<div class="alert alert-danger py-2 px-3 small mb-0"><i class="bi bi-exclamation-octagon me-1"></i><strong>Search Terms data could not be loaded from Google Ads.</strong> Your account is connected, but this module returned an API error. Run the audit again or check API access.</div>';
+      return;
+    }
+    if (data.source === 'mock') {
+      el.innerHTML = '<p class="text-muted small p-2">No live Google Ads connection. Connect an account to see real search terms data.</p>';
+      return;
+    }
+    const summary = data.summary || {};
+    // Canonical field names from the search terms module
+    const termsCount  = summary.terms_count;
+    const wasteCount  = summary.waste_terms_count;    // NOT waste_count
+    const winnerCount = summary.winner_terms_count;   // NOT winner_count
+    const parts = [];
+    parts.push(`<div class="row g-2 mb-2">
+      <div class="col-4 text-center"><div class="text-muted small">Terms</div><div class="fw-semibold">${_auditFmt(termsCount)}</div></div>
+      <div class="col-4 text-center"><div class="text-muted small text-danger">Waste</div><div class="fw-semibold text-danger">${_auditFmt(wasteCount)}</div></div>
+      <div class="col-4 text-center"><div class="text-muted small text-success">Winners</div><div class="fw-semibold text-success">${_auditFmt(winnerCount)}</div></div>
+    </div>`);
+    const wasteSignal = Array.isArray(data.signals) ? data.signals.find(s => s.id === 'waste_search_terms' || s.signal_id === 'waste_search_terms') : null;
+    if (wasteSignal) {
+      parts.push(`<div class="alert alert-warning py-1 px-2 mb-1 small">${wasteSignal.message}</div>`);
+    }
+    // pmax_gap lives at data.summary.pmax_gap
+    if (summary.pmax_gap) {
+      parts.push(`<div class="text-muted small mt-1"><i class="bi bi-info-circle me-1"></i>PMax search terms not included in this view.</div>`);
+    }
+    el.innerHTML = parts.join('');
+  }
+
+  function _auditRenderGa4Context(ga4Ov, ga4Pages, ga4Src) {
+    const el = document.getElementById('auditGa4Body');
+    // Prefer freshly-fetched data; fall back to ga4State if already loaded
+    const ov = ga4Ov || ga4State.overview;
+    if (!ov || ov.error === 'not_connected') {
+      el.innerHTML = ga4State.connected
+        ? '<p class="text-muted small">GA4 connected — no data yet. Open the GA4 connector to pre-load data.</p>'
+        : `<p class="text-muted small">GA4 not connected. <a href="#" onclick="closeAuditPanel(); configureConnector('ga4','Google Analytics 4 (GA4)'); return false;">Connect GA4</a> to add behavioral context.</p>`;
+      return;
+    }
+    const stats = [
+      { label: 'Sessions',        value: _auditFmt(ov.sessions) },
+      { label: 'Users',           value: _auditFmt(ov.users || ov.totalUsers) },
+      { label: 'Conversions',     value: _auditFmt(ov.conversions) },
+      { label: 'Bounce Rate',     value: ov.bounce_rate || (ov.bounceRate != null ? _auditFmt(ov.bounceRate, 1) + '%' : '—') },
+      { label: 'Engagement Rate', value: ov.engagement_rate || '—' },
+      { label: 'Avg. Engagement', value: ov.avg_engagement_time || '—' },
+    ];
+    const pages  = (ga4Pages && ga4Pages.pages) || ga4State.pages || [];
+    const srcArr = (ga4Src  && ga4Src.sources)  || ga4State.sources || [];
+    const source = ov.source === 'coolbits' ? '<span class="badge bg-success ms-2 small">Live GA4</span>' : '<span class="badge bg-secondary ms-2 small">Demo</span>';
+
+    el.innerHTML = `
+      <div class="d-flex align-items-center mb-2">${source}</div>
+      <div class="row g-2 mb-2">${stats.map(s =>
+        `<div class="col-6 col-md-4"><div class="text-muted small">${s.label}</div><div class="fw-semibold text-light">${s.value}</div></div>`
+      ).join('')}</div>
+      ${pages.length ? `<div class="small text-muted mt-1 mb-1">Top landing pages: ${pages.slice(0,3).map(p=>`<span class="badge bg-dark border me-1">${p.path} (${p.bounce_rate||'—'})</span>`).join('')}</div>` : ''}
+      ${srcArr.length ? `<div class="small text-muted">Top acquisition: ${srcArr.slice(0,3).map(s=>`<span class="badge bg-dark border me-1">${s.source}/${s.medium}</span>`).join('')}</div>` : ''}
+    `;
+  }
+
+  // PPC Specialist action plan renderer
+  function _auditRenderPpcPlan(ppcData, mktCtx) {
+    const el    = document.getElementById('auditPpcBody');
+    const badge = document.getElementById('auditPpcBadge');
+    if (!el) return;
+
+    const actions  = Array.isArray(ppcData.actions) ? ppcData.actions : [];
+    const warns    = Array.isArray(ppcData.warnings) ? ppcData.warnings : [];
+    const nextQs   = Array.isArray(ppcData.next_questions) ? ppcData.next_questions : [];
+    const isFallback = warns.some(w => w.includes('llm_unavailable') || w.includes('fallback'));
+
+    // Badge
+    const critCount = actions.filter(a => a.priority === 'critical').length;
+    const highCount = actions.filter(a => a.priority === 'high').length;
+    if (badge) {
+      const issueCount = critCount + highCount;
+      badge.textContent = actions.length
+        ? `${actions.length} action${actions.length > 1 ? 's' : ''}${issueCount ? ` · ${issueCount} critical/high` : ''}`
+        : 'No actions';
+      badge.className = `badge ${critCount ? 'bg-danger' : highCount ? 'bg-warning text-dark' : 'bg-success'}`;
+    }
+
+    if (!actions.length) {
+      el.innerHTML = `
+        <p class="text-muted small mb-2">${ppcData.summary || 'No actions generated.'}</p>
+        ${warns.length ? `<div class="alert alert-secondary py-1 px-2 small">${warns.join(' · ')}</div>` : ''}`;
+      return;
+    }
+
+    const prioClass = { critical: 'danger', high: 'warning', medium: 'info', low: 'secondary' };
+    const typeIcon  = {
+      pause_campaign: 'pause-circle', add_negative_keyword: 'dash-circle', adjust_bid: 'sliders',
+      budget_reallocation: 'cash-stack', ad_copy_test: 'pencil-square', landing_alignment: 'link-45deg',
+      structure_change: 'diagram-3', audience_refine: 'person-lines-fill', reporting_action: 'bar-chart',
+      review_campaign: 'search',
+    };
+
+    el.innerHTML = `
+      ${isFallback ? `<div class="alert alert-secondary py-1 px-2 mb-3 small"><i class="bi bi-info-circle me-1"></i>Deterministic analysis — LLM gateway offline. Actions derived from connector signals.</div>` : ''}
+      <div class="row g-2">
+        ${actions.map((a, i) => {
+          const cls  = prioClass[a.priority] || 'secondary';
+          const icon = typeIcon[a.type] || 'lightbulb';
+          const evPairs = a.evidence && typeof a.evidence === 'object'
+            ? Object.entries(a.evidence).slice(0, 3).map(([k,v]) => `<span class="badge bg-dark border me-1">${k}: ${v}</span>`).join('')
+            : '';
+          return `
+          <div class="col-12 col-lg-6">
+            <div class="card bg-dark border-${cls} h-100">
+              <div class="card-body py-2 px-3">
+                <div class="d-flex justify-content-between align-items-start mb-1">
+                  <span class="fw-semibold small"><i class="bi bi-${icon} me-1 text-${cls}"></i>${a.type.replace(/_/g, ' ')}</span>
+                  <span class="badge bg-${cls} ms-2">${a.priority}</span>
+                </div>
+                ${a.entity ? `<div class="small text-muted mb-1">Entity: <strong>${a.entity}</strong></div>` : ''}
+                <p class="small mb-1">${a.reason || ''}</p>
+                ${evPairs ? `<div class="mb-1">${evPairs}</div>` : ''}
+                ${a.expected_impact ? `<div class="small text-success mb-1"><i class="bi bi-arrow-up-circle me-1"></i>${a.expected_impact}</div>` : ''}
+                ${a.recommended_next_step ? `<div class="small text-info"><i class="bi bi-arrow-right-circle me-1"></i>${a.recommended_next_step}</div>` : ''}
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+      ${nextQs.length ? `
+      <div class="mt-3">
+        <div class="text-muted small fw-semibold mb-1"><i class="bi bi-question-circle me-1"></i>Next questions:</div>
+        ${nextQs.map(q => `<div class="small text-muted mb-1">• ${q}</div>`).join('')}
+      </div>` : ''}
+      ${warns.filter(w => !w.includes('not provided')).length ? `
+      <div class="alert alert-secondary py-1 px-2 mt-3 small">${warns.filter(w => !w.includes('not provided')).join(' · ')}</div>
+      ` : ''}`;
+  }
+
+  function _auditRenderSignals(health, waste, terms) {
+    const el = document.getElementById('auditSignalsBody');
+    const allSignals = [];
+
+    // Skip modules that returned mock/fallback data — signals would be computed from demo rows
+    function _isLiveModule(d) { return d && d.source !== 'mock_fallback' && d.source !== 'mock'; }
+
+    // Deduplicate by signal id across modules
+    const seen = new Set();
+    [health, waste, terms].forEach(data => {
+      if (!_isLiveModule(data)) return;  // skip mock/fallback modules
+      if (data && Array.isArray(data.signals)) {
+        data.signals.forEach(s => {
+          const key = s.id || s.signal_id || s.message || JSON.stringify(s);
+          if (!seen.has(key)) { seen.add(key); allSignals.push(s); }
+        });
+      }
+    });
+
+    // Sort: critical → warning → info
+    const sevOrder = { critical: 0, warning: 1, info: 2 };
+    allSignals.sort((a, b) => (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9));
+
+    if (!allSignals.length) {
+      const noneAvail = !health && !waste && !terms;
+      el.innerHTML = noneAvail
+        ? '<p class="text-warning small">Could not load any data. Check your Google Ads connection and try again.</p>'
+        : '<p class="text-muted small">No issues detected. Your account looks healthy based on available data.</p>';
+      return;
+    }
+
+    el.innerHTML = allSignals.slice(0, 12).map(s => {
+      const cls = _auditSignalSeverityClass(s.severity);
+      // evidence can be an array of strings or an object; render safely
+      let evidenceHtml = '';
+      if (Array.isArray(s.evidence) && s.evidence.length) {
+        evidenceHtml = `<div class="mt-1 d-flex flex-wrap gap-1">${s.evidence.slice(0, 3).map(e => `<span class="badge bg-dark border border-secondary">${typeof e === 'object' ? JSON.stringify(e) : e}</span>`).join('')}</div>`;
+      } else if (s.evidence && typeof s.evidence === 'object') {
+        const pairs = Object.entries(s.evidence).slice(0, 3).map(([k,v]) => `<span class="badge bg-dark border border-secondary">${k}: ${v}</span>`);
+        if (pairs.length) evidenceHtml = `<div class="mt-1 d-flex flex-wrap gap-1">${pairs.join('')}</div>`;
+      }
+      return `<div class="alert alert-${cls} py-2 px-3 mb-2">
+        <div class="fw-semibold small">${s.message || s.id || s.signal_id}</div>
+        ${evidenceHtml}
+      </div>`;
+    }).join('');
+  }
 </script>
 
 <style>

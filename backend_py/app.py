@@ -34293,5 +34293,836 @@ def active_context():
         ],
     })
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Unified Marketing Intelligence Context — /api/intelligence/marketing/context
+#
+# Combines Google Ads + GA4 module results into a single normalized payload.
+# Used as input to the PPC Specialist Agent and future orchestrator runs.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _mctx_extract_gads_summary(gads):
+    """Normalize Google Ads sections into a channel summary + signals list."""
+    signals = []
+    summary = {}
+
+    ah = (gads.get("account_health") or {}) if isinstance(gads, dict) else {}
+    if ah:
+        ah_summary = ah.get("summary") or {}
+        summary["active_campaigns"]  = ah_summary.get("active_campaigns")
+        summary["total_spend"]       = ah_summary.get("total_spend")
+        summary["account_roas"]      = ah_summary.get("account_roas")
+        summary["account_cpa"]       = ah_summary.get("account_cpa")
+        sc = ah_summary.get("signal_counts") or {}
+        summary["signal_counts"]     = sc
+        for s in (ah.get("signals") or [])[:20]:
+            if isinstance(s, dict):
+                signals.append({
+                    "priority": "critical" if s.get("severity") == "critical" else
+                                "high"     if s.get("severity") == "warning"  else "info",
+                    "type": s.get("id") or "account_signal",
+                    "source": "google_ads",
+                    "entity": None,
+                    "evidence": s.get("evidence") if isinstance(s.get("evidence"), dict) else {},
+                    "interpretation": str(s.get("message", ""))[:320],
+                })
+
+    camps = (gads.get("campaigns") or {}) if isinstance(gads, dict) else {}
+    if camps:
+        cs = camps.get("summary") or {}
+        summary["campaigns_total"]  = cs.get("total_campaigns")
+        summary["campaigns_active"] = cs.get("active_campaigns")
+        summary["avg_roas"]         = cs.get("avg_roas")
+
+    wf = (gads.get("waste_finder") or {}) if isinstance(gads, dict) else {}
+    if wf:
+        wf_sum = wf.get("summary") or {}
+        tws = wf_sum.get("total_waste_spend") or {}
+        summary["waste_campaigns_count"] = wf_sum.get("waste_campaigns_count")
+        summary["waste_spend_formatted"] = tws.get("formatted")
+        for s in (wf.get("signals") or [])[:10]:
+            if isinstance(s, dict):
+                signals.append({
+                    "priority": "critical" if s.get("severity") == "critical" else
+                                "high"     if s.get("severity") == "warning"  else "info",
+                    "type": s.get("id") or "waste_signal",
+                    "source": "google_ads",
+                    "entity": None,
+                    "evidence": s.get("evidence") if isinstance(s.get("evidence"), dict) else {},
+                    "interpretation": str(s.get("message", ""))[:320],
+                })
+
+    st = (gads.get("search_terms") or {}) if isinstance(gads, dict) else {}
+    if st:
+        st_sum = st.get("summary") or {}
+        summary["waste_terms_count"]  = st_sum.get("waste_terms_count")
+        summary["winner_terms_count"] = st_sum.get("winner_terms_count")
+        summary["pmax_gap"]           = st_sum.get("pmax_gap")
+        for s in (st.get("signals") or [])[:5]:
+            if isinstance(s, dict):
+                signals.append({
+                    "priority": "medium",
+                    "type": s.get("id") or "search_term_signal",
+                    "source": "google_ads",
+                    "entity": None,
+                    "evidence": s.get("evidence") if isinstance(s.get("evidence"), dict) else {},
+                    "interpretation": str(s.get("message", ""))[:320],
+                })
+
+    return summary, signals
+
+
+def _mctx_extract_ga4_summary(ga4):
+    """Normalize GA4 sections into a channel summary + signals list."""
+    if not isinstance(ga4, dict) or not ga4:
+        return {}, []
+
+    signals = []
+    summary = {}
+
+    ov = ga4.get("overview") or {}
+    if ov:
+        summary["sessions"]         = ov.get("sessions")
+        summary["users"]            = ov.get("users") or ov.get("totalUsers")
+        summary["conversions"]      = ov.get("conversions")
+        summary["bounce_rate"]      = ov.get("bounce_rate") or ov.get("bounceRate")
+        summary["engagement_rate"]  = ov.get("engagement_rate") or ov.get("engagementRate")
+        summary["avg_engagement"]   = ov.get("avg_engagement_time") or ov.get("avgEngagementTime")
+        summary["event_count"]      = ov.get("event_count") or ov.get("eventCount")
+        summary["revenue"]          = ov.get("revenue")
+
+        # Derive quick GA4 signals
+        bounce_raw = str(summary.get("bounce_rate") or "").replace("%", "")
+        try:
+            bounce = float(bounce_raw)
+            if bounce > 65:
+                signals.append({
+                    "priority": "high",
+                    "type": "high_bounce_rate",
+                    "source": "ga4",
+                    "entity": None,
+                    "evidence": {"bounce_rate": summary["bounce_rate"]},
+                    "interpretation": f"High bounce rate ({summary['bounce_rate']}) indicates poor landing page quality or audience mismatch.",
+                })
+            elif bounce > 50:
+                signals.append({
+                    "priority": "medium",
+                    "type": "elevated_bounce_rate",
+                    "source": "ga4",
+                    "entity": None,
+                    "evidence": {"bounce_rate": summary["bounce_rate"]},
+                    "interpretation": f"Elevated bounce rate ({summary['bounce_rate']}). Monitor landing page engagement.",
+                })
+        except ValueError:
+            pass
+
+    pages = ga4.get("landing_pages") or ga4.get("pages") or []
+    if isinstance(pages, list) and pages:
+        summary["top_landing_pages"] = [
+            {"path": p.get("path"), "sessions": p.get("sessions"), "bounce_rate": p.get("bounce_rate"), "conversions": p.get("conversions")}
+            for p in pages[:5]
+        ]
+        # Find high-bounce landing pages
+        for p in pages[:8]:
+            if not isinstance(p, dict):
+                continue
+            br_raw = str(p.get("bounce_rate") or "").replace("%", "")
+            try:
+                br = float(br_raw)
+                if br > 65 and int(p.get("sessions") or 0) > 50:
+                    signals.append({
+                        "priority": "medium",
+                        "type": "landing_page_high_bounce",
+                        "source": "ga4",
+                        "entity": p.get("path"),
+                        "evidence": {"path": p.get("path"), "bounce_rate": p.get("bounce_rate"), "sessions": p.get("sessions")},
+                        "interpretation": f"Landing page {p.get('path','?')} has {br}% bounce rate with {p.get('sessions','?')} sessions.",
+                    })
+            except ValueError:
+                pass
+
+    acquisition = ga4.get("acquisition") or ga4.get("sources") or []
+    if isinstance(acquisition, list) and acquisition:
+        summary["top_channels"] = [
+            {"source": s.get("source"), "medium": s.get("medium"), "sessions": s.get("sessions"), "conversions": s.get("conversions")}
+            for s in acquisition[:5]
+        ]
+        # Find weak paid acquisition
+        for s in acquisition:
+            if not isinstance(s, dict):
+                continue
+            if str(s.get("medium") or "").lower() in ("cpc", "paid", "ppc", "paidsocial"):
+                conv = int(s.get("conversions") or 0)
+                sess = int(s.get("sessions") or 0)
+                if sess > 0 and conv == 0:
+                    signals.append({
+                        "priority": "high",
+                        "type": "paid_traffic_zero_conversions",
+                        "source": "ga4",
+                        "entity": f"{s.get('source','?')}/{s.get('medium','?')}",
+                        "evidence": {"source": s.get("source"), "medium": s.get("medium"), "sessions": sess, "conversions": conv},
+                        "interpretation": f"Paid traffic from {s.get('source','?')}/{s.get('medium','?')}: {sess} sessions, 0 conversions in GA4.",
+                    })
+
+    events = ga4.get("events") or []
+    if isinstance(events, list) and events:
+        key_events = [e for e in events if isinstance(e, dict) and str(e.get("category") or "").lower() in ("ecommerce", "custom")]
+        summary["key_events_count"] = len(key_events)
+        summary["key_events"] = [
+            {"name": e.get("name"), "count": e.get("count"), "users": e.get("users")}
+            for e in key_events[:5]
+        ]
+
+    return summary, signals
+
+
+def _mctx_build_joined_signals(gads_signals, ga4_signals):
+    """
+    Combine and cross-reference Google Ads and GA4 signals.
+    Adds combined signals where patterns overlap (e.g. waste + landing page bounce).
+    Deduplicates. Returns sorted list.
+    """
+    combined = list(gads_signals) + list(ga4_signals)
+
+    # Cross-reference: paid traffic with 0 conversions in both channels → amplify
+    waste_signals = [s for s in gads_signals if s.get("type") in ("waste_search_terms", "zero_conversion_spend")]
+    ga4_paid_zero = [s for s in ga4_signals if s.get("type") == "paid_traffic_zero_conversions"]
+    lp_bounce = [s for s in ga4_signals if s.get("type") == "landing_page_high_bounce"]
+
+    if waste_signals and ga4_paid_zero:
+        combined.append({
+            "priority": "critical",
+            "type": "combined_waste_no_ga4_conversions",
+            "source": "combined",
+            "entity": None,
+            "evidence": {
+                "gads_waste_signals": len(waste_signals),
+                "ga4_zero_conversion_channels": len(ga4_paid_zero),
+            },
+            "interpretation": (
+                "Google Ads reports wasted spend with zero conversions, "
+                "and GA4 also shows 0 conversions from paid traffic. "
+                "Review campaign targeting, bidding strategy, and landing page quality."
+            ),
+        })
+
+    if waste_signals and lp_bounce:
+        combined.append({
+            "priority": "high",
+            "type": "combined_waste_and_landing_page_bounce",
+            "source": "combined",
+            "entity": None,
+            "evidence": {
+                "gads_waste_signals": len(waste_signals),
+                "ga4_high_bounce_pages": len(lp_bounce),
+            },
+            "interpretation": (
+                "Wasted spend identified in Google Ads, and GA4 shows high bounce rates "
+                "on landing pages. Negative keyword strategy alone is insufficient — "
+                "landing page quality must be addressed."
+            ),
+        })
+
+    # Sort: critical → high → medium → info
+    prio_order = {"critical": 0, "high": 1, "medium": 2, "info": 3, "low": 4}
+    combined.sort(key=lambda s: prio_order.get(str(s.get("priority") or "info").lower(), 9))
+
+    # Deduplicate by (type + entity)
+    seen = set()
+    deduped = []
+    for s in combined:
+        key = (s.get("type") or "", s.get("entity") or "")
+        if key not in seen:
+            seen.add(key)
+            deduped.append(s)
+
+    return deduped[:30]
+
+
+@app.route("/api/intelligence/marketing/context", methods=["POST"])
+def api_marketing_context():
+    """Unified Marketing Intelligence Context builder.
+
+    POST /api/intelligence/marketing/context
+    Body:
+      account_id   : str
+      client_name  : str|null
+      google_ads   : {account_health, campaigns, waste_finder, search_terms}
+      ga4          : {overview, acquisition, landing_pages, events}   — optional
+
+    Returns marketing_context_v1 payload ready to feed into /api/agents/ppc/run.
+    Never blocks if GA4 is missing or partially connected.
+    """
+    if not request.is_json:
+        return jsonify({"error": "invalid_content_type", "message": "Content-Type must be application/json"}), 400
+
+    body = request.get_json(force=True, silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"error": "invalid_payload", "message": "Request body must be a JSON object"}), 400
+
+    account_id  = str(body.get("account_id") or "").strip()
+    client_name = str(body.get("client_name") or "").strip() or None
+
+    gads = body.get("google_ads") or {}
+    ga4  = body.get("ga4") or {}
+
+    warnings = []
+
+    # ── Detect and strip mock_demo sections ──────────────────────────────────
+    # Frontend marks mock/fallback data with _data_mode: "mock_demo" so we don't
+    # treat synthetic demo rows as live account evidence.
+    mock_demo_sections = []
+    if isinstance(gads, dict):
+        for _sect in ("account_health", "campaigns", "waste_finder", "search_terms"):
+            _sec = gads.get(_sect) or {}
+            if isinstance(_sec, dict) and _sec.get("_data_mode") == "mock_demo":
+                mock_demo_sections.append(f"google_ads.{_sect}")
+                gads[_sect] = {}
+    if isinstance(ga4, dict):
+        for _sect in ("overview", "acquisition", "landing_pages", "events"):
+            _sec = ga4.get(_sect) or {}
+            if isinstance(_sec, dict) and _sec.get("_data_mode") == "mock_demo":
+                mock_demo_sections.append(f"ga4.{_sect}")
+                ga4[_sect] = {}
+    if mock_demo_sections:
+        warnings.append(
+            "Demo/fallback sections excluded from analysis: "
+            + ", ".join(mock_demo_sections)
+            + ". These were marked mock_demo and are not used as live evidence."
+        )
+
+    # ── Google Ads channel ───────────────────────────────────────────────
+    gads_available = bool(isinstance(gads, dict) and gads)
+    if not gads_available:
+        warnings.append("google_ads context is empty — Google Ads data unavailable")
+    gads_summary, gads_signals = _mctx_extract_gads_summary(gads if gads_available else {})
+
+    # ── GA4 channel ──────────────────────────────────────────────────────
+    ga4_available = bool(isinstance(ga4, dict) and ga4)
+    if not ga4_available:
+        warnings.append("GA4 is not connected. Website behavior context is unavailable.")
+    ga4_summary, ga4_signals = _mctx_extract_ga4_summary(ga4 if ga4_available else {})
+
+    # ── Joined signals ───────────────────────────────────────────────────
+    joined_signals = _mctx_build_joined_signals(gads_signals, ga4_signals)
+
+    return jsonify({
+        "success": True,
+        "context_version": "marketing_context_v1",
+        "account_id": account_id,
+        "client_name": client_name,
+        "channels": {
+            "google_ads": {
+                "available": gads_available,
+                "summary": gads_summary,
+                "signals": gads_signals,
+            },
+            "ga4": {
+                "available": ga4_available,
+                "summary": ga4_summary,
+                "signals": ga4_signals,
+            },
+        },
+        "joined_signals": joined_signals,
+        "warnings": warnings,
+    }), 200
+
+
+# ── End Unified Marketing Intelligence Context ─────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PPC Specialist Agent — /api/agents/ppc/run
+#
+# First real connector → agent flow:
+#   Google Ads + GA4 context  →  PPC Specialist  →  Structured Action Plan
+#
+# TODO next: create orchestrator run trace from PPC agent output
+# ─────────────────────────────────────────────────────────────────────────────
+
+# PPC Specialist system prompt (grounded, schema-strict, no invented data)
+_PPC_SYSTEM_PROMPT = """You are PPC Specialist in Camarad.ai — a tactical paid-media operator.
+
+Your only output is strict JSON. No markdown, no prose, no code blocks, no explanation outside the JSON.
+
+Role:
+- Analyse Google Ads and GA4 context provided in the user message.
+- Identify concrete issues, waste, and opportunities grounded in the provided metrics.
+- Return implementation-ready actions with clear priority, evidence, expected impact, and risk.
+
+Hard rules:
+- NEVER invent account entities (campaigns, ad groups, keywords, search terms, metrics).
+- Every action must cite specific evidence from the provided context.
+- If a context section is missing or empty, skip analysis for that section.
+- Do not give generic PPC advice (e.g. "review your keywords"). Be specific.
+- Do not mutate Google Ads. Only recommend actions.
+- Match the exact output JSON schema below.
+
+Output schema:
+{
+  "agent": "ppc",
+  "policy_used": "<auto|eco|deep>",
+  "account_id": "<string>",
+  "summary": "<1-3 sentence account state description>",
+  "actions": [
+    {
+      "priority": "<critical|high|medium|low>",
+      "type": "<pause_campaign|add_negative_keyword|adjust_bid|budget_reallocation|ad_copy_test|landing_alignment|structure_change|audience_refine|reporting_action|review_campaign>",
+      "entity": "<campaign/keyword/term name or null>",
+      "reason": "<why this action is needed>",
+      "evidence": {"metric": value},
+      "expected_impact": "<what should improve>",
+      "risk": "<what could go wrong>",
+      "recommended_next_step": "<first concrete thing to do>"
+    }
+  ],
+  "next_questions": ["<clarifying question if needed>"],
+  "warnings": ["<data quality or coverage warnings>"]
+}
+
+policy_used rules:
+- auto: light scan, top 3 signals only
+- eco: standard scan, up to 8 actions
+- deep: full analysis, up to 20 actions, all signals
+"""
+
+_PPC_VALID_PRIORITIES = {"critical", "high", "medium", "low"}
+_PPC_VALID_ACTION_TYPES = {
+    "pause_campaign", "add_negative_keyword", "adjust_bid",
+    "budget_reallocation", "ad_copy_test", "landing_alignment",
+    "structure_change", "audience_refine", "reporting_action", "review_campaign",
+}
+_PPC_VALID_POLICIES = {"auto", "eco", "deep"}
+
+# Max actions returned per policy
+_PPC_POLICY_ACTION_LIMITS = {"auto": 3, "eco": 8, "deep": 20}
+
+
+def _ppc_validate_context(ctx):
+    """Return (sanitized_ctx, warnings) — never raises."""
+    warnings = []
+    if not isinstance(ctx, dict):
+        return {}, ["context must be a JSON object"]
+
+    out = {}
+    for section in ("account_health", "campaigns", "waste_finder", "search_terms", "ga4_overview"):
+        val = ctx.get(section)
+        if val is None:
+            warnings.append(f"context.{section} not provided")
+        elif not isinstance(val, dict):
+            warnings.append(f"context.{section} ignored — expected object, got {type(val).__name__}")
+        else:
+            out[section] = val
+
+    return out, warnings
+
+
+def _ppc_build_context_summary(ctx):
+    """Produce a compact text summary of the context for the LLM prompt."""
+    lines = []
+
+    ah = ctx.get("account_health") or {}
+    if ah:
+        summary = ah.get("summary") or {}
+        signals = (ah.get("signals") or [])[:10]
+        lines.append("=== Account Health ===")
+        if summary:
+            lines.append(f"  active_campaigns={summary.get('active_campaigns')} "
+                         f"total_spend={summary.get('total_spend')} "
+                         f"account_roas={summary.get('account_roas')} "
+                         f"account_cpa={summary.get('account_cpa')}")
+            sc = summary.get("signal_counts") or {}
+            lines.append(f"  signals: critical={sc.get('critical',0)} "
+                         f"warning={sc.get('warning',0)} info={sc.get('info',0)}")
+        for s in signals:
+            sev = s.get("severity", "info")
+            lines.append(f"  [{sev}] {s.get('id','')} — {s.get('message','')[:180]}")
+
+    camps = ctx.get("campaigns") or {}
+    if camps:
+        lines.append("=== Campaigns ===")
+        camp_list = camps.get("campaigns") or []
+        camp_summary = camps.get("summary") or {}
+        if camp_summary:
+            lines.append(f"  total={camp_summary.get('total_campaigns')} "
+                         f"active={camp_summary.get('active_campaigns')} "
+                         f"total_spent={camp_summary.get('total_spent')} "
+                         f"avg_roas={camp_summary.get('avg_roas')}")
+        for c in camp_list[:15]:
+            lines.append(f"  {c.get('name','?')} status={c.get('status')} "
+                         f"spent={c.get('spent')} roas={c.get('roas')} "
+                         f"conversions={c.get('conversions')} impressions={c.get('impressions')}")
+
+    wf = ctx.get("waste_finder") or {}
+    if wf:
+        lines.append("=== Waste Finder ===")
+        wf_summary = wf.get("summary") or {}
+        tws = wf_summary.get("total_waste_spend") or {}
+        lines.append(f"  waste_campaigns={wf_summary.get('waste_campaigns_count')} "
+                     f"total_waste_spend={tws.get('formatted','?')}")
+        for s in (wf.get("signals") or [])[:10]:
+            lines.append(f"  [{s.get('severity','info')}] {s.get('id','')} — {s.get('message','')[:180]}")
+
+    st = ctx.get("search_terms") or {}
+    if st:
+        lines.append("=== Search Terms ===")
+        st_summary = st.get("summary") or {}
+        lines.append(f"  terms_count={st_summary.get('terms_count')} "
+                     f"waste_terms={st_summary.get('waste_terms_count')} "
+                     f"winner_terms={st_summary.get('winner_terms_count')} "
+                     f"pmax_gap={st_summary.get('pmax_gap')}")
+        for s in (st.get("signals") or [])[:10]:
+            lines.append(f"  [{s.get('severity','info')}] {s.get('id','')} — {s.get('message','')[:180]}")
+
+    ga4 = ctx.get("ga4_overview") or {}
+    if ga4:
+        lines.append("=== GA4 Overview ===")
+        for k, v in list(ga4.items())[:12]:
+            lines.append(f"  {k}={v}")
+
+    return "\n".join(lines) if lines else "No context data available."
+
+
+def _ppc_fallback_plan(account_id, policy, ctx, warnings):
+    """
+    Deterministic fallback when LLM/gateway is unavailable.
+    Builds a safe action plan from existing signals in the context.
+    Never invents data. May produce zero actions if no signals exist.
+    """
+    actions = []
+    extra_warnings = list(warnings)
+
+    # Pull signals from waste_finder
+    wf = ctx.get("waste_finder") or {}
+    for s in (wf.get("signals") or [])[:5]:
+        if not isinstance(s, dict):
+            continue
+        sev = s.get("severity", "info")
+        priority = "high" if sev == "critical" else ("medium" if sev == "warning" else "low")
+        evidence = {}
+        raw_ev = s.get("evidence")
+        if isinstance(raw_ev, dict):
+            evidence = raw_ev
+        elif isinstance(raw_ev, list):
+            evidence = {"items": raw_ev[:5]}
+        actions.append({
+            "priority": priority,
+            "type": "review_campaign",
+            "entity": None,
+            "reason": str(s.get("message", ""))[:240],
+            "evidence": evidence,
+            "expected_impact": "Reduce wasted spend",
+            "risk": "Pausing may reduce reach",
+            "recommended_next_step": "Review identified campaigns in Google Ads UI",
+        })
+
+    # Pull signals from account_health
+    ah = ctx.get("account_health") or {}
+    for s in (ah.get("signals") or [])[:5]:
+        if not isinstance(s, dict):
+            continue
+        if any(a.get("reason") == str(s.get("message", ""))[:240] for a in actions):
+            continue  # skip duplicate
+        sev = s.get("severity", "info")
+        priority = "high" if sev == "critical" else ("medium" if sev == "warning" else "low")
+        evidence = {}
+        raw_ev = s.get("evidence")
+        if isinstance(raw_ev, dict):
+            evidence = raw_ev
+        elif isinstance(raw_ev, list):
+            evidence = {"items": raw_ev[:5]}
+        actions.append({
+            "priority": priority,
+            "type": "reporting_action",
+            "entity": None,
+            "reason": str(s.get("message", ""))[:240],
+            "evidence": evidence,
+            "expected_impact": "Improve account health",
+            "risk": "No structural risk",
+            "recommended_next_step": "Investigate signal in account dashboard",
+        })
+
+    # Search terms: flag waste terms
+    st = ctx.get("search_terms") or {}
+    st_summary = (st.get("summary") or {})
+    waste_count = int(st_summary.get("waste_terms_count") or 0)
+    if waste_count > 0:
+        actions.append({
+            "priority": "medium",
+            "type": "add_negative_keyword",
+            "entity": None,
+            "reason": f"{waste_count} waste search terms identified",
+            "evidence": {"waste_terms_count": waste_count,
+                         "winner_terms_count": int(st_summary.get("winner_terms_count") or 0)},
+            "expected_impact": "Reduce irrelevant clicks and wasted spend",
+            "risk": "May exclude some borderline terms",
+            "recommended_next_step": "Review search terms report and add waste terms as negatives",
+        })
+
+    # Apply policy action limit
+    limit = _PPC_POLICY_ACTION_LIMITS.get(policy, 8)
+    actions = actions[:limit]
+
+    extra_warnings.append("llm_unavailable — fallback plan built from deterministic signals")
+
+    if not actions:
+        return {
+            "agent": "ppc",
+            "policy_used": policy,
+            "account_id": str(account_id or ""),
+            "summary": "No context data was available to generate actions. Connect Google Ads to enable analysis.",
+            "actions": [],
+            "next_questions": ["Has Google Ads been connected and authorized for this account?"],
+            "warnings": extra_warnings,
+        }
+
+    return {
+        "agent": "ppc",
+        "policy_used": policy,
+        "account_id": str(account_id or ""),
+        "summary": (
+            f"Fallback analysis: {len(actions)} signal(s) surfaced from account data. "
+            "LLM gateway was unavailable; actions are derived deterministically from connector signals."
+        ),
+        "actions": actions,
+        "next_questions": [],
+        "warnings": extra_warnings,
+    }
+
+
+def _ppc_validate_llm_output(raw, account_id, policy):
+    """
+    Validate and sanitize LLM output. Returns (cleaned_dict, is_valid).
+    Strips any markdown fences, ensures required fields, coerces types.
+    Never raises.
+    """
+    if not isinstance(raw, str):
+        return None, False
+
+    text = raw.strip()
+    # Strip markdown code fences if present
+    if text.startswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(
+            l for l in lines
+            if not l.strip().startswith("```")
+        ).strip()
+
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None, False
+
+    if not isinstance(data, dict):
+        return None, False
+
+    # Required fields
+    if data.get("agent") != "ppc":
+        return None, False
+    if data.get("policy_used") not in _PPC_VALID_POLICIES:
+        data["policy_used"] = policy
+    if not isinstance(data.get("summary"), str) or not data["summary"].strip():
+        return None, False
+    if not isinstance(data.get("actions"), list):
+        return None, False
+
+    # Coerce and filter actions
+    clean_actions = []
+    for a in data["actions"]:
+        if not isinstance(a, dict):
+            continue
+        priority = a.get("priority", "medium")
+        if priority not in _PPC_VALID_PRIORITIES:
+            priority = "medium"
+        action_type = a.get("type", "reporting_action")
+        if action_type not in _PPC_VALID_ACTION_TYPES:
+            action_type = "reporting_action"
+        clean_actions.append({
+            "priority": priority,
+            "type": action_type,
+            "entity": str(a.get("entity") or "") or None,
+            "reason": str(a.get("reason", ""))[:400],
+            "evidence": a.get("evidence") if isinstance(a.get("evidence"), dict) else {},
+            "expected_impact": str(a.get("expected_impact", ""))[:240],
+            "risk": str(a.get("risk", ""))[:240],
+            "recommended_next_step": str(a.get("recommended_next_step", ""))[:300],
+        })
+
+    limit = _PPC_POLICY_ACTION_LIMITS.get(policy, 8)
+    data["actions"] = clean_actions[:limit]
+    data["account_id"] = str(account_id or "")
+
+    next_q = data.get("next_questions")
+    data["next_questions"] = [str(q)[:300] for q in next_q if isinstance(q, str)] if isinstance(next_q, list) else []
+
+    warns = data.get("warnings")
+    data["warnings"] = [str(w)[:300] for w in warns if isinstance(w, str)] if isinstance(warns, list) else []
+
+    return data, True
+
+
+@app.route("/api/agents/ppc/run", methods=["POST"])
+def api_ppc_agent_run():
+    """PPC Specialist Agent — first real connector → agent flow.
+
+    POST /api/agents/ppc/run
+    Body (JSON):
+      account_id  : str            — Google Ads customer ID
+      client_name : str|null       — optional human label
+      policy      : auto|eco|deep  — depth control (default: deep)
+      context     : {
+        account_health : {}        — from /api/connectors/google-ads/intelligence/account-health
+        campaigns      : {}        — from /api/connectors/google-ads/campaigns
+        waste_finder   : {}        — from /api/connectors/google-ads/intelligence/waste-finder
+        search_terms   : {}        — from /api/connectors/google-ads/intelligence/search-terms
+        ga4_overview   : {}        — optional; from GA4 connector state
+      }
+
+    Returns strict JSON matching PPC agent output schema.
+    Falls back to deterministic signal-based plan if LLM/gateway unavailable.
+
+    TODO next: create orchestrator run trace from PPC agent output
+    """
+    # ── Input validation ───────────────────────────────────────────────
+    if not request.is_json:
+        return jsonify({
+            "error": "invalid_content_type",
+            "message": "Content-Type must be application/json",
+        }), 400
+
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        body = {}
+
+    if not isinstance(body, dict):
+        return jsonify({
+            "error": "invalid_payload",
+            "message": "Request body must be a JSON object",
+        }), 400
+
+    account_id = str(body.get("account_id") or "").strip()
+    if not account_id:
+        return jsonify({
+            "error": "account_id_required",
+            "message": "account_id is required",
+        }), 400
+
+    client_name = str(body.get("client_name") or "").strip() or None
+    raw_policy = str(body.get("policy") or "deep").strip().lower()
+    policy = raw_policy if raw_policy in _PPC_VALID_POLICIES else "deep"
+
+    raw_ctx = body.get("context")
+    if raw_ctx is None:
+        raw_ctx = {}
+
+    # ── Detect mock_demo sections — do not use as live evidence ───────────────
+    mock_demo_ctx_sections = []
+    if isinstance(raw_ctx, dict):
+        for _sect in ("account_health", "campaigns", "waste_finder", "search_terms", "ga4_overview"):
+            _sec = raw_ctx.get(_sect) or {}
+            if isinstance(_sec, dict) and _sec.get("_data_mode") == "mock_demo":
+                mock_demo_ctx_sections.append(_sect)
+                raw_ctx[_sect] = {}  # strip before passing to context validator
+
+    # ── Context validation ─────────────────────────────────────────────
+    ctx, ctx_warnings = _ppc_validate_context(raw_ctx)
+
+    # Append mock_demo warning so it appears in agent output
+    if mock_demo_ctx_sections:
+        ctx_warnings.append(
+            "Some data is demo/fallback and was not used as live evidence: "
+            + ", ".join(mock_demo_ctx_sections)
+            + ". Recommendations are based only on live sections."
+        )
+
+    if not ctx:
+        # Empty context — safe no-data response (not a 400; the connector may not be configured yet)
+        return jsonify({
+            "agent": "ppc",
+            "policy_used": policy,
+            "account_id": account_id,
+            "summary": "No connector context was provided. Connect Google Ads and run an audit first.",
+            "actions": [],
+            "next_questions": [
+                "Has Google Ads been connected for this account?",
+                "Has the marketing audit been run to collect context?",
+            ],
+            "warnings": ctx_warnings,
+        }), 200
+
+    # ── Build LLM prompt ───────────────────────────────────────────────
+    ctx_text = _ppc_build_context_summary(ctx)
+    client_label = f" (client: {client_name})" if client_name else ""
+    user_message = (
+        f"Account ID: {account_id}{client_label}\n"
+        f"Policy: {policy}\n\n"
+        f"{ctx_text}\n\n"
+        f"Return the PPC action plan as strict JSON. policy_used must be \"{policy}\"."
+    )
+
+    # ── LLM call via Coolbits gateway ─────────────────────────────────
+    llm_result = None
+    fallback_used = False
+    fallback_reason = None
+
+    if COOLBITS_GATEWAY_ENABLED:
+        try:
+            status, run_payload, _ = _coolbits_request(
+                "POST", "/api/runs",
+                body={"title": f"ppc-audit-{account_id}"},
+                timeout=20,
+            )
+            run_id = (run_payload or {}).get("runId") if 200 <= int(status) < 300 else None
+
+            if run_id:
+                llm_body = {
+                    "profileName": COOLBITS_VERTEX_PROFILE,
+                    "input": user_message,
+                    "promptEnvelope": {
+                        "envelopeVersion": "v1",
+                        "objective": _PPC_SYSTEM_PROMPT,
+                    },
+                    "real": True,
+                }
+                status2, payload2, text2 = _coolbits_request(
+                    "POST", f"/api/runs/{run_id}/llm",
+                    body=llm_body,
+                    timeout=60,
+                    extra_headers={"X-Real-LLM-Confirm": "true"},
+                )
+                if 200 <= int(status2) < 300:
+                    raw_text = str((payload2 or {}).get("text") or "").strip()
+                    cleaned, valid = _ppc_validate_llm_output(raw_text, account_id, policy)
+                    if valid:
+                        llm_result = cleaned
+                        # Merge context warnings into result
+                        llm_result["warnings"] = (llm_result.get("warnings") or []) + ctx_warnings
+                    else:
+                        fallback_used = True
+                        fallback_reason = "llm_output_failed_schema_validation"
+                else:
+                    fallback_used = True
+                    fallback_reason = f"llm_http_{status2}"
+            else:
+                fallback_used = True
+                fallback_reason = "gateway_run_create_failed"
+        except Exception as e:
+            fallback_used = True
+            fallback_reason = f"gateway_exception: {str(e)[:120]}"
+    else:
+        fallback_used = True
+        fallback_reason = "coolbits_gateway_disabled"
+
+    # ── Deterministic fallback ─────────────────────────────────────────
+    if llm_result is None:
+        fallback_warnings = ctx_warnings[:]
+        if fallback_reason:
+            fallback_warnings.append(fallback_reason)
+        llm_result = _ppc_fallback_plan(account_id, policy, ctx, fallback_warnings)
+
+    return jsonify(llm_result), 200
+
+
+# ── End PPC Specialist Agent ───────────────────────────────────────────────────
+
 if __name__ == '__main__':
     app.run(debug=Config.DEBUG, host=Config.HOST, port=Config.PORT)
