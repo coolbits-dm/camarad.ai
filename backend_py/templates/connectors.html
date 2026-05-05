@@ -1041,79 +1041,68 @@
               <span id="gadsDemoNoticeText"><strong>Demo Data</strong> — Showing demo/mock Google Ads data. <a href="#" onclick="return false;" class="alert-link">Connect with OAuth</a> to use your real account data.</span>
             </div>
 
-            <!-- Account Selector Bar — three-row layout -->
+            <!-- Account Selector Bar — compact Direct Access → Manager/MCC → Client Account flow -->
             <div class="card bg-dark border-secondary mb-3">
               <div class="card-body py-2">
-
-                <!-- Row 1: Directly Accessible Accounts -->
-                <div class="row align-items-center g-2 mb-2">
-                  <div class="col-auto">
-                    <label class="form-label mb-0 small text-muted" data-bs-toggle="tooltip" title="Accounts directly accessible to your authenticated Google user via ListAccessibleCustomers. These may include manager (MCC) accounts.">
-                      <i class="bi bi-person-check text-info"></i> Directly Accessible Accounts:
-                    </label>
-                  </div>
-                  <div class="col-md-5">
-                    <select id="gadsDirectAccessSelect" class="form-select form-select-sm bg-dark text-light" onchange="gadsOnDirectAccessChange()">
-                      <option value="">— Select Account —</option>
-                    </select>
-                  </div>
-                  <div class="col-auto" id="gadsOAuthButtonArea">
-                    <button class="btn btn-sm btn-outline-secondary" disabled id="gadsOAuthBtn"><span class="spinner-border spinner-border-sm"></span></button>
-                  </div>
-                </div>
-
-                <!-- Row 2: MCC Manager Context -->
-                <div class="row align-items-center g-2 mb-2">
-                  <div class="col-auto">
-                    <label class="form-label mb-0 small text-muted" data-bs-toggle="tooltip" title="Enter a Manager (MCC) account ID to load all client accounts under it. This performs a read-only customer_client query.">
-                      <i class="bi bi-diagram-3 text-warning"></i> Manager / MCC:
-                    </label>
-                  </div>
+                <div class="row align-items-end g-2">
                   <div class="col-md-4">
-                    <div class="input-group input-group-sm">
-                      <input id="gadsMccId" type="text" class="form-control bg-dark text-light border-secondary" placeholder="e.g. 892-416-3684">
-                      <button class="btn btn-outline-warning" type="button" id="gadsLoadHierarchyBtn" onclick="gadsLoadMccHierarchy()">
-                        <i class="bi bi-diagram-3"></i> Load MCC Hierarchy
-                      </button>
+                    <label class="form-label mb-1 small text-muted d-flex align-items-center gap-1" data-bs-toggle="tooltip" title="Directly Accessible Accounts: accounts visible to your authenticated Google user via ListAccessibleCustomers. These may include manager (MCC) accounts.">
+                      <i class="bi bi-person-check text-info"></i>
+                      <span>Direct Access</span>
+                      <span class="text-muted">OAuth-visible accounts</span>
+                    </label>
+                    <div class="d-flex gap-2">
+                      <select id="gadsDirectAccessSelect" class="form-select form-select-sm bg-dark text-light" onchange="gadsOnDirectAccessChange()">
+                        <option value="">— Select Account —</option>
+                      </select>
+                      <span id="gadsOAuthButtonArea">
+                        <button class="btn btn-sm btn-outline-secondary" disabled id="gadsOAuthBtn"><span class="spinner-border spinner-border-sm"></span></button>
+                      </span>
                     </div>
                   </div>
-                  <div class="col-auto">
+
+                  <div class="col-md-4">
+                    <label class="form-label mb-1 small text-muted d-flex align-items-center gap-1" data-bs-toggle="tooltip" title="Enter a Manager (MCC) account ID to load all client accounts under it. This performs a read-only customer_client query.">
+                      <i class="bi bi-diagram-3 text-warning"></i>
+                      <span>Manager/MCC</span>
+                      <span class="text-muted">Manager context</span>
+                    </label>
+                    <div class="input-group input-group-sm">
+                      <input id="gadsMccId" type="text" class="form-control bg-dark text-light border-secondary" placeholder="e.g. 892-416-3684">
+                      <button class="btn btn-outline-warning" type="button" id="gadsLoadHierarchyBtn" onclick="gadsLoadMccHierarchy()" title="Load MCC hierarchy">
+                        <i class="bi bi-diagram-3"></i>
+                      </button>
+                    </div>
                     <span id="gadsMccStatus" class="small text-muted"></span>
                   </div>
-                </div>
 
-                <!-- Row 3: Client Account from hierarchy -->
-                <div class="row align-items-center g-2">
-                  <div class="col-auto">
-                    <label class="form-label mb-0 small text-muted" data-bs-toggle="tooltip" title="Client accounts from the loaded MCC hierarchy. Campaigns will use the selected client account.">
-                      <i class="bi bi-building text-success"></i> Client Account:
+                  <div class="col-md-4">
+                    <label class="form-label mb-1 small text-muted d-flex align-items-center gap-1" data-bs-toggle="tooltip" title="Client accounts from the loaded MCC hierarchy. Campaigns will use the selected client account.">
+                      <i class="bi bi-building text-success"></i>
+                      <span>Client Account</span>
+                      <span class="text-muted">Reporting account</span>
                     </label>
-                  </div>
-                  <div class="col-md-5">
                     <select id="gadsAccountSelect" class="form-select form-select-sm bg-dark text-light" onchange="gadsLoadAccount()">
                       <option value="">— Load MCC Hierarchy first —</option>
                     </select>
-                  </div>
-                  <div class="col-auto ms-auto">
                     <span id="gadsAccountInfo" class="small text-muted"></span>
                   </div>
                 </div>
-
               </div>
             </div>
 
-            <!-- Tabs — Account Intelligence structure (Phase 2C) -->
+            <!-- Tabs — simplified primary workspace -->
             <ul class="nav nav-tabs nav-fill mb-3" id="gadsTabs">
               <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#gadsOverview" type="button"><i class="bi bi-speedometer2"></i> Overview</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsCampaigns" type="button"><i class="bi bi-megaphone"></i> Campaigns</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsDiagnostics" type="button" title="Live alerts detected from account data."><i class="bi bi-exclamation-triangle"></i> Diagnostics</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsReports" type="button" onclick="gadsOnReportsTabOpen()" title="Focused audit modules you can run on demand."><i class="bi bi-file-earmark-bar-graph"></i> Reports</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsAiBrief" type="button"><i class="bi bi-robot"></i> AI Brief</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsSettings" type="button"><i class="bi bi-gear"></i> Settings</button></li>
-              <!-- Dev-only tabs — hidden in production -->
-              <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsApiTest" type="button"><i class="bi bi-terminal"></i> Test API</button></li>
-              <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsPacing" type="button"><i class="bi bi-graph-up"></i> Budget Pacing</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsReports" type="button" onclick="gadsOnReportsTabOpen()" title="Focused audit modules you can run on demand."><i class="bi bi-cpu"></i> Intelligence</button></li>
-              <li class="nav-item d-none"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsAssets" type="button"><i class="bi bi-pencil-square"></i> Asset Generator</button></li>
+              <!-- Advanced / Legacy panes are intentionally hidden from primary navigation. -->
+              <li class="nav-item d-none"><button class="nav-link" id="gadsDiagnosticsTab" data-bs-toggle="tab" data-bs-target="#gadsDiagnostics" type="button" title="Diagnostics legacy pane"><i class="bi bi-exclamation-triangle"></i> Diagnostics</button></li>
+              <li class="nav-item d-none"><button class="nav-link" id="gadsApiTestTab" data-bs-toggle="tab" data-bs-target="#gadsApiTest" type="button"><i class="bi bi-terminal"></i> Test API</button></li>
+              <li class="nav-item d-none"><button class="nav-link" id="gadsPacingTab" data-bs-toggle="tab" data-bs-target="#gadsPacing" type="button"><i class="bi bi-graph-up"></i> Budget Pacing</button></li>
+              <li class="nav-item d-none"><button class="nav-link" id="gadsAssetsTab" data-bs-toggle="tab" data-bs-target="#gadsAssets" type="button"><i class="bi bi-pencil-square"></i> Asset Generator</button></li>
             </ul>
 
             <div class="tab-content">
@@ -1125,6 +1114,7 @@
                     <p class="mt-3">Select an account and click <strong>Connect</strong> to load data.</p>
                   </div>
                 </div>
+                <div id="gadsOverviewDiagnosticsStrip" class="mt-3"></div>
               </div>
 
               <!-- ── Campaigns Tab ─────────────────────────────────── -->
@@ -1233,13 +1223,13 @@
                 <div id="gadsPacingContent"></div>
               </div>
 
-              <!-- ── Intelligence Modules Tab ────────────────────────── -->
+              <!-- ── Reports Modules Tab ────────────────────────── -->
               <div class="tab-pane fade" id="gadsReports">
 
                 <!-- Header + date controls -->
                 <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
                   <div>
-                    <h6 class="mb-0 text-light"><i class="bi bi-cpu text-primary me-2"></i>Google Ads Intelligence Modules</h6>
+                    <h6 class="mb-0 text-light"><i class="bi bi-file-earmark-bar-graph text-primary me-2"></i>Google Ads Reports</h6>
                     <p class="text-muted small mt-1 mb-0">Run focused checks for this selected client account.</p>
                   </div>
                   <div class="d-flex gap-2 align-items-center flex-wrap">
@@ -1259,7 +1249,7 @@
                 </div>
 
                 <!-- Module groups -->
-                <div class="d-flex flex-wrap gap-4 mb-3" id="gadsModuleCards">
+                <div class="d-flex flex-wrap gap-3 mb-3" id="gadsModuleCards">
 
                   <!-- Core Checks -->
                   <div>
@@ -1296,8 +1286,8 @@
                   </div>
 
                   <!-- Planned -->
-                  <div>
-                    <div class="text-uppercase text-muted mb-2" style="font-size:0.68rem;letter-spacing:.08em;">Planned</div>
+                  <div class="flex-grow-1">
+                    <div class="text-uppercase text-muted mb-2" style="font-size:0.68rem;letter-spacing:.08em;">Coming next</div>
                     <div class="d-flex flex-wrap gap-2">
                       <button class="btn btn-sm btn-outline-secondary gads-module-chip" disabled title="Planned — Performance Max module coming soon">
                         <i class="bi bi-lightning"></i> PMax
@@ -1424,6 +1414,25 @@
                 </div>
                 <div class="mt-4">
                   <button class="btn btn-primary" onclick="gadsSaveSettings()"><i class="bi bi-save"></i> Save Settings</button>
+                </div>
+                <div class="accordion mt-4" id="gadsAdvancedLegacy">
+                  <div class="accordion-item bg-dark border-secondary">
+                    <h2 class="accordion-header" id="gadsAdvancedLegacyHeading">
+                      <button class="accordion-button collapsed bg-dark text-light" type="button" data-bs-toggle="collapse" data-bs-target="#gadsAdvancedLegacyBody" aria-expanded="false" aria-controls="gadsAdvancedLegacyBody">
+                        Advanced / Legacy
+                      </button>
+                    </h2>
+                    <div id="gadsAdvancedLegacyBody" class="accordion-collapse collapse" aria-labelledby="gadsAdvancedLegacyHeading" data-bs-parent="#gadsAdvancedLegacy">
+                      <div class="accordion-body">
+                        <div class="d-flex flex-wrap gap-2">
+                          <button class="btn btn-sm btn-outline-secondary" type="button" onclick="gadsOpenAdvancedPane('gadsApiTestTab')"><i class="bi bi-terminal me-1"></i>Test API</button>
+                          <button class="btn btn-sm btn-outline-secondary" type="button" onclick="gadsOpenAdvancedPane('gadsPacingTab')"><i class="bi bi-graph-up me-1"></i>Budget Pacing</button>
+                          <button class="btn btn-sm btn-outline-secondary" type="button" onclick="gadsOpenAdvancedPane('gadsAssetsTab')"><i class="bi bi-pencil-square me-1"></i>Asset Generator</button>
+                          <button class="btn btn-sm btn-outline-secondary" type="button" onclick="gadsOpenAdvancedPane('gadsDiagnosticsTab')"><i class="bi bi-exclamation-triangle me-1"></i>Diagnostics</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -6247,14 +6256,65 @@
     return map[String(code || '').toUpperCase()] || (code ? code + ' ' : '');
   }
 
-  function _gadsSourceBadge(source) {
+  function _gadsCurrencyCodeFromAny(currency) {
+    if (!currency) return '';
+    if (typeof currency === 'string') return currency.trim().toUpperCase();
+    return String(currency.currency_code || currency.native_currency || currency.display_currency || '').trim().toUpperCase();
+  }
+
+  function _gadsCurrentCurrencyCode() {
+    const acct = gadsState && gadsState.selectedAccount ? gadsState.selectedAccount : {};
+    const overviewCurrency = gadsState && gadsState.overviewData ? (gadsState.overviewData.currency || {}) : {};
+    const accountInfo = document.getElementById('gadsAccountInfo');
+    const fromInfo = accountInfo ? String(accountInfo.textContent || '').split('·')[0].trim() : '';
+    return _gadsCurrencyCodeFromAny(acct.currency) ||
+      _gadsCurrencyCodeFromAny(overviewCurrency) ||
+      _gadsCurrencyCodeFromAny(fromInfo);
+  }
+
+  function gadsCurrencyBadge(currency) {
+    const code = _gadsCurrencyCodeFromAny(currency) || _gadsCurrentCurrencyCode();
+    if (!code) return '<span class="badge bg-secondary text-muted ms-1">Currency unknown</span>';
+    let badge = `<span class="badge bg-secondary text-light ms-1" title="Account native currency">Native: ${code}</span>`;
+    if (currency && typeof currency === 'object') {
+      const nativeCode = _gadsCurrencyCodeFromAny(currency.native_currency || currency.currency_code);
+      const displayCode = _gadsCurrencyCodeFromAny(currency.display_currency);
+      if (currency.conversion_applied === false && displayCode && nativeCode && displayCode !== nativeCode) {
+        badge += '<span class="badge bg-dark border ms-1">Conversion unavailable</span>';
+      }
+    }
+    return badge;
+  }
+
+  function gadsFormatMoney(value, currency) {
+    if (value == null || value === '') return '—';
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    const code = _gadsCurrencyCodeFromAny(currency) || _gadsCurrentCurrencyCode();
+    const amount = n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    if (!code) return amount;
+    const symbol = _gadsCurrencySymbol(code);
+    return symbol ? symbol + amount : `${code} ${amount}`;
+  }
+
+  function gadsSourceBadge(source) {
     if (source === 'google_ads_api') return '<span class="badge bg-success ms-2" title="Live data from Google Ads API">Live</span>';
     if (source === 'partial_live')   return '<span class="badge bg-info text-dark ms-2" title="Partial live data">Partial</span>';
-    if (source === 'mock_fallback')  return '<span class="badge bg-danger ms-2" title="Account connected but API call failed — no demo rows shown by default">API Error</span>';
-    if (source === 'mock')           return '<span class="badge bg-secondary ms-2" title="Demo data — not from a connected account">Demo</span>';
-    if (source === 'mock_demo')      return '<span class="badge bg-secondary ms-2" title="Demo data shown by user request">Demo</span>';
+    if (source === 'mock_fallback')  return '<span class="badge bg-danger ms-2" title="Account connected but API call failed; fallback data is not live">API Error / Fallback</span>';
+    if (source === 'mock')           return '<span class="badge bg-secondary ms-2" title="Mock data; not from a connected account">Mock</span>';
+    if (source === 'mock_demo')      return '<span class="badge bg-secondary ms-2" title="Mock data shown by user request">Mock</span>';
+    if (source === 'planned')        return '<span class="badge bg-secondary ms-2">Planned</span>';
     if (source === 'empty')          return '<span class="badge bg-dark border ms-2">Empty</span>';
-    return `<span class="badge bg-info ms-2">${source || '—'}</span>`;
+    return `<span class="badge bg-info ms-2">${source || 'Unknown/Error'}</span>`;
+  }
+
+  function _gadsSourceBadge(source) {
+    return gadsSourceBadge(source);
+  }
+
+  function gadsOpenAdvancedPane(tabButtonId) {
+    const tabButton = document.getElementById(tabButtonId);
+    if (tabButton) tabButton.click();
   }
 
   // ── Data mode state — gates demo/fallback rows behind explicit user action ──
@@ -6326,11 +6386,8 @@
     const source = (data && data.source) || 'unknown';
     const dateRange = (data && data.date_range) || '';
     const sourceBadge = _gadsSourceBadge(source);
-    const currencyCode = (data && data.currency && data.currency.currency_code) || null;
-    const currSym = _gadsCurrencySymbol(currencyCode);
-    const currBadge = currencyCode
-      ? `<span class="badge bg-secondary text-light ms-1" title="Account native currency">${currencyCode}</span>`
-      : '';
+    const currencyCtx = (data && data.currency) || {};
+    const currBadge = gadsCurrencyBadge(currencyCtx);
 
     const fmt = (v, prefix='', suffix='', dp=0) => {
       const n = Number(v);
@@ -6362,7 +6419,7 @@
           <div class="card bg-dark border-success h-100">
             <div class="card-body text-center py-3">
               <div class="text-muted small mb-1">Total Spend</div>
-              <div class="display-6 text-success">${fmt(t.spend, currSym, '', 2)}</div>
+              <div class="display-6 text-success">${gadsFormatMoney(t.spend, currencyCtx)}</div>
               <div class="text-muted small">${fmt(t.impressions)} impr.</div>
             </div>
           </div>
@@ -6381,12 +6438,36 @@
             <div class="card-body text-center py-3">
               <div class="text-muted small mb-1">ROAS</div>
               <div class="display-6 text-warning">${fmt(t.roas, '', 'x', 2)}</div>
-              <div class="text-muted small">CPA ${fmt(t.cpa, currSym, '', 2)} · CPC ${fmt(t.avg_cpc, currSym, '', 2)}</div>
+              <div class="text-muted small">CPA ${gadsFormatMoney(t.cpa, currencyCtx)} · CPC ${gadsFormatMoney(t.avg_cpc, currencyCtx)}</div>
             </div>
           </div>
         </div>
       </div>
     `;
+    gadsRenderOverviewDiagnosticsStrip(data);
+  }
+
+  function gadsRenderOverviewDiagnosticsStrip(data) {
+    const strip = document.getElementById('gadsOverviewDiagnosticsStrip');
+    if (!strip) return;
+    const source = (data && data.source) || 'unknown';
+    const counts = ((data && data.summary) || {}).signal_counts || {};
+    const issueCount = Number(counts.critical || 0) + Number(counts.warning || 0);
+    const statusBadge = issueCount > 0
+      ? `<span class="badge bg-warning text-dark">${issueCount} issue${issueCount === 1 ? '' : 's'}</span>`
+      : '<span class="badge bg-success">No critical issues</span>';
+    strip.innerHTML = `
+      <div class="border border-secondary rounded p-2 d-flex align-items-center justify-content-between gap-2 flex-wrap">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <span class="fw-semibold small"><i class="bi bi-heart-pulse text-warning me-1"></i>Health / Diagnostics</span>
+          ${_gadsSourceBadge(source)}
+          ${statusBadge}
+          ${gadsCurrencyBadge((data && data.currency) || null)}
+        </div>
+        <button class="btn btn-sm btn-outline-primary" type="button" onclick="document.querySelector('[data-bs-target=&quot;#gadsReports&quot;]').click(); _gadsSelectModule('account_health'); gadsOpenModule('account_health');">
+          <i class="bi bi-heart-pulse me-1"></i>Account Health
+        </button>
+      </div>`;
   }
 
   // ── Campaigns (Phase 2B / 2C) ────────────────────────────────────────────
@@ -6441,6 +6522,7 @@
 
     camps.forEach(c => {
       const cost = c.spent ?? c.cost ?? 0;
+      const currencyCode = c.currency_code || _gadsCurrentCurrencyCode();
       const statusBadge = c.status === 'ENABLED'
         ? '<span class="badge bg-success">Enabled</span>'
         : '<span class="badge bg-secondary">Paused</span>';
@@ -6454,10 +6536,10 @@
         <td>${Number(c.impressions||0).toLocaleString()}</td>
         <td>${Number(c.clicks||0).toLocaleString()}</td>
         <td>${Number(c.ctr||0).toFixed(2)}%</td>
-        <td>$${Number(c.avg_cpc||0).toFixed(2)}</td>
-        <td>$${Number(cost).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+        <td>${gadsFormatMoney(c.avg_cpc||0, currencyCode)}</td>
+        <td>${gadsFormatMoney(cost, currencyCode)}</td>
         <td>${Number(c.conversions||0).toFixed(1)}</td>
-        <td>$${Number(c.cost_per_conv||c.cpa||0).toFixed(2)}</td>
+        <td>${gadsFormatMoney(c.cost_per_conv||c.cpa||0, currencyCode)}</td>
         <td class="${roasClass} fw-bold">${roasVal.toFixed(2)}x</td>
         <td>
           <button class="btn btn-sm btn-outline-info py-0 px-1" onclick="gadsShowKeywords('${c.id}','${c.name.replace(/'/g,"\\'")}')" title="Keywords">
@@ -6473,16 +6555,17 @@
     const totClk = camps.reduce((s,c) => s + Number(c.clicks||0), 0);
     const totCost = camps.reduce((s,c) => s + Number(c.spent||c.cost||0), 0);
     const totConv = camps.reduce((s,c) => s + Number(c.conversions||0), 0);
+    const footerCurrency = (camps.find(c => c.currency_code) || {}).currency_code || _gadsCurrentCurrencyCode();
     const foot = document.getElementById('gadsCampaignsFoot');
     foot.innerHTML = `<tr class="fw-bold table-secondary">
       <td>TOTAL (${camps.length})</td><td></td><td></td>
       <td>${totImpr.toLocaleString()}</td>
       <td>${totClk.toLocaleString()}</td>
       <td>${totImpr > 0 ? (totClk/totImpr*100).toFixed(2) : '—'}%</td>
-      <td>${totClk > 0 ? '$'+(totCost/totClk).toFixed(2) : '—'}</td>
-      <td>$${totCost.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+      <td>${totClk > 0 ? gadsFormatMoney(totCost/totClk, footerCurrency) : '—'}</td>
+      <td>${gadsFormatMoney(totCost, footerCurrency)}</td>
       <td>${totConv.toFixed(1)}</td>
-      <td>${totConv > 0 ? '$'+(totCost/totConv).toFixed(2) : '—'}</td>
+      <td>${totConv > 0 ? gadsFormatMoney(totCost/totConv, footerCurrency) : '—'}</td>
       <td></td><td></td>
     </tr>`;
   }
@@ -6516,8 +6599,9 @@
       }
       body.innerHTML = '';
       kws.forEach(k => {
+        const currencyCode = k.currency_code || _gadsCurrentCurrencyCode();
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${k.text||k.keyword||'—'}</td><td>${k.match_type||'—'}</td><td>${k.status||'—'}</td><td>${Number(k.impressions||0).toLocaleString()}</td><td>${Number(k.clicks||0).toLocaleString()}</td><td>${Number(k.ctr||0).toFixed(2)}%</td><td>$${Number(k.avg_cpc||0).toFixed(2)}</td><td>${k.quality_score||'—'}</td>`;
+        tr.innerHTML = `<td>${k.text||k.keyword||'—'}</td><td>${k.match_type||'—'}</td><td>${k.status||'—'}</td><td>${Number(k.impressions||0).toLocaleString()}</td><td>${Number(k.clicks||0).toLocaleString()}</td><td>${Number(k.ctr||0).toFixed(2)}%</td><td>${gadsFormatMoney(k.avg_cpc||0, currencyCode)}</td><td>${k.quality_score||'—'}</td>`;
         body.appendChild(tr);
       });
     } catch (e) {
@@ -6530,8 +6614,8 @@
     const headers = ['Campaign', 'Type', 'Status', 'Impressions', 'Clicks', 'CTR', 'Avg CPC', 'Cost', 'Conversions', 'Cost/Conv', 'ROAS'];
     const rows = gadsState.campaigns.map(c => [
       c.name, c.type||c.channel_type||'', c.status,
-      c.impressions, c.clicks, c.ctr+'%', '$'+Number(c.avg_cpc||0).toFixed(2),
-      '$'+(c.spent||c.cost||0).toFixed(2), c.conversions, '$'+Number(c.cost_per_conv||c.cpa||0).toFixed(2), c.roas+'x'
+      c.impressions, c.clicks, c.ctr+'%', gadsFormatMoney(c.avg_cpc||0, c.currency_code),
+      gadsFormatMoney(c.spent||c.cost||0, c.currency_code), c.conversions, gadsFormatMoney(c.cost_per_conv||c.cpa||0, c.currency_code), c.roas+'x'
     ]);
     downloadCSV('google_ads_campaigns.csv', headers, rows);
   }
@@ -6548,6 +6632,7 @@
       const cost = Number(c.spent||c.cost||0);
       const budgetTotal = Number(c.budget_total||0);
       const budgetDaily = Number(c.budget_daily||0);
+      const currencyCode = c.currency_code || _gadsCurrentCurrencyCode();
       const pct = budgetTotal > 0 ? Math.min(100, Math.round(cost / budgetTotal * 100)) : 0;
       const pctClass = pct < 70 ? 'bg-success' : (pct < 90 ? 'bg-warning' : 'bg-danger');
       const daysLeft = (c.status === 'ENABLED' && budgetDaily > 0 && budgetTotal > cost) ? Math.max(1, Math.round((budgetTotal - cost) / budgetDaily)) : 0;
@@ -6555,9 +6640,9 @@
         <div class="d-flex justify-content-between mb-1"><span class="fw-semibold small">${c.name}</span><span class="badge ${c.status==='ENABLED'?'bg-success':'bg-secondary'}">${c.status}</span></div>
         ${budgetTotal > 0 ? `<div class="progress mb-1" style="height:14px;"><div class="progress-bar ${pctClass}" style="width:${pct}%">${pct}%</div></div>` : '<div class="text-muted small mb-1">Budget data unavailable</div>'}
         <div class="d-flex justify-content-between small text-muted">
-          <span>Spent: $${cost.toFixed(2)}</span>
-          ${budgetDaily > 0 ? `<span>Daily: $${budgetDaily}/day</span>` : ''}
-          ${budgetTotal > 0 ? `<span>Remaining: $${Math.max(0,budgetTotal-cost).toFixed(2)}</span>` : ''}
+          <span>Spent: ${gadsFormatMoney(cost, currencyCode)}</span>
+          ${budgetDaily > 0 ? `<span>Daily: ${gadsFormatMoney(budgetDaily, currencyCode)}/day</span>` : ''}
+          ${budgetTotal > 0 ? `<span>Remaining: ${gadsFormatMoney(Math.max(0,budgetTotal-cost), currencyCode)}</span>` : ''}
           ${daysLeft > 0 ? `<span>~${daysLeft}d left</span>` : ''}
         </div>
       </div></div>`;
@@ -6625,7 +6710,7 @@
       const cfg = severityConfig[f.severity] || severityConfig.info;
       const snap = f.metric_snapshot || {};
       const snapHtml = Object.entries(snap).map(([k,v]) =>
-        `<span class="badge bg-secondary me-1">${k}: ${typeof v === 'number' ? (k.includes('cost') ? '$'+v.toFixed(2) : v) : v}</span>`
+        `<span class="badge bg-secondary me-1">${k}: ${typeof v === 'number' ? (k.includes('cost') ? gadsFormatMoney(v, _gadsCurrentCurrencyCode()) : v) : v}</span>`
       ).join('');
       html += `
         <div class="card bg-dark border-${cfg.cls} mb-3">
@@ -6685,11 +6770,13 @@
     const risks = data.risks || [];
     const opps = data.opportunities || [];
     const actions = data.recommended_next_actions || [];
+    const aiCurrency = (data && data.currency) || _gadsCurrentCurrencyCode();
 
     const fmtNum = (v, prefix='', suffix='', dp=2) => {
       const n = Number(v);
       return Number.isFinite(n) ? prefix + (dp === 0 ? n.toLocaleString() : n.toFixed(dp)) + suffix : '—';
     };
+    const fmtMoney = v => gadsFormatMoney(v, aiCurrency);
 
     const campaignCard = (c, badge, badgeCls) => `
       <div class="d-flex justify-content-between align-items-start py-2 border-bottom border-secondary">
@@ -6699,7 +6786,7 @@
         </div>
         <div class="text-end small text-muted">
           ROAS <span class="fw-bold text-light">${fmtNum(c.roas, '', 'x')}</span>
-          · Cost <span class="fw-bold text-light">${fmtNum(c.cost, '$')}</span>
+          · Cost <span class="fw-bold text-light">${fmtMoney(c.cost)}</span>
           · Conv <span class="fw-bold text-light">${fmtNum(c.conversions, '', '', 1)}</span>
         </div>
       </div>`;
@@ -6735,13 +6822,13 @@
             <div class="card-body py-2">
               <table class="table table-dark table-sm mb-0">
                 <tbody>
-                  <tr><td class="text-muted">Spend</td><td class="text-end fw-semibold">${fmtNum(ps.spend, '$')}</td></tr>
+                  <tr><td class="text-muted">Spend</td><td class="text-end fw-semibold">${fmtMoney(ps.spend)}</td></tr>
                   <tr><td class="text-muted">ROAS</td><td class="text-end fw-semibold">${fmtNum(ps.roas, '', 'x')}</td></tr>
                   <tr><td class="text-muted">Conversions</td><td class="text-end">${fmtNum(ps.conversions, '', '', 1)}</td></tr>
-                  <tr><td class="text-muted">CPA</td><td class="text-end">${fmtNum(ps.cpa, '$')}</td></tr>
+                  <tr><td class="text-muted">CPA</td><td class="text-end">${fmtMoney(ps.cpa)}</td></tr>
                   <tr><td class="text-muted">Clicks</td><td class="text-end">${fmtNum(ps.clicks, '', '', 0)}</td></tr>
                   <tr><td class="text-muted">CTR</td><td class="text-end">${fmtNum(ps.ctr, '', '%')}</td></tr>
-                  <tr><td class="text-muted">Avg CPC</td><td class="text-end">${fmtNum(ps.avg_cpc, '$')}</td></tr>
+                  <tr><td class="text-muted">Avg CPC</td><td class="text-end">${fmtMoney(ps.avg_cpc)}</td></tr>
                 </tbody>
               </table>
             </div>
@@ -6898,10 +6985,8 @@
     const source = data.source || '';
     const signals = data.signals || [];
     const summary = data.summary || {};
-    const currency = (data.currency && data.currency.currency_code) || null;
-    const currBadge = currency
-      ? `<span class="badge bg-secondary">${currency}</span>`
-      : '<span class="badge bg-secondary text-muted">currency unknown</span>';
+    const currency = data.currency || null;
+    const currBadge = gadsCurrencyBadge(currency);
     const warnings = data.warnings || [];
     const counts = summary.signal_counts || {};
 
@@ -6970,10 +7055,8 @@
     const signals = data.signals || [];
     const rows = data.rows || [];
     const summary = data.summary || {};
-    const currency = (data.currency && data.currency.currency_code) || null;
-    const currBadge = currency
-      ? `<span class="badge bg-secondary">${currency}</span>`
-      : '<span class="badge bg-secondary text-muted">currency unknown</span>';
+    const currency = data.currency || null;
+    const currBadge = gadsCurrencyBadge(currency);
     const warnings = data.warnings || [];
     const counts = (summary.signal_counts) || {};
 
@@ -7047,10 +7130,8 @@
     const rows = data.rows || [];
     const signals = data.signals || [];
     const summary = data.summary || {};
-    const currency = (data.currency && data.currency.currency_code) || null;
-    const currBadge = currency
-      ? `<span class="badge bg-secondary">${currency}</span>`
-      : '<span class="badge bg-secondary text-muted">currency unknown</span>';
+    const currency = data.currency || null;
+    const currBadge = gadsCurrencyBadge(currency);
     const warnings = data.warnings || [];
 
     // Filter out generic mock/fallback warnings — handled by the demo banner below
@@ -7105,7 +7186,7 @@
         </div>
         <div class="card bg-dark border-secondary px-3 py-2 text-center" style="min-width:90px;">
           <div class="small text-muted">Total Cost</div>
-          <div class="fw-bold">${currency ? currency + ' ' : ''}${fmtNum(summary.total_cost)}</div>
+          <div class="fw-bold">${gadsFormatMoney(summary.total_cost, currency)}</div>
         </div>
       </div>`;
 
@@ -7117,10 +7198,10 @@
     function buildTermTable(termRows, title, cls) {
       if (!termRows.length) return '';
       const trs = termRows.map(r => {
-        const cost = r.cost != null ? Number(r.cost).toFixed(2) : '—';
+        const cost = r.cost != null ? gadsFormatMoney(r.cost, currency) : '—';
         const conv = r.conversions != null ? r.conversions : '—';
         const roas = r.roas != null ? r.roas.toFixed(2) + 'x' : '—';
-        const cpa  = r.cpa  != null ? r.cpa.toFixed(2) : '—';
+        const cpa  = r.cpa  != null ? gadsFormatMoney(r.cpa, currency) : '—';
         return `<tr>
           <td class="text-break" style="max-width:200px;">${r.search_term || '—'}</td>
           <td class="text-muted small">${r.campaign_name || '—'}</td>
@@ -7211,11 +7292,8 @@
     const rows = data.rows || [];
     const totals = data.totals || {};
     const source = data.source || '';
-    const currency = (data.currency && data.currency.currency_code) || null;
-    const currSym = _gadsCurrencySymbol(currency);
-    const currBadge = currency
-      ? `<span class="badge bg-secondary">${currency}</span>`
-      : '<span class="badge bg-secondary text-muted">currency unknown</span>';
+    const currency = data.currency || null;
+    const currBadge = gadsCurrencyBadge(currency);
     const warnings = data.warnings || [];
     // Filter out generic mock/fallback warnings — handled by demo banner
     const filteredWarningsRpt = warnings.filter(w =>
@@ -7243,7 +7321,7 @@
 
     function fmtCell(col, val) {
       if (val == null) return '—';
-      if (_CURRENCY_METRICS.has(col)) return currSym + Number(val).toFixed(2);
+      if (_CURRENCY_METRICS.has(col)) return gadsFormatMoney(val, currency);
       if (_PCT_METRICS.has(col)) return Number(val).toFixed(2) + '%';
       if (_RATIO_METRICS.has(col)) return Number(val).toFixed(2) + 'x';
       if (typeof val === 'number') return val.toLocaleString();
@@ -14609,5 +14687,3 @@
   }
 </style>
 {% endblock %}
-
-
