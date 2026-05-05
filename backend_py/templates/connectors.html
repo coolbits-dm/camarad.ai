@@ -1145,6 +1145,7 @@
                     <button class="btn btn-sm btn-outline-info" onclick="gadsExportCampaignsCSV()"><i class="bi bi-download"></i> CSV</button>
                   </div>
                 </div>
+                <div id="gadsCampaignsSource" class="mb-2"></div>
                 <div class="table-responsive">
                   <table class="table table-dark table-striped table-hover table-sm" id="gadsCampaignsTable">
                     <thead>
@@ -6473,12 +6474,33 @@
   // ── Campaigns (Phase 2B / 2C) ────────────────────────────────────────────
   async function gadsLoadCampaigns() {
     const { accountId, days, mccQs } = _gadsQs();
+    const sourceBox = document.getElementById('gadsCampaignsSource');
+    if (sourceBox) sourceBox.innerHTML = '';
     document.getElementById('gadsCampaignsBody').innerHTML =
       '<tr><td colspan="12" class="text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading campaigns…</td></tr>';
     try {
       const res = await fetch(`/api/connectors/google-ads/campaigns?account_id=${accountId}&days=${days}${mccQs}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (sourceBox) {
+        const source = (data && data.source) || 'unknown';
+        const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+        const alertClass = source === 'google_ads_api_error' || source === 'mock_fallback'
+          ? 'alert-danger'
+          : (source === 'mock' ? 'alert-warning' : 'alert-secondary');
+        const warningHtml = warnings.length
+          ? `<div class="small mt-1">${warnings.map(w => `<div>${w}</div>`).join('')}</div>`
+          : '';
+        sourceBox.innerHTML = `
+          <div class="alert ${alertClass} py-2 px-3 mb-2 d-flex align-items-start justify-content-between gap-2 flex-wrap">
+            <div>
+              <span class="fw-semibold small">Campaign data</span>
+              ${_gadsSourceBadge(source)}
+              ${gadsCurrencyBadge((data && data.currency) || null)}
+              ${warningHtml}
+            </div>
+          </div>`;
+      }
       gadsState.campaigns = data.campaigns || [];
       gadsState.summary = data.summary || {};
       gadsState.loaded.campaigns = true;
@@ -6490,6 +6512,7 @@
       }
       gadsRenderCampaigns();
     } catch (e) {
+      if (sourceBox) sourceBox.innerHTML = '';
       document.getElementById('gadsCampaignsBody').innerHTML =
         `<tr><td colspan="12" class="text-center text-danger py-4"><i class="bi bi-exclamation-triangle"></i> Failed to load campaigns: ${e.message}</td></tr>`;
     }

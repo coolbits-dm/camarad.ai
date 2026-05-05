@@ -12,7 +12,7 @@ Tests:
 8. GET /campaigns uses live API when api_validated (source=google_ads_api)
 9. GET /campaigns returns mcc_id as login-customer-id when provided
 10. GET /campaigns falls back to mock when no OAuth token
-11. GET /campaigns falls back to mock on API error (no crash)
+11. GET /campaigns returns explicit API error on live API error (no silent mock)
 12. Response always contains campaigns list + summary keys
 """
 
@@ -365,17 +365,20 @@ class TestCampaignsRouteNoAuth(unittest.TestCase):
         self.app.testing = True
 
     def test_falls_back_to_mock_when_no_token(self):
-        resp = self.app.get("/api/connectors/google-ads/campaigns?account_id=123-456-7890")
+        with patch("app._gads_token_get_meta", return_value=None):
+            resp = self.app.get("/api/connectors/google-ads/campaigns?account_id=123-456-7890")
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
         self.assertEqual(data.get("source"), "mock")
         self.assertFalse(data.get("connected_live"))
+        self.assertFalse(data.get("live_data"))
+        self.assertTrue(data.get("mock_used"))
 
     def tearDown(self):
         os.environ["DATABASE"] = "/tmp/camarad_gads_phase2b_test.db"
 
 
-# ── Test 11: Falls back to mock on API error ──────────────────────────────
+# ── Test 11: Returns explicit API error on live API error ─────────────────
 class TestCampaignsRouteFallbackOnError(unittest.TestCase):
 
     def setUp(self):
@@ -384,7 +387,7 @@ class TestCampaignsRouteFallbackOnError(unittest.TestCase):
         self.app.testing = True
         _store_mock_token(user_id=1)
 
-    def test_falls_back_to_mock_on_403(self):
+    def test_returns_api_error_on_403_without_silent_mock(self):
         mock_token_resp = _mock_token_refresh()
         mock_403 = MagicMock()
         mock_403.status_code = 403
@@ -395,8 +398,11 @@ class TestCampaignsRouteFallbackOnError(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
-        # Falls back to mock for '123-456-7890' (mock account)
-        self.assertEqual(data.get("source"), "mock")
+        self.assertEqual(data.get("source"), "google_ads_api_error")
+        self.assertFalse(data.get("live_data"))
+        self.assertFalse(data.get("mock_used"))
+        self.assertFalse(data.get("fallback_used"))
+        self.assertTrue(data.get("warnings"))
 
 
 # ── Test 12: Response always has campaigns + summary ─────────────────────

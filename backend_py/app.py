@@ -20011,6 +20011,73 @@ def _google_ads_mock_accounts_response():
     }
 
 
+def _gads_truthy_request_arg(name):
+    """Return True for explicit opt-in query/body flags."""
+    try:
+        raw = request.args.get(name)
+    except Exception:
+        raw = None
+    if raw is None:
+        return False
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _gads_source_policy(source, connected_live=False, explicit_demo=False,
+                        api_error=None, warning=None):
+    """Normalize Google Ads source truth fields for read-only responses."""
+    safe_source = str(source or "unknown").strip() or "unknown"
+    warnings = []
+
+    def _add_warning(msg):
+        msg = str(msg or "").strip()
+        if msg and msg not in warnings:
+            warnings.append(msg)
+
+    if isinstance(warning, (list, tuple)):
+        for w in warning:
+            _add_warning(w)
+    else:
+        _add_warning(warning)
+
+    live_data = safe_source == "google_ads_api" and bool(connected_live)
+    mock_used = safe_source == "mock"
+    fallback_used = safe_source == "mock_fallback"
+
+    if safe_source == "mock":
+        if explicit_demo:
+            _add_warning("Explicit demo mode. Showing demo Google Ads data.")
+        else:
+            _add_warning("No live Google Ads connection. Showing demo data.")
+    elif safe_source == "mock_fallback":
+        _add_warning(
+            "Google Ads API call failed. Showing fallback demo data; this is not live."
+        )
+    elif safe_source == "google_ads_api_error":
+        _add_warning(
+            "Google Ads API call failed. No demo data was substituted."
+        )
+
+    label_map = {
+        "google_ads_api": "Live Google Ads API",
+        "mock": "Demo data",
+        "mock_fallback": "Fallback demo data",
+        "google_ads_api_error": "Google Ads API error",
+        "planned": "Planned",
+        "coolbits": "Coolbits gateway",
+    }
+    out = {
+        "source": safe_source,
+        "source_label": label_map.get(safe_source, safe_source),
+        "live_data": bool(live_data),
+        "mock_used": bool(mock_used),
+        "fallback_used": bool(fallback_used),
+        "warnings": warnings,
+    }
+    if api_error:
+        out["api_error"] = str(api_error)[:120]
+    return out
+
+
 # ── Phase 2B: Real Google Ads Campaigns via searchStream ─────────────────────
 
 def _gads_searchstream_campaigns(account_id, access_token, developer_token, login_customer_id, days=30):
@@ -20326,11 +20393,20 @@ def google_ads_campaigns():
     """Return campaigns for an account.
     Phase 2B: when OAuth is active + api_validated, call Google Ads searchStream directly
     against the selected client account with login-customer-id = MCC manager.
-    Falls back to Coolbits gateway (if enabled) or mock.
+    Connected-live users never silently receive mock rows on API failure.
     """
     account_id = request.args.get('account_id', '123-456-7890')
     mcc_id = request.args.get("mcc_id", "").strip()
     days = request.args.get('days', 30, type=int)
+    explicit_demo = _gads_truthy_request_arg("demo") or _gads_truthy_request_arg("mock")
+    allow_fallback = explicit_demo or _gads_truthy_request_arg("allow_fallback")
+
+    if explicit_demo:
+        mock = _google_ads_mock_campaigns_response(account_id)
+        policy = _gads_source_policy("mock", connected_live=False, explicit_demo=True)
+        mock.update(policy)
+        mock["success"] = True
+        return jsonify(mock)
 
     # ── Live Google Ads API path (Phase 2B) ──────────────────────────────────
     user_id = get_current_user_id()
@@ -20350,25 +20426,116 @@ def google_ads_campaigns():
                               str((meta or {}).get("selected_manager_customer_id") or "")).strip()
                     or safe_account_id
                 )
-                result = _gads_searchstream_campaigns(
-                    safe_account_id, access_token, developer_token, login_cid, days=days
-                )
-                # Wipe access_token from scope immediately
-                access_token = None
+                try:
+                    result = _gads_searchstream_campaigns(
+                        safe_account_id, access_token, developer_token, login_cid, days=days
+                    )
+                except Exception as exc:
+                    result = {"success": False, "error": "api_exception",
+                              "message": str(exc)[:80]}
+                finally:
+                    # Wipe access_token from scope immediately
+                    access_token = None
                 if result.get("success"):
                     campaigns = result["campaigns"]
                     return jsonify({
+                        "success": True,
                         "account_id": account_id,
                         "campaigns": campaigns,
                         "summary": _google_ads_build_summary(campaigns),
                         "date_range": result.get("date_range", "LAST_30_DAYS"),
                         "source": "google_ads_api",
+                        **_gads_source_policy("google_ads_api", connected_live=True),
                         "connected_live": True,
                         "connected_mock": False,
                     })
-                # API returned an error — log safely and fall through to mock
                 print(f"gads_campaigns_api_error: {result.get('error')} {result.get('status_code')} "
                       f"acct={safe_account_id} login={login_cid}")
+                if allow_fallback:
+                    mock = _google_ads_mock_campaigns_response(account_id)
+                    policy = _gads_source_policy(
+                        "mock_fallback", connected_live=True,
+                        api_error=result.get("error") or result.get("status_code"),
+                    )
+                    mock.update(policy)
+                    mock.update({
+                        "success": True,
+                        "source": "mock_fallback",
+                        "connected_live": True,
+                        "connected_mock": False,
+                        "date_range": result.get("date_range", "LAST_30_DAYS"),
+                        "message": (
+                            "Google Ads API call failed. Showing fallback demo data "
+                            "because fallback was explicitly requested."
+                        ),
+                    })
+                    return jsonify(mock)
+                policy = _gads_source_policy(
+                    "google_ads_api_error", connected_live=True,
+                    api_error=result.get("error") or result.get("status_code"),
+                )
+                return jsonify({
+                    "success": False,
+                    "error": "google_ads_api_error",
+                    "account_id": account_id,
+                    "campaigns": [],
+                    "summary": _google_ads_build_summary([]),
+                    "date_range": result.get("date_range", "LAST_30_DAYS"),
+                    **policy,
+                    "connected_live": True,
+                    "connected_mock": False,
+                    "message": result.get("message") or "Google Ads API failed for campaigns.",
+                })
+            policy = _gads_source_policy(
+                "google_ads_api_error", connected_live=True,
+                api_error=token_result.get("error") or "token_refresh_failed",
+            )
+            if allow_fallback:
+                mock = _google_ads_mock_campaigns_response(account_id)
+                fallback_policy = _gads_source_policy(
+                    "mock_fallback", connected_live=True,
+                    api_error=token_result.get("error") or "token_refresh_failed",
+                )
+                mock.update(fallback_policy)
+                mock.update({
+                    "success": True,
+                    "source": "mock_fallback",
+                    "connected_live": True,
+                    "connected_mock": False,
+                    "date_range": "LAST_30_DAYS",
+                    "message": (
+                        "Google Ads token refresh failed. Showing fallback demo data "
+                        "because fallback was explicitly requested."
+                    ),
+                })
+                return jsonify(mock)
+            return jsonify({
+                "success": False,
+                "error": "google_ads_api_error",
+                "account_id": account_id,
+                "campaigns": [],
+                "summary": _google_ads_build_summary([]),
+                "date_range": "LAST_30_DAYS",
+                **policy,
+                "connected_live": True,
+                "connected_mock": False,
+                "message": token_result.get("message") or "Google Ads token refresh failed.",
+            })
+        policy = _gads_source_policy(
+            "google_ads_api_error", connected_live=True, api_error="invalid_account_id"
+        )
+        return jsonify({
+            "success": False,
+            "error": "invalid_account_id",
+            "account_id": account_id,
+            "campaigns": [],
+            "summary": _google_ads_build_summary([]),
+            "date_range": "LAST_30_DAYS",
+            **policy,
+            "connected_live": True,
+            "connected_mock": False,
+            "message": "Invalid client account ID.",
+        })
 
     # ── Coolbits gateway fallback (when enabled) ─────────────────────────────
     range_from, range_to = _google_ads_iso_date_window(days)
@@ -20392,10 +20559,12 @@ def google_ads_campaigns():
             campaigns = _google_ads_map_coolbits_campaigns(cb_rows)
             if campaigns:
                 return jsonify({
+                    "success": True,
                     "account_id": account_id,
                     "campaigns": campaigns,
                     "summary": _google_ads_build_summary(campaigns),
                     "source": "coolbits",
+                    **_gads_source_policy("coolbits", connected_live=False),
                     "gateway": gw,
                 })
         if isinstance(payload, dict) and isinstance(payload.get("campaigns"), list):
@@ -20403,18 +20572,25 @@ def google_ads_campaigns():
             out.setdefault("account_id", account_id)
             out.setdefault("summary", _google_ads_build_summary(out.get("campaigns") or []))
             out["source"] = "coolbits"
+            out["success"] = True
+            out.update(_gads_source_policy("coolbits", connected_live=False))
             out["gateway"] = gw
             return jsonify(out)
         campaigns = _google_ads_list_from_payload(payload, ["campaigns", "items", "data", "results"])
         if campaigns:
             return jsonify({
+                "success": True,
                 "account_id": account_id,
                 "campaigns": campaigns,
                 "summary": _google_ads_build_summary(campaigns),
                 "source": "coolbits",
+                **_gads_source_policy("coolbits", connected_live=False),
                 "gateway": gw,
             })
-    return jsonify(_google_ads_mock_campaigns_response(account_id))
+    mock = _google_ads_mock_campaigns_response(account_id)
+    mock.update(_gads_source_policy("mock", connected_live=False, explicit_demo=explicit_demo))
+    mock["success"] = True
+    return jsonify(mock)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -20423,12 +20599,14 @@ def google_ads_campaigns():
 # fallback pattern as google_ads_campaigns) then applies server-side logic.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id=None):
+def _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id=None,
+                                 allow_fallback=False, explicit_demo=False):
     """Shared helper: fetch live campaign list or return fallback on failure.
 
     Returns (campaigns_list, date_range_str, source_str, account_currency_code) where source is:
       'google_ads_api'  — live API succeeded
-      'mock_fallback'   — connected/validated but API call failed (user is linked)
+      'mock_fallback'   — connected/validated but fallback was explicitly allowed
+      'google_ads_api_error' — connected/validated but live data could not be loaded
       'mock'            — no active connection or no valid customer_id
     account_currency_code is the ISO 4217 currency code string or None.
     Does NOT raise exceptions.
@@ -20437,18 +20615,27 @@ def _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id=None):
         user_id = get_current_user_id()
     meta = _gads_token_get_meta(user_id)
     safe_cid = re.sub(r"[^0-9]", "", str(customer_id or ""))
-    live_attempted = False
-    if (
-        meta
-        and meta.get("status") == "active"
-        and meta.get("api_validated")
-        and safe_cid
-        and safe_cid.isdigit()
-        and len(safe_cid) >= 8
-    ):
+    connected_live_intended = bool(
+        meta and meta.get("status") == "active" and meta.get("api_validated")
+    )
+
+    def _mock_campaign_tuple(source):
+        mock = _google_ads_mock_campaigns_response(customer_id)
+        mock_currency = next(
+            (a.get("currency") for a in GOOGLE_ADS_MOCK_ACCOUNTS
+             if a.get("id") == customer_id),
+            None,
+        )
+        return mock.get("campaigns", []), "LAST_30_DAYS", source, mock_currency
+
+    if explicit_demo:
+        return _mock_campaign_tuple("mock")
+
+    if connected_live_intended:
+        if not (safe_cid and safe_cid.isdigit() and len(safe_cid) >= 8):
+            return [], "LAST_30_DAYS", "google_ads_api_error", None
         token_result = _gads_get_fresh_access_token(user_id)
         if token_result.get("success"):
-            live_attempted = True
             access_token = token_result["access_token"]
             cfg = _gads_oauth_config_internal()
             developer_token = cfg.get("developer_token", "")
@@ -20458,23 +20645,28 @@ def _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id=None):
                           str((meta or {}).get("selected_manager_customer_id") or "")).strip()
                 or safe_cid
             )
-            result = _gads_searchstream_campaigns(
-                safe_cid, access_token, developer_token, login_cid, days=days
-            )
-            access_token = None  # wipe immediately
+            try:
+                result = _gads_searchstream_campaigns(
+                    safe_cid, access_token, developer_token, login_cid, days=days
+                )
+            except Exception as exc:
+                result = {"success": False, "error": "api_exception",
+                          "message": str(exc)[:80]}
+            finally:
+                access_token = None  # wipe immediately
             if result.get("success"):
                 return (result["campaigns"], result.get("date_range", "LAST_30_DAYS"),
                         "google_ads_api", result.get("account_currency_code"))
             print(f"gads_resolve_live_error: {result.get('error')} acct={safe_cid}")
-    # Fallback: use mock data but distinguish connected-error from not-connected
-    fallback_source = "mock_fallback" if live_attempted else "mock"
-    mock = _google_ads_mock_campaigns_response(customer_id)
-    # Look up currency for this mock account (never guess — if not found return None)
-    mock_currency = next(
-        (a.get("currency") for a in GOOGLE_ADS_MOCK_ACCOUNTS if a.get("id") == customer_id),
-        None,
-    )
-    return mock.get("campaigns", []), "LAST_30_DAYS", fallback_source, mock_currency
+            if allow_fallback:
+                return _mock_campaign_tuple("mock_fallback")
+            return [], result.get("date_range", "LAST_30_DAYS"), "google_ads_api_error", None
+        print(f"gads_resolve_live_token_error: {token_result.get('error')} acct={safe_cid}")
+        if allow_fallback:
+            return _mock_campaign_tuple("mock_fallback")
+        return [], "LAST_30_DAYS", "google_ads_api_error", None
+
+    return _mock_campaign_tuple("mock")
 
 
 # ─── Phase 2D: Currency helpers ──────────────────────────────────────────────
@@ -20984,6 +21176,8 @@ def google_ads_overview():
 
     user_id = get_current_user_id()
     meta = _gads_token_get_meta(user_id) or {}
+    explicit_demo = _gads_truthy_request_arg("demo") or _gads_truthy_request_arg("mock")
+    allow_fallback = explicit_demo or _gads_truthy_request_arg("allow_fallback")
     manager_cid = (
         re.sub(r"[^0-9]", "", mcc_id).strip()
         or re.sub(r"[^0-9]", "", str(meta.get("selected_manager_customer_id") or "")).strip()
@@ -20991,7 +21185,8 @@ def google_ads_overview():
     )
 
     campaigns, date_range, source, api_currency = _gads_resolve_live_campaigns(
-        customer_id, mcc_id, days, user_id
+        customer_id, mcc_id, days, user_id,
+        allow_fallback=allow_fallback, explicit_demo=explicit_demo
     )
     totals = _gads_compute_overview_totals(campaigns, customer_id, manager_cid, date_range)
     currency_ctx = _gads_resolve_currency_context(
@@ -21001,9 +21196,18 @@ def google_ads_overview():
         rows=None,  # rows only used for mixed-currency detection with live data
         user_id=user_id,
     )
+    policy = _gads_source_policy(
+        source,
+        connected_live=bool(meta.get("status") == "active" and meta.get("api_validated")),
+        explicit_demo=explicit_demo,
+    )
+    warnings = list(policy.get("warnings") or [])
+    if currency_ctx.get("warning") and currency_ctx["warning"] not in warnings:
+        warnings.append(currency_ctx["warning"])
 
     return jsonify({
-        "source": source,
+        **policy,
+        "warnings": warnings,
         "customer_id": customer_id,
         "manager_customer_id": manager_cid,
         "date_range": date_range,
@@ -21027,8 +21231,12 @@ def google_ads_diagnostics():
     days = request.args.get("days", 30, type=int)
 
     user_id = get_current_user_id()
+    meta = _gads_token_get_meta(user_id) or {}
+    explicit_demo = _gads_truthy_request_arg("demo") or _gads_truthy_request_arg("mock")
+    allow_fallback = explicit_demo or _gads_truthy_request_arg("allow_fallback")
     campaigns, date_range, source, api_currency = _gads_resolve_live_campaigns(
-        customer_id, mcc_id, days, user_id
+        customer_id, mcc_id, days, user_id,
+        allow_fallback=allow_fallback, explicit_demo=explicit_demo
     )
     findings = _gads_compute_diagnostics(campaigns)
     currency_ctx = _gads_resolve_currency_context(
@@ -21043,9 +21251,18 @@ def google_ads_diagnostics():
         "info": sum(1 for f in findings if f.get("severity") == "info"),
         "total": len(findings),
     }
+    policy = _gads_source_policy(
+        source,
+        connected_live=bool(meta.get("status") == "active" and meta.get("api_validated")),
+        explicit_demo=explicit_demo,
+    )
+    warnings = list(policy.get("warnings") or [])
+    if currency_ctx.get("warning") and currency_ctx["warning"] not in warnings:
+        warnings.append(currency_ctx["warning"])
 
     return jsonify({
-        "source": source,
+        **policy,
+        "warnings": warnings,
         "customer_id": customer_id,
         "date_range": date_range,
         "currency": currency_ctx,
@@ -21073,6 +21290,8 @@ def google_ads_ai_brief():
 
     user_id = get_current_user_id()
     meta = _gads_token_get_meta(user_id) or {}
+    explicit_demo = _gads_truthy_request_arg("demo") or _gads_truthy_request_arg("mock")
+    allow_fallback = explicit_demo or _gads_truthy_request_arg("allow_fallback")
     manager_cid = (
         re.sub(r"[^0-9]", "", mcc_id).strip()
         or re.sub(r"[^0-9]", "", str(meta.get("selected_manager_customer_id") or "")).strip()
@@ -21080,7 +21299,8 @@ def google_ads_ai_brief():
     )
 
     campaigns, date_range, source, api_currency = _gads_resolve_live_campaigns(
-        customer_id, mcc_id, days, user_id
+        customer_id, mcc_id, days, user_id,
+        allow_fallback=allow_fallback, explicit_demo=explicit_demo
     )
     brief = _gads_compute_ai_brief(campaigns, customer_id, manager_cid, date_range)
     currency_ctx = _gads_resolve_currency_context(
@@ -21089,9 +21309,18 @@ def google_ads_ai_brief():
         api_currency_code=api_currency,
         user_id=user_id,
     )
+    policy = _gads_source_policy(
+        source,
+        connected_live=bool(meta.get("status") == "active" and meta.get("api_validated")),
+        explicit_demo=explicit_demo,
+    )
+    warnings = list(policy.get("warnings") or [])
+    if currency_ctx.get("warning") and currency_ctx["warning"] not in warnings:
+        warnings.append(currency_ctx["warning"])
 
     return jsonify({
-        "source": source,
+        **policy,
+        "warnings": warnings,
         "customer_id": customer_id,
         "date_range": date_range,
         "currency": currency_ctx,
@@ -21986,20 +22215,21 @@ def _gads_build_module_response(
     date_range, currency_ctx, summary, signals, recommendations, rows, warnings
 ):
     """Build a standard intelligence module response envelope."""
-    live_data = source == "google_ads_api"
-    _SOURCE_LABELS = {
-        "google_ads_api": "Live Google Ads API",
-        "mock_fallback": "Fallback data (connected account, API error)",
-        "mock": "Demo data (no live connection)",
-        "google_ads_api_error": "API error",
-    }
+    policy = _gads_source_policy(source, connected_live=(source == "google_ads_api"))
+    merged_warnings = []
+    for w in list(warnings or []) + list(policy.get("warnings") or []):
+        w = str(w or "").strip()
+        if w and w not in merged_warnings:
+            merged_warnings.append(w)
     return {
         "success": True,
         "module_id": module_id,
         "module_label": module_label,
         "source": source,
-        "live_data": live_data,
-        "source_label": _SOURCE_LABELS.get(source, source),
+        "live_data": policy["live_data"],
+        "mock_used": policy["mock_used"],
+        "fallback_used": policy["fallback_used"],
+        "source_label": policy["source_label"],
         "customer_id": customer_id,
         "manager_customer_id": manager_customer_id,
         "date_range": date_range,
@@ -22008,7 +22238,7 @@ def _gads_build_module_response(
         "signals": signals,
         "recommendations": recommendations,
         "rows": rows,
-        "warnings": warnings,
+        "warnings": merged_warnings,
     }
 
 
@@ -22067,6 +22297,8 @@ def google_ads_intelligence_account_health():
     days = request.args.get("days", 30, type=int)
     user_id = get_current_user_id()
     meta = _gads_token_get_meta(user_id) or {}
+    explicit_demo = _gads_truthy_request_arg("demo") or _gads_truthy_request_arg("mock")
+    allow_fallback = explicit_demo or _gads_truthy_request_arg("allow_fallback")
     manager_cid = (
         re.sub(r"[^0-9]", "", mcc_id).strip()
         or re.sub(r"[^0-9]", "", str(meta.get("selected_manager_customer_id") or "")).strip()
@@ -22074,7 +22306,8 @@ def google_ads_intelligence_account_health():
     )
 
     campaigns, date_range, source, api_currency = _gads_resolve_live_campaigns(
-        customer_id, mcc_id, days, user_id
+        customer_id, mcc_id, days, user_id,
+        allow_fallback=allow_fallback, explicit_demo=explicit_demo
     )
     totals = _gads_compute_overview_totals(campaigns, customer_id, manager_cid, date_range)
     currency_ctx = _gads_resolve_currency_context(
@@ -22106,16 +22339,14 @@ def google_ads_intelligence_account_health():
 
     top_recs = [s["recommendation"] for s in signals[:5] if s.get("recommendation")]
 
-    warnings = []
+    policy = _gads_source_policy(
+        source,
+        connected_live=bool(meta.get("status") == "active" and meta.get("api_validated")),
+        explicit_demo=explicit_demo,
+    )
+    warnings = list(policy.get("warnings") or [])
     if currency_ctx.get("warning"):
         warnings.append(currency_ctx["warning"])
-    if source == "mock_fallback":
-        warnings.append(
-            "API call failed. Signals based on fallback data. "
-            "Your account is connected but the API returned an error."
-        )
-    elif source == "mock":
-        warnings.append("No live Google Ads connection. Signals based on demo data.")
 
     return jsonify(
         _gads_build_module_response(
@@ -22157,6 +22388,8 @@ def google_ads_intelligence_waste_finder():
     days = request.args.get("days", 30, type=int)
     user_id = get_current_user_id()
     meta = _gads_token_get_meta(user_id) or {}
+    explicit_demo = _gads_truthy_request_arg("demo") or _gads_truthy_request_arg("mock")
+    allow_fallback = explicit_demo or _gads_truthy_request_arg("allow_fallback")
     manager_cid = (
         re.sub(r"[^0-9]", "", mcc_id).strip()
         or re.sub(r"[^0-9]", "", str(meta.get("selected_manager_customer_id") or "")).strip()
@@ -22164,7 +22397,8 @@ def google_ads_intelligence_waste_finder():
     )
 
     campaigns, date_range, source, api_currency = _gads_resolve_live_campaigns(
-        customer_id, mcc_id, days, user_id
+        customer_id, mcc_id, days, user_id,
+        allow_fallback=allow_fallback, explicit_demo=explicit_demo
     )
     totals = _gads_compute_overview_totals(campaigns, customer_id, manager_cid, date_range)
     currency_ctx = _gads_resolve_currency_context(
@@ -22228,13 +22462,14 @@ def google_ads_intelligence_waste_finder():
     }
     top_recs = [s["recommendation"] for s in waste_signals[:5] if s.get("recommendation")]
 
-    warnings = []
+    policy = _gads_source_policy(
+        source,
+        connected_live=bool(meta.get("status") == "active" and meta.get("api_validated")),
+        explicit_demo=explicit_demo,
+    )
+    warnings = list(policy.get("warnings") or [])
     if currency_ctx.get("warning"):
         warnings.append(currency_ctx["warning"])
-    if source == "mock_fallback":
-        warnings.append("API call failed. Showing fallback data.")
-    elif source == "mock":
-        warnings.append("No live Google Ads connection. Showing demo data.")
 
     return jsonify(
         _gads_build_module_response(

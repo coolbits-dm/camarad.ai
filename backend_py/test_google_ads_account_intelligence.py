@@ -586,16 +586,16 @@ class TestSourceTruth(unittest.TestCase):
             with app.test_request_context("/"):
                 return _gads_resolve_live_campaigns(cid, "", 30, user_id="testuser")
 
-    def test_connected_api_error_returns_mock_fallback(self):
-        """When connected+validated but searchStream fails → source=mock_fallback."""
+    def test_connected_api_error_returns_api_error(self):
+        """When connected+validated but searchStream fails → no silent mock."""
         _, _, source, _ = self._resolve(
             mock_meta_val={"status": "active", "api_validated": True,
                            "selected_manager_customer_id": "8924163684"},
             mock_token_val={"success": True, "access_token": "test_token"},
             mock_stream_val={"success": False, "error": "403 Forbidden"},
         )
-        self.assertEqual(source, "mock_fallback",
-                         "Connected user with API error should get mock_fallback, not mock")
+        self.assertEqual(source, "google_ads_api_error",
+                         "Connected user with API error should get explicit error, not mock")
 
     def test_not_connected_returns_mock(self):
         """When not connected (no meta) → source=mock."""
@@ -634,4 +634,3 @@ class TestSourceTruth(unittest.TestCase):
                                 "developer_token"]:
                     self.assertNotIn(secret, body,
                                      f"Secret in {endpoint} mock_fallback response")
-
