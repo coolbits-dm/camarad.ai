@@ -1088,6 +1088,24 @@
                     <span id="gadsAccountInfo" class="small text-muted"></span>
                   </div>
                 </div>
+                <div class="row align-items-center g-2 mt-2">
+                  <div class="col-auto">
+                    <label class="form-label mb-0 small text-muted" for="gadsDateRange">
+                      <i class="bi bi-calendar3 text-info"></i> Date range
+                    </label>
+                  </div>
+                  <div class="col-auto">
+                    <select id="gadsDateRange" class="form-select form-select-sm bg-dark text-light" style="width:auto;" onchange="gadsOnDateRangeChange('gadsDateRange')">
+                      <option value="7">Last 7 days</option>
+                      <option value="14">Last 14 days</option>
+                      <option value="30" selected>Last 30 days</option>
+                      <option value="90">Last 90 days</option>
+                    </select>
+                  </div>
+                  <div class="col">
+                    <span id="gadsDateRangeStatus" class="small text-muted">Last 30 days</span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1122,13 +1140,6 @@
                 <div class="d-flex justify-content-between align-items-center mb-3">
                   <h6 class="mb-0">Campaigns</h6>
                   <div class="d-flex gap-2 flex-wrap align-items-center">
-                    <select id="gadsDateRange" class="form-select form-select-sm bg-dark text-light" style="width:auto;" onchange="gadsLoadAccount()">
-                      <option value="7">Last 7 days</option>
-                      <option value="14">Last 14 days</option>
-                      <option value="30" selected>Last 30 days</option>
-                      <option value="60">Last 60 days</option>
-                      <option value="90">Last 90 days</option>
-                    </select>
                     <select id="gadsCampFilter" class="form-select form-select-sm bg-dark text-light" style="width:auto;" onchange="gadsFilterCampaigns()">
                       <option value="all">All Status</option>
                       <option value="ENABLED">Enabled</option>
@@ -1234,13 +1245,11 @@
                     <p class="text-muted small mt-1 mb-0">Run focused checks for this selected client account.</p>
                   </div>
                   <div class="d-flex gap-2 align-items-center flex-wrap">
-                    <select id="gadsReportDateRange" class="form-select form-select-sm bg-dark text-light" style="width:auto;">
+                    <select id="gadsReportDateRange" class="form-select form-select-sm bg-dark text-light" style="width:auto;" onchange="gadsOnDateRangeChange('gadsReportDateRange')">
                       <option value="LAST_7_DAYS">Last 7 days</option>
                       <option value="LAST_14_DAYS">Last 14 days</option>
                       <option value="LAST_30_DAYS" selected>Last 30 days</option>
                       <option value="LAST_90_DAYS">Last 90 days</option>
-                      <option value="THIS_MONTH">This month</option>
-                      <option value="LAST_MONTH">Last month</option>
                     </select>
                     <select class="form-select form-select-sm bg-dark text-light" style="width:auto;" disabled title="Native account currency only — conversion not available">
                       <option>Native account currency</option>
@@ -5796,6 +5805,16 @@
   let gadsState = {
     accounts: [],
     selectedAccount: null,
+    customerId: null,
+    managerCustomerId: null,
+    accountName: null,
+    currencyCode: null,
+    timezone: null,
+    days: 30,
+    dateRange: "LAST_30_DAYS",
+    activeTab: "overview",
+    activeModule: null,
+    connectedLive: false,
     campaigns: [],
     reality: null,
     summary: null,
@@ -5862,6 +5881,11 @@
           : (data.connected_live ? [] : allAccounts);
         gadsState.mccHierarchyLoaded = !!data.mcc_hierarchy_loaded;
         gadsState.selectedManagerCustomerId = data.selected_manager_customer_id || '';
+        gadsState.connectedLive = !!data.connected_live;
+        if (gadsState.selectedManagerCustomerId) {
+          gadsState.managerCustomerId = gadsState.selectedManagerCustomerId;
+          gadsState.mccId = gadsState.selectedManagerCustomerId;
+        }
 
         if (directSel) {
           directSel.innerHTML = '<option value="">— Select Account —</option>';
@@ -5979,6 +6003,9 @@
         if (data.success) {
           const clientCount = data.client_accounts_count ?? 0;
           const managerCount = data.manager_accounts_count ?? 0;
+          gadsState.managerCustomerId = digits;
+          gadsState.mccId = digits;
+          try { localStorage.setItem('gads_mcc_id', digits); } catch (_e) {}
           if (window.showToast) window.showToast('Google Ads', `MCC hierarchy loaded: ${clientCount} client account(s), ${managerCount} manager account(s).`, 'success');
           if (mccStatus) mccStatus.innerHTML = `<span class="text-success"><i class="bi bi-check-circle-fill"></i> ${clientCount} client, ${managerCount} manager loaded</span>`;
           // Immediately populate client account dropdown from POST response (avoids extra round-trip)
@@ -6024,10 +6051,12 @@
       if (daysSelect) {
         const daysParsed = cfgDaysRaw.includes('7') ? '7'
           : cfgDaysRaw.includes('14') ? '14'
-          : cfgDaysRaw.includes('60') ? '60'
           : cfgDaysRaw.includes('90') ? '90'
           : '30';
         daysSelect.value = daysParsed;
+        gadsState.days = parseInt(daysParsed, 10) || 30;
+        gadsState.dateRange = gadsDaysToDateRange(gadsState.days);
+        gadsSyncDateControls();
       }
       const persistedMcc = normalizeMccId(cfg.mcc_id || cfg.mccId || '');
       const localMcc = normalizeMccId(localStorage.getItem('gads_mcc_id') || '');
@@ -6040,6 +6069,7 @@
         const rRes = await fetch('/api/connectors/google-ads/reality/status');
         const rData = await rRes.json();
         gadsState.reality = rData;
+        gadsState.connectedLive = !!rData.connected_live;
         const badgeClassMap = {
           demo: 'badge bg-secondary',
           warning: 'badge bg-warning text-dark',
@@ -6190,31 +6220,159 @@
     gadsStartOAuth();
   }
 
+  function gadsDateRangeToDays(dateRange) {
+    const key = String(dateRange || '').toUpperCase();
+    if (key === 'LAST_7_DAYS') return 7;
+    if (key === 'LAST_14_DAYS') return 14;
+    if (key === 'LAST_90_DAYS') return 90;
+    return 30;
+  }
+
+  function gadsDaysToDateRange(days) {
+    const n = parseInt(days || 30, 10);
+    if (n === 7) return 'LAST_7_DAYS';
+    if (n === 14) return 'LAST_14_DAYS';
+    if (n === 90) return 'LAST_90_DAYS';
+    return 'LAST_30_DAYS';
+  }
+
+  function gadsSyncDateControls(changedId) {
+    const daysSelect = document.getElementById('gadsDateRange');
+    const reportSelect = document.getElementById('gadsReportDateRange');
+    if (changedId === 'gadsReportDateRange' && reportSelect) {
+      gadsState.dateRange = reportSelect.value || 'LAST_30_DAYS';
+      gadsState.days = gadsDateRangeToDays(gadsState.dateRange);
+    } else if (daysSelect) {
+      gadsState.days = parseInt(daysSelect.value || '30', 10) || 30;
+      gadsState.dateRange = gadsDaysToDateRange(gadsState.days);
+    }
+    if (daysSelect) daysSelect.value = String(gadsState.days);
+    if (reportSelect) reportSelect.value = gadsState.dateRange;
+    const status = document.getElementById('gadsDateRangeStatus');
+    if (status) status.textContent = gadsState.dateRange.replace(/_/g, ' ');
+  }
+
+  function gadsGetDateParams() {
+    gadsSyncDateControls();
+    return {
+      days: gadsState.days || 30,
+      date_range: gadsState.dateRange || 'LAST_30_DAYS',
+    };
+  }
+
+  function gadsGetAccountParams() {
+    const selectedValue = String((document.getElementById('gadsAccountSelect') || {}).value || '').trim();
+    const customerId = selectedValue || gadsState.customerId || '';
+    const mccInput = document.getElementById('gadsMccId');
+    const managerId = String(
+      (mccInput && mccInput.value) ||
+      gadsState.managerCustomerId ||
+      gadsState.selectedManagerCustomerId ||
+      gadsState.mccId ||
+      ''
+    ).trim();
+    return {
+      customer_id: customerId,
+      mcc_id: managerId,
+      manager_customer_id: managerId,
+    };
+  }
+
+  function gadsSetPanelMessage(containerId, message, tone) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    const cls = tone === 'danger' ? 'text-danger' : (tone === 'warning' ? 'text-warning' : 'text-muted');
+    el.innerHTML = `<div class="${cls} small py-3"><i class="bi bi-info-circle me-1"></i>${message}</div>`;
+  }
+
+  function gadsRequireSelectedAccount(containerId) {
+    const params = gadsGetAccountParams();
+    if (params.customer_id) return params;
+    if (containerId) gadsSetPanelMessage(containerId, 'Select a client account first.', 'warning');
+    return null;
+  }
+
+  function gadsClearGoogleAdsOutputs() {
+    gadsState.campaigns = [];
+    gadsState.summary = null;
+    gadsState.overviewData = null;
+    gadsState.diagnosticsData = null;
+    gadsState.aiBriefData = null;
+    gadsState.loaded = { campaigns: false, diagnostics: false, aiBrief: false };
+    const sourceBox = document.getElementById('gadsCampaignsSource');
+    if (sourceBox) sourceBox.innerHTML = '';
+    const campaignsBody = document.getElementById('gadsCampaignsBody');
+    if (campaignsBody) campaignsBody.innerHTML = '';
+    const campaignsFoot = document.getElementById('gadsCampaignsFoot');
+    if (campaignsFoot) campaignsFoot.innerHTML = '';
+    const report = document.getElementById('gadsReportResult');
+    if (report) report.innerHTML = '<p class="text-muted small">Select a module above to run a focused check.</p>';
+  }
+
+  function gadsResolveActiveTab() {
+    const active = document.querySelector('#gadsTabs [data-bs-toggle="tab"].active');
+    const target = active ? active.getAttribute('data-bs-target') : '#gadsOverview';
+    if (target === '#gadsCampaigns') return 'campaigns';
+    if (target === '#gadsDiagnostics') return 'diagnostics';
+    if (target === '#gadsAiBrief') return 'aiBrief';
+    if (target === '#gadsReports') return 'reports';
+    if (target === '#gadsSettings') return 'settings';
+    return 'overview';
+  }
+
+  async function gadsReloadActiveTab() {
+    gadsState.activeTab = gadsResolveActiveTab();
+    if (gadsState.activeTab === 'campaigns') return gadsLoadCampaigns();
+    if (gadsState.activeTab === 'diagnostics') return gadsLoadDiagnostics();
+    if (gadsState.activeTab === 'aiBrief') return gadsLoadAiBrief();
+    if (gadsState.activeTab === 'reports') {
+      if (gadsState.activeModule && _GADS_REPORT_PRESETS[gadsState.activeModule]) return gadsRunPreset(gadsState.activeModule);
+      if (gadsState.activeModule) return gadsOpenModule(gadsState.activeModule);
+      return;
+    }
+    if (gadsState.activeTab === 'overview') return gadsLoadOverview();
+  }
+
+  window.gadsOnDateRangeChange = async function(changedId) {
+    gadsSyncDateControls(changedId);
+    gadsClearGoogleAdsOutputs();
+    await gadsReloadActiveTab();
+  };
+
   async function gadsLoadAccount() {
     const accountId = document.getElementById('gadsAccountSelect').value;
-    if (!accountId) return;
+    if (!accountId) {
+      gadsState.selectedAccount = null;
+      gadsState.customerId = null;
+      gadsClearGoogleAdsOutputs();
+      return;
+    }
 
     const acct = gadsState.accounts.find(a => a.id === accountId);
     gadsState.selectedAccount = acct;
+    gadsState.customerId = accountId;
+    gadsState.accountName = acct ? acct.name : null;
+    gadsState.currencyCode = acct ? acct.currency : null;
+    gadsState.timezone = acct ? acct.timezone : null;
+    const accountParams = gadsGetAccountParams();
+    gadsState.managerCustomerId = accountParams.manager_customer_id || null;
+    gadsState.mccId = accountParams.mcc_id || '';
     document.getElementById('gadsAccountInfo').textContent = acct
       ? `${acct.currency} · ${acct.timezone}`
       : '';
 
-    // Reset lazy-load state for this account
-    gadsState.loaded = { campaigns: false, diagnostics: false, aiBrief: false };
-    gadsState.overviewData = null;
-    gadsState.diagnosticsData = null;
-    gadsState.aiBriefData = null;
-
-    // Always load overview immediately
-    await gadsLoadOverview();
+    gadsClearGoogleAdsOutputs();
+    await gadsReloadActiveTab();
 
     // Register tab lazy-loaders (once; bootstrap 'shown.bs.tab' is safe to re-bind)
     document.querySelectorAll('#gadsTabs [data-bs-toggle="tab"]').forEach(btn => {
       btn.removeEventListener('shown.bs.tab', btn._gadsTabHandler || null);
       btn._gadsTabHandler = async function(e) {
         const target = e.target.getAttribute('data-bs-target');
-        if (target === '#gadsCampaigns' && !gadsState.loaded.campaigns) {
+        gadsState.activeTab = gadsResolveActiveTab();
+        if (target === '#gadsOverview') {
+          await gadsLoadOverview();
+        } else if (target === '#gadsCampaigns' && !gadsState.loaded.campaigns) {
           await gadsLoadCampaigns();
         } else if (target === '#gadsDiagnostics' && !gadsState.loaded.diagnostics) {
           await gadsLoadDiagnostics();
@@ -6228,10 +6386,18 @@
 
   // ── Helpers ─────────────────────────────────────────────────────────────
   function _gadsQs() {
-    const accountId = (document.getElementById('gadsAccountSelect') || {}).value || '';
-    const days = parseInt((document.getElementById('gadsDateRange') || {}).value || '30', 10) || 30;
-    const mccQs = gadsState.mccId ? `&mcc_id=${encodeURIComponent(gadsState.mccId)}` : '';
-    return { accountId, days, mccQs };
+    const account = gadsGetAccountParams();
+    const date = gadsGetDateParams();
+    const mccQs = account.mcc_id ? `&mcc_id=${encodeURIComponent(account.mcc_id)}` : '';
+    return {
+      accountId: account.customer_id,
+      customerId: account.customer_id,
+      mccId: account.mcc_id,
+      managerCustomerId: account.manager_customer_id,
+      days: date.days,
+      dateRange: date.date_range,
+      mccQs,
+    };
   }
 
   function _gadsSpinner(containerId, msg) {
@@ -6300,8 +6466,10 @@
 
   function gadsSourceBadge(source) {
     if (source === 'google_ads_api') return '<span class="badge bg-success ms-2" title="Live data from Google Ads API">Live</span>';
+    if (source === 'cached_google_ads_api') return '<span class="badge bg-info text-dark ms-2" title="Cached data from a previous Google Ads API load">Cached Google Ads</span>';
     if (source === 'partial_live')   return '<span class="badge bg-info text-dark ms-2" title="Partial live data">Partial</span>';
     if (source === 'mock_fallback')  return '<span class="badge bg-danger ms-2" title="Account connected but API call failed; fallback data is not live">API Error / Fallback</span>';
+    if (source === 'google_ads_api_error') return '<span class="badge bg-danger ms-2" title="Google Ads API error; no live rows returned">API Error</span>';
     if (source === 'mock')           return '<span class="badge bg-secondary ms-2" title="Mock data; not from a connected account">Mock</span>';
     if (source === 'mock_demo')      return '<span class="badge bg-secondary ms-2" title="Mock data shown by user request">Mock</span>';
     if (source === 'planned')        return '<span class="badge bg-secondary ms-2">Planned</span>';
@@ -6311,6 +6479,35 @@
 
   function _gadsSourceBadge(source) {
     return gadsSourceBadge(source);
+  }
+
+  function gadsRenderDataMeta(container, response) {
+    const data = response || {};
+    const source = data.source || 'unknown';
+    const date = gadsGetDateParams();
+    const dateLabel = String(data.date_range || data.dateRange || date.date_range || '').replace(/_/g, ' ');
+    const days = data.days || date.days;
+    const live = data.live_data === true;
+    const currency = data.currency || data.currency_code || data.account_currency_code || gadsState.currencyCode || null;
+    const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+    const warningHtml = warnings.length
+      ? `<div class="small mt-1 text-warning">${warnings.map(w => `<div><i class="bi bi-exclamation-triangle me-1"></i>${w}</div>`).join('')}</div>`
+      : '';
+    const html = `
+      <div class="d-flex align-items-center gap-2 flex-wrap small">
+        ${gadsSourceBadge(source)}
+        <span class="badge ${live ? 'bg-success' : 'bg-dark border'}">${live ? 'Live data' : 'Not live'}</span>
+        <span class="badge bg-dark border">${dateLabel || 'Date range unknown'}${days ? ` · ${days}d` : ''}</span>
+        ${gadsCurrencyBadge(currency)}
+      </div>
+      ${warningHtml}`;
+    if (typeof container === 'string') {
+      const el = document.getElementById(container);
+      if (el) el.innerHTML = html;
+    } else if (container && container.innerHTML !== undefined) {
+      container.innerHTML = html;
+    }
+    return html;
   }
 
   function gadsOpenAdvancedPane(tabButtonId) {
@@ -6369,10 +6566,12 @@
 
   // ── Overview (Phase 2C) ──────────────────────────────────────────────────
   async function gadsLoadOverview() {
-    const { accountId, days, mccQs } = _gadsQs();
+    const account = gadsRequireSelectedAccount('gadsOverviewContent');
+    if (!account) return;
+    const { accountId, days, dateRange, mccQs } = _gadsQs();
     _gadsSpinner('gadsOverviewContent', 'Loading overview…');
     try {
-      const res = await fetch(`/api/connectors/google-ads/overview?customer_id=${accountId}&days=${days}${mccQs}`);
+      const res = await fetch(`/api/connectors/google-ads/overview?customer_id=${encodeURIComponent(accountId)}&days=${days}&date_range=${encodeURIComponent(dateRange)}${mccQs}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       gadsState.overviewData = data;
@@ -6385,10 +6584,8 @@
   function gadsRenderOverview(data) {
     const t = (data && data.totals) ? data.totals : {};
     const source = (data && data.source) || 'unknown';
-    const dateRange = (data && data.date_range) || '';
-    const sourceBadge = _gadsSourceBadge(source);
     const currencyCtx = (data && data.currency) || {};
-    const currBadge = gadsCurrencyBadge(currencyCtx);
+    const metaHtml = gadsRenderDataMeta(null, data);
 
     const fmt = (v, prefix='', suffix='', dp=0) => {
       const n = Number(v);
@@ -6401,12 +6598,7 @@
       : '';
     document.getElementById('gadsOverviewContent').innerHTML = `
       ${mockFallbackWarning}
-      <div class="d-flex align-items-center gap-2 mb-3">
-        <span class="text-muted small">${dateRange.replace(/_/g,' ')}</span>
-        ${sourceBadge}
-        ${currBadge}
-        ${source === 'mock' ? '<span class="text-muted small">— Connect a real account to see live data</span>' : ''}
-      </div>
+      <div class="mb-3">${metaHtml}</div>
       <div class="row g-3 mb-4">
         <div class="col-6 col-md-3">
           <div class="card bg-dark border-info h-100">
@@ -6473,33 +6665,26 @@
 
   // ── Campaigns (Phase 2B / 2C) ────────────────────────────────────────────
   async function gadsLoadCampaigns() {
-    const { accountId, days, mccQs } = _gadsQs();
+    const account = gadsGetAccountParams();
+    const { accountId, days, dateRange, mccQs } = _gadsQs();
     const sourceBox = document.getElementById('gadsCampaignsSource');
     if (sourceBox) sourceBox.innerHTML = '';
+    if (!account.customer_id) {
+      document.getElementById('gadsCampaignsBody').innerHTML =
+        '<tr><td colspan="12" class="text-center text-warning py-4"><i class="bi bi-info-circle"></i> Select a client account first.</td></tr>';
+      document.getElementById('gadsCampaignsFoot').innerHTML = '';
+      return;
+    }
     document.getElementById('gadsCampaignsBody').innerHTML =
       '<tr><td colspan="12" class="text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading campaigns…</td></tr>';
     try {
-      const res = await fetch(`/api/connectors/google-ads/campaigns?account_id=${accountId}&days=${days}${mccQs}`);
+      const res = await fetch(`/api/connectors/google-ads/campaigns?customer_id=${encodeURIComponent(accountId)}&account_id=${encodeURIComponent(accountId)}&days=${days}&date_range=${encodeURIComponent(dateRange)}${mccQs}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      const campaignCurrency = ((data.campaigns || []).find(c => c && c.currency_code) || {}).currency_code;
+      if (!data.currency && campaignCurrency) data.currency_code = campaignCurrency;
       if (sourceBox) {
-        const source = (data && data.source) || 'unknown';
-        const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
-        const alertClass = source === 'google_ads_api_error' || source === 'mock_fallback'
-          ? 'alert-danger'
-          : (source === 'mock' ? 'alert-warning' : 'alert-secondary');
-        const warningHtml = warnings.length
-          ? `<div class="small mt-1">${warnings.map(w => `<div>${w}</div>`).join('')}</div>`
-          : '';
-        sourceBox.innerHTML = `
-          <div class="alert ${alertClass} py-2 px-3 mb-2 d-flex align-items-start justify-content-between gap-2 flex-wrap">
-            <div>
-              <span class="fw-semibold small">Campaign data</span>
-              ${_gadsSourceBadge(source)}
-              ${gadsCurrencyBadge((data && data.currency) || null)}
-              ${warningHtml}
-            </div>
-          </div>`;
+        sourceBox.innerHTML = `<div class="alert alert-secondary py-2 px-3 mb-2"><span class="fw-semibold small">Campaign data</span>${gadsRenderDataMeta(null, data)}</div>`;
       }
       gadsState.campaigns = data.campaigns || [];
       gadsState.summary = data.summary || {};
@@ -6675,11 +6860,13 @@
 
   // ── Diagnostics (Phase 2C) ───────────────────────────────────────────────
   async function gadsLoadDiagnostics() {
-    const { accountId, days, mccQs } = _gadsQs();
+    const account = gadsRequireSelectedAccount('gadsDiagnosticsContent');
+    if (!account) return;
+    const { accountId, days, dateRange, mccQs } = _gadsQs();
     _gadsSpinner('gadsDiagnosticsContent', 'Running diagnostics…');
     document.getElementById('gadsDiagSummaryBadges').innerHTML = '';
     try {
-      const res = await fetch(`/api/connectors/google-ads/diagnostics?customer_id=${accountId}&days=${days}${mccQs}`);
+      const res = await fetch(`/api/connectors/google-ads/diagnostics?customer_id=${encodeURIComponent(accountId)}&days=${days}&date_range=${encodeURIComponent(dateRange)}${mccQs}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       gadsState.diagnosticsData = data;
@@ -6695,6 +6882,7 @@
     const summary = (data && data.summary) || {};
     const source = (data && data.source) || 'unknown';
     const sourceBadge = _gadsSourceBadge(source);
+    const metaHtml = gadsRenderDataMeta(null, data);
 
     // Summary badges in header
     const badges = document.getElementById('gadsDiagSummaryBadges');
@@ -6712,6 +6900,7 @@
     if (!findings.length) {
       container.innerHTML = `
         ${source === 'mock_fallback' ? '<div class="alert alert-warning py-2 px-3 mb-3 small"><strong>API Error:</strong> Account connected but campaign API call failed. Showing fallback data.</div>' : ''}
+        <div class="mb-3">${metaHtml}</div>
         <div class="alert alert-success d-flex align-items-center gap-2 mt-2">
           <i class="bi bi-check-circle-fill fs-5"></i>
           <div>
@@ -6728,7 +6917,7 @@
       info:     { cls: 'info', icon: 'bi-info-circle-fill', label: 'Info', textCls: 'text-dark' },
     };
 
-    let html = '';
+    let html = `<div class="mb-3">${metaHtml}</div>`;
     findings.forEach(f => {
       const cfg = severityConfig[f.severity] || severityConfig.info;
       const snap = f.metric_snapshot || {};
@@ -6756,12 +6945,14 @@
   let _gadsAiBriefRaw = null;
 
   async function gadsLoadAiBrief() {
-    const { accountId, days, mccQs } = _gadsQs();
+    const account = gadsRequireSelectedAccount('gadsAiBriefContent');
+    if (!account) return;
+    const { accountId, days, dateRange, mccQs } = _gadsQs();
     _gadsSpinner('gadsAiBriefContent', 'Generating AI brief…');
     const copyBtn = document.getElementById('gadsAiBriefCopyBtn');
     if (copyBtn) copyBtn.style.display = 'none';
     try {
-      const res = await fetch(`/api/connectors/google-ads/ai-brief?customer_id=${accountId}&days=${days}${mccQs}`);
+      const res = await fetch(`/api/connectors/google-ads/ai-brief?customer_id=${encodeURIComponent(accountId)}&days=${days}&date_range=${encodeURIComponent(dateRange)}${mccQs}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       gadsState.aiBriefData = data;
@@ -6782,7 +6973,7 @@
 
   function gadsRenderAiBrief(data) {
     const source = (data && data.source) || 'unknown';
-    const sourceBadge = _gadsSourceBadge(source);
+    const metaHtml = gadsRenderDataMeta(null, data);
     const mockFallbackWarning = source === 'mock_fallback'
       ? '<div class="alert alert-warning py-2 px-3 mb-3 small"><strong>API Error:</strong> Account connected but campaign API call failed. AI Brief is based on fallback data.</div>'
       : '';
@@ -6832,11 +7023,7 @@
 
     document.getElementById('gadsAiBriefContent').innerHTML = `
       ${mockFallbackWarning}
-      <div class="d-flex align-items-center gap-2 mb-3">
-        <span class="text-muted small">${(as.date_range || '').replace(/_/g,' ')}</span>
-        ${sourceBadge}
-        ${source === 'mock' ? '<span class="text-muted small">— mock data</span>' : ''}
-      </div>
+      <div class="mb-3">${metaHtml}</div>
       <div class="row g-3 mb-4">
         <!-- Performance Summary -->
         <div class="col-md-6">
@@ -6948,6 +7135,7 @@
 
   // ── Module chip active-state helper ───────────────────────────────────
   function _gadsSelectModule(moduleKey) {
+    gadsState.activeModule = moduleKey;
     document.querySelectorAll('.gads-module-chip').forEach(function(btn) {
       btn.classList.remove('active', 'btn-primary');
       btn.classList.add('btn-outline-secondary');
@@ -6961,16 +7149,11 @@
 
   // ── Intelligence Module opener ─────────────────────────────────────────
   async function gadsOpenModule(moduleId) {
-    const { accountId } = _gadsQs();
-    const dateRange = (document.getElementById('gadsReportDateRange') || {}).value || 'LAST_30_DAYS';
+    const account = gadsRequireSelectedAccount('gadsReportResult');
     const container = document.getElementById('gadsReportResult');
-    if (!accountId) {
-      container.innerHTML = '<p class="text-warning small">No account selected.</p>';
-      return;
-    }
-    const mccId = gadsState.mccId || '';
-    const days = {'LAST_7_DAYS':7,'LAST_14_DAYS':14,'LAST_30_DAYS':30,
-                  'LAST_90_DAYS':90,'THIS_MONTH':30,'LAST_MONTH':30}[dateRange] || 30;
+    if (!account) return;
+    gadsState.activeModule = moduleId;
+    const { accountId, days, dateRange, mccQs } = _gadsQs();
 
     const endpointMap = {
       'account_health': '/api/connectors/google-ads/intelligence/account-health',
@@ -6982,8 +7165,7 @@
 
     container.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Running module…</div>';
     try {
-      let url = `${ep}?customer_id=${encodeURIComponent(accountId)}&days=${days}`;
-      if (mccId) url += `&mcc_id=${encodeURIComponent(mccId)}`;
+      let url = `${ep}?customer_id=${encodeURIComponent(accountId)}&days=${days}&date_range=${encodeURIComponent(dateRange)}${mccQs}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -7009,7 +7191,7 @@
     const signals = data.signals || [];
     const summary = data.summary || {};
     const currency = data.currency || null;
-    const currBadge = gadsCurrencyBadge(currency);
+    const metaHtml = gadsRenderDataMeta(null, data);
     const warnings = data.warnings || [];
     const counts = summary.signal_counts || {};
 
@@ -7060,8 +7242,7 @@
       ${demoBanner}${warnHtml}
       <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
         <span class="fw-semibold"><i class="bi bi-heart-pulse me-1"></i>Account Health</span>
-        ${_gadsSourceBadge(source)}
-        ${currBadge}
+        ${metaHtml}
         <span class="badge bg-danger ms-1">${counts.critical || 0} critical</span>
         <span class="badge bg-warning text-dark ms-1">${counts.warning || 0} warning</span>
         <span class="badge bg-info text-dark ms-1">${counts.info || 0} info</span>
@@ -7079,7 +7260,7 @@
     const rows = data.rows || [];
     const summary = data.summary || {};
     const currency = data.currency || null;
-    const currBadge = gadsCurrencyBadge(currency);
+    const metaHtml = gadsRenderDataMeta(null, data);
     const warnings = data.warnings || [];
     const counts = (summary.signal_counts) || {};
 
@@ -7135,8 +7316,7 @@
       ${demoBanner}${warnHtml}
       <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
         <span class="fw-semibold"><i class="bi bi-trash me-1"></i>Waste Finder</span>
-        ${_gadsSourceBadge(source)}
-        ${currBadge}
+        ${metaHtml}
         <span class="badge bg-danger ms-1">${counts.critical || 0} critical</span>
         <span class="badge bg-warning text-dark ms-1">${counts.warning || 0} warning</span>
         <span class="text-muted small ms-auto">Waste spend: <strong>${wasteSpend}</strong></span>
@@ -7154,7 +7334,7 @@
     const signals = data.signals || [];
     const summary = data.summary || {};
     const currency = data.currency || null;
-    const currBadge = gadsCurrencyBadge(currency);
+    const metaHtml = gadsRenderDataMeta(null, data);
     const warnings = data.warnings || [];
 
     // Filter out generic mock/fallback warnings — handled by the demo banner below
@@ -7257,8 +7437,7 @@
       ${demoBanner}${warnHtml}
       <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
         <span class="fw-semibold"><i class="bi bi-search me-1"></i>Search Terms</span>
-        ${_gadsSourceBadge(source)}
-        ${currBadge}
+        ${metaHtml}
         <span class="badge bg-warning text-dark ms-1">Partial — standard search only</span>
       </div>
       ${summaryHtml}
@@ -7272,16 +7451,13 @@
   async function gadsRunPreset(presetKey) {
     const preset = _GADS_REPORT_PRESETS[presetKey];
     if (!preset) return;
-    const { accountId, mccQs } = _gadsQs();
-    const dateRange = (document.getElementById('gadsReportDateRange') || {}).value || 'LAST_30_DAYS';
+    const account = gadsRequireSelectedAccount('gadsReportResult');
     const container = document.getElementById('gadsReportResult');
-    if (!accountId) {
-      container.innerHTML = '<p class="text-warning small">No account selected.</p>';
-      return;
-    }
+    if (!account) return;
+    gadsState.activeModule = presetKey;
+    const { accountId, mccId, dateRange } = _gadsQs();
     container.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Running report…</div>';
     try {
-      const mccId = gadsState.mccId || '';
       const body = {
         customer_id: accountId,
         manager_customer_id: mccId || undefined,
@@ -7316,7 +7492,7 @@
     const totals = data.totals || {};
     const source = data.source || '';
     const currency = data.currency || null;
-    const currBadge = gadsCurrencyBadge(currency);
+    const metaHtml = gadsRenderDataMeta(null, data);
     const warnings = data.warnings || [];
     // Filter out generic mock/fallback warnings — handled by demo banner
     const filteredWarningsRpt = warnings.filter(w =>
@@ -7363,8 +7539,7 @@
       ${demoBanner}${warnHtml}
       <div class="d-flex align-items-center gap-2 mb-2">
         <span class="fw-semibold">${presetName}</span>
-        ${_gadsSourceBadge(source)}
-        ${currBadge}
+        ${metaHtml}
         <span class="text-muted small ms-auto">${rows.length} campaigns</span>
       </div>
       <div class="table-responsive">

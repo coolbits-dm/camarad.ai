@@ -20107,6 +20107,20 @@ def _gads_cached_accounts_source_policy(connected_live=False):
     return policy
 
 
+def _gads_date_range_from_days(days):
+    """Map supported UI day windows to Google Ads date range constants."""
+    try:
+        safe_days = int(days or 30)
+    except Exception:
+        safe_days = 30
+    return {
+        7: "LAST_7_DAYS",
+        14: "LAST_14_DAYS",
+        30: "LAST_30_DAYS",
+        90: "LAST_90_DAYS",
+    }.get(safe_days, "LAST_30_DAYS")
+
+
 # ── Phase 2B: Real Google Ads Campaigns via searchStream ─────────────────────
 
 def _gads_searchstream_campaigns(account_id, access_token, developer_token, login_customer_id, days=30):
@@ -20121,8 +20135,7 @@ def _gads_searchstream_campaigns(account_id, access_token, developer_token, logi
         return {"success": False, "error": "invalid_account_id",
                 "message": "Invalid client account ID."}
 
-    _DATE_RANGE_MAP = {7: "LAST_7_DAYS", 14: "LAST_14_DAYS", 30: "LAST_30_DAYS", 90: "LAST_90_DAYS"}
-    date_range = _DATE_RANGE_MAP.get(int(days or 30), "LAST_30_DAYS")
+    date_range = _gads_date_range_from_days(days)
 
     safe_login_cid = re.sub(r"[^0-9]", "", str(login_customer_id or safe_cid))
     url = f"{_GADS_API_BASE}/{_GADS_API_VERSION}/customers/{safe_cid}/googleAds:searchStream"
@@ -20434,9 +20447,13 @@ def google_ads_campaigns():
     against the selected client account with login-customer-id = MCC manager.
     Connected-live users never silently receive mock rows on API failure.
     """
-    account_id = request.args.get('account_id', '123-456-7890')
+    account_id = (
+        request.args.get('customer_id', '').strip()
+        or request.args.get('account_id', '123-456-7890').strip()
+    )
     mcc_id = request.args.get("mcc_id", "").strip()
     days = request.args.get('days', 30, type=int)
+    requested_date_range = _gads_date_range_from_days(days)
     explicit_demo = _gads_truthy_request_arg("demo") or _gads_truthy_request_arg("mock")
     allow_fallback = explicit_demo or _gads_truthy_request_arg("allow_fallback")
 
@@ -20445,6 +20462,8 @@ def google_ads_campaigns():
         policy = _gads_source_policy("mock", connected_live=False, explicit_demo=True)
         mock.update(policy)
         mock["success"] = True
+        mock["days"] = days
+        mock["date_range"] = requested_date_range
         return jsonify(mock)
 
     # ── Live Google Ads API path (Phase 2B) ──────────────────────────────────
@@ -20482,6 +20501,7 @@ def google_ads_campaigns():
                         "account_id": account_id,
                         "campaigns": campaigns,
                         "summary": _google_ads_build_summary(campaigns),
+                        "days": days,
                         "date_range": result.get("date_range", "LAST_30_DAYS"),
                         "source": "google_ads_api",
                         **_gads_source_policy("google_ads_api", connected_live=True),
@@ -20502,6 +20522,7 @@ def google_ads_campaigns():
                         "source": "mock_fallback",
                         "connected_live": True,
                         "connected_mock": False,
+                        "days": days,
                         "date_range": result.get("date_range", "LAST_30_DAYS"),
                         "message": (
                             "Google Ads API call failed. Showing fallback demo data "
@@ -20519,6 +20540,7 @@ def google_ads_campaigns():
                     "account_id": account_id,
                     "campaigns": [],
                     "summary": _google_ads_build_summary([]),
+                    "days": days,
                     "date_range": result.get("date_range", "LAST_30_DAYS"),
                     **policy,
                     "connected_live": True,
@@ -20541,7 +20563,8 @@ def google_ads_campaigns():
                     "source": "mock_fallback",
                     "connected_live": True,
                     "connected_mock": False,
-                    "date_range": "LAST_30_DAYS",
+                    "days": days,
+                    "date_range": requested_date_range,
                     "message": (
                         "Google Ads token refresh failed. Showing fallback demo data "
                         "because fallback was explicitly requested."
@@ -20554,7 +20577,8 @@ def google_ads_campaigns():
                 "account_id": account_id,
                 "campaigns": [],
                 "summary": _google_ads_build_summary([]),
-                "date_range": "LAST_30_DAYS",
+                "days": days,
+                "date_range": requested_date_range,
                 **policy,
                 "connected_live": True,
                 "connected_mock": False,
@@ -20569,7 +20593,8 @@ def google_ads_campaigns():
             "account_id": account_id,
             "campaigns": [],
             "summary": _google_ads_build_summary([]),
-            "date_range": "LAST_30_DAYS",
+            "days": days,
+            "date_range": requested_date_range,
             **policy,
             "connected_live": True,
             "connected_mock": False,
@@ -20602,6 +20627,8 @@ def google_ads_campaigns():
                     "account_id": account_id,
                     "campaigns": campaigns,
                     "summary": _google_ads_build_summary(campaigns),
+                    "days": days,
+                    "date_range": requested_date_range,
                     "source": "coolbits",
                     **_gads_source_policy("coolbits", connected_live=False),
                     "gateway": gw,
@@ -20610,6 +20637,8 @@ def google_ads_campaigns():
             out = dict(payload)
             out.setdefault("account_id", account_id)
             out.setdefault("summary", _google_ads_build_summary(out.get("campaigns") or []))
+            out.setdefault("days", days)
+            out.setdefault("date_range", requested_date_range)
             out["source"] = "coolbits"
             out["success"] = True
             out.update(_gads_source_policy("coolbits", connected_live=False))
@@ -20622,6 +20651,8 @@ def google_ads_campaigns():
                 "account_id": account_id,
                 "campaigns": campaigns,
                 "summary": _google_ads_build_summary(campaigns),
+                "days": days,
+                "date_range": requested_date_range,
                 "source": "coolbits",
                 **_gads_source_policy("coolbits", connected_live=False),
                 "gateway": gw,
@@ -20629,6 +20660,8 @@ def google_ads_campaigns():
     mock = _google_ads_mock_campaigns_response(account_id)
     mock.update(_gads_source_policy("mock", connected_live=False, explicit_demo=explicit_demo))
     mock["success"] = True
+    mock["days"] = days
+    mock["date_range"] = requested_date_range
     return jsonify(mock)
 
 
@@ -21249,6 +21282,7 @@ def google_ads_overview():
         "warnings": warnings,
         "customer_id": customer_id,
         "manager_customer_id": manager_cid,
+        "days": days,
         "date_range": date_range,
         "currency": currency_ctx,
         "totals": totals,
@@ -21303,6 +21337,7 @@ def google_ads_diagnostics():
         **policy,
         "warnings": warnings,
         "customer_id": customer_id,
+        "days": days,
         "date_range": date_range,
         "currency": currency_ctx,
         "findings": findings,
@@ -21361,6 +21396,7 @@ def google_ads_ai_brief():
         **policy,
         "warnings": warnings,
         "customer_id": customer_id,
+        "days": days,
         "date_range": date_range,
         "currency": currency_ctx,
         **brief,
@@ -22251,7 +22287,8 @@ def _gads_compute_account_health_signals(campaigns, totals, currency_ctx):
 
 def _gads_build_module_response(
     module_id, module_label, source, customer_id, manager_customer_id,
-    date_range, currency_ctx, summary, signals, recommendations, rows, warnings
+    date_range, currency_ctx, summary, signals, recommendations, rows, warnings,
+    days=None,
 ):
     """Build a standard intelligence module response envelope."""
     policy = _gads_source_policy(source, connected_live=(source == "google_ads_api"))
@@ -22271,6 +22308,7 @@ def _gads_build_module_response(
         "source_label": policy["source_label"],
         "customer_id": customer_id,
         "manager_customer_id": manager_customer_id,
+        "days": days,
         "date_range": date_range,
         "currency": currency_ctx,
         "summary": summary,
@@ -22401,6 +22439,7 @@ def google_ads_intelligence_account_health():
             recommendations=top_recs,
             rows=[],
             warnings=warnings,
+            days=days,
         )
     )
 
@@ -22524,6 +22563,7 @@ def google_ads_intelligence_waste_finder():
             recommendations=top_recs,
             rows=waste_rows,
             warnings=warnings,
+            days=days,
         )
     )
 
@@ -22707,9 +22747,7 @@ def _gads_fetch_search_terms(
         return {"success": False, "error": "invalid_account_id",
                 "message": "Invalid client account ID."}
 
-    _DATE_RANGE_MAP = {7: "LAST_7_DAYS", 14: "LAST_14_DAYS", 30: "LAST_30_DAYS",
-                       90: "LAST_90_DAYS"}
-    date_range = _DATE_RANGE_MAP.get(int(days or 30), "LAST_30_DAYS")
+    date_range = _gads_date_range_from_days(days)
     safe_limit = min(max(int(limit or 100), 1), 500)
 
     safe_login_cid = re.sub(r"[^0-9]", "", str(manager_customer_id or safe_cid))
@@ -23302,6 +23340,7 @@ def google_ads_intelligence_search_terms():
             recommendations=top_recs,
             rows=rows,
             warnings=warnings,
+            days=days,
         )
     )
 
