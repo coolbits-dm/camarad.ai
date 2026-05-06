@@ -1109,15 +1109,16 @@
               </div>
             </div>
 
-            <!-- Tabs — simplified primary workspace -->
+            <!-- Tabs — primary Google Ads workspace -->
             <ul class="nav nav-tabs nav-fill mb-3" id="gadsTabs">
               <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#gadsOverview" type="button"><i class="bi bi-speedometer2"></i> Overview</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsCampaigns" type="button"><i class="bi bi-megaphone"></i> Campaigns</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsReports" type="button" onclick="gadsOnReportsTabOpen()" title="Focused audit modules you can run on demand."><i class="bi bi-file-earmark-bar-graph"></i> Reports</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsIntelligence" type="button" onclick="gadsOnIntelligenceTabOpen()" title="Focused audit modules you can run on demand."><i class="bi bi-cpu"></i> Intelligence</button></li>
+              <li class="nav-item"><button class="nav-link" id="gadsDiagnosticsTab" data-bs-toggle="tab" data-bs-target="#gadsDiagnostics" type="button" title="Live alerts detected from account data."><i class="bi bi-exclamation-triangle"></i> Diagnostics</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsReports" type="button" onclick="gadsOnReportsTabOpen()" title="Report query presets and metric catalog."><i class="bi bi-file-earmark-bar-graph"></i> Reports</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsAiBrief" type="button"><i class="bi bi-robot"></i> AI Brief</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#gadsSettings" type="button"><i class="bi bi-gear"></i> Settings</button></li>
               <!-- Advanced / Legacy panes are intentionally hidden from primary navigation. -->
-              <li class="nav-item d-none"><button class="nav-link" id="gadsDiagnosticsTab" data-bs-toggle="tab" data-bs-target="#gadsDiagnostics" type="button" title="Diagnostics legacy pane"><i class="bi bi-exclamation-triangle"></i> Diagnostics</button></li>
               <li class="nav-item d-none"><button class="nav-link" id="gadsApiTestTab" data-bs-toggle="tab" data-bs-target="#gadsApiTest" type="button"><i class="bi bi-terminal"></i> Test API</button></li>
               <li class="nav-item d-none"><button class="nav-link" id="gadsPacingTab" data-bs-toggle="tab" data-bs-target="#gadsPacing" type="button"><i class="bi bi-graph-up"></i> Budget Pacing</button></li>
               <li class="nav-item d-none"><button class="nav-link" id="gadsAssetsTab" data-bs-toggle="tab" data-bs-target="#gadsAssets" type="button"><i class="bi bi-pencil-square"></i> Asset Generator</button></li>
@@ -1235,13 +1236,13 @@
                 <div id="gadsPacingContent"></div>
               </div>
 
-              <!-- ── Reports Modules Tab ────────────────────────── -->
-              <div class="tab-pane fade" id="gadsReports">
+              <!-- ── Intelligence Modules Tab ────────────────────────── -->
+              <div class="tab-pane fade" id="gadsIntelligence">
 
                 <!-- Header + date controls -->
                 <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
                   <div>
-                    <h6 class="mb-0 text-light"><i class="bi bi-file-earmark-bar-graph text-primary me-2"></i>Google Ads Reports</h6>
+                    <h6 class="mb-0 text-light"><i class="bi bi-cpu text-primary me-2"></i>Google Ads Intelligence Modules</h6>
                     <p class="text-muted small mt-1 mb-0">Run focused checks for this selected client account.</p>
                   </div>
                   <div class="d-flex gap-2 align-items-center flex-wrap">
@@ -1321,6 +1322,48 @@
                 </div><!-- end gadsModuleCards -->
 
                 <div id="gadsReportResult"><p class="text-muted small">Select a module above to run a focused check.</p></div>
+              </div>
+
+              <!-- ── Reports Tab ─────────────────────────────────── -->
+              <div class="tab-pane fade" id="gadsReports">
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+                  <div>
+                    <h6 class="mb-0 text-light"><i class="bi bi-file-earmark-bar-graph text-primary me-2"></i>Google Ads Reports</h6>
+                    <p class="text-muted small mt-1 mb-0">Run report-query presets for this selected client account.</p>
+                  </div>
+                  <div class="d-flex gap-2 align-items-center flex-wrap">
+                    <select class="form-select form-select-sm bg-dark text-light" style="width:auto;" disabled title="Uses the shared Google Ads date selector">
+                      <option>Shared date range</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="gadsExportReportCSV('gadsReportsTable')"><i class="bi bi-download"></i> CSV</button>
+                  </div>
+                </div>
+                <div class="d-flex flex-wrap gap-3 mb-3">
+                  <div>
+                    <div class="text-uppercase text-muted mb-2" style="font-size:0.68rem;letter-spacing:.08em;">Report presets</div>
+                    <div class="d-flex flex-wrap gap-2">
+                      <button class="btn btn-sm btn-outline-secondary gads-report-chip" onclick="gadsRunPreset('roas_leaders', 'gadsReportsResult')" id="gadsReportBtn_roas_leaders">
+                        <i class="bi bi-trophy"></i> ROAS Leaders
+                        <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
+                      </button>
+                      <button class="btn btn-sm btn-outline-secondary gads-report-chip" onclick="gadsRunPreset('conversion_efficiency', 'gadsReportsResult')" id="gadsReportBtn_conversion_efficiency">
+                        <i class="bi bi-bullseye"></i> Conversion Efficiency
+                        <span class="badge bg-success ms-1" style="font-size:.6rem;">Live</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <div class="text-uppercase text-muted mb-2" style="font-size:0.68rem;letter-spacing:.08em;">Metric catalog</div>
+                    <div class="d-flex flex-wrap gap-2 small text-muted">
+                      <span class="badge bg-dark border">cost</span>
+                      <span class="badge bg-dark border">clicks</span>
+                      <span class="badge bg-dark border">conversions</span>
+                      <span class="badge bg-dark border">roas</span>
+                      <span class="badge bg-dark border">cpa</span>
+                    </div>
+                  </div>
+                </div>
+                <div id="gadsReportsResult"><p class="text-muted small">Select a report preset above to run a report query.</p></div>
               </div>
 
               <!-- ── Asset Generator Tab ───────────────────────────── -->
@@ -1438,7 +1481,6 @@
                           <button class="btn btn-sm btn-outline-secondary" type="button" onclick="gadsOpenAdvancedPane('gadsApiTestTab')"><i class="bi bi-terminal me-1"></i>Test API</button>
                           <button class="btn btn-sm btn-outline-secondary" type="button" onclick="gadsOpenAdvancedPane('gadsPacingTab')"><i class="bi bi-graph-up me-1"></i>Budget Pacing</button>
                           <button class="btn btn-sm btn-outline-secondary" type="button" onclick="gadsOpenAdvancedPane('gadsAssetsTab')"><i class="bi bi-pencil-square me-1"></i>Asset Generator</button>
-                          <button class="btn btn-sm btn-outline-secondary" type="button" onclick="gadsOpenAdvancedPane('gadsDiagnosticsTab')"><i class="bi bi-exclamation-triangle me-1"></i>Diagnostics</button>
                         </div>
                       </div>
                     </div>
@@ -5814,6 +5856,7 @@
     dateRange: "LAST_30_DAYS",
     activeTab: "overview",
     activeModule: null,
+    activeReportPreset: null,
     connectedLive: false,
     campaigns: [],
     reality: null,
@@ -6307,12 +6350,15 @@
     if (campaignsFoot) campaignsFoot.innerHTML = '';
     const report = document.getElementById('gadsReportResult');
     if (report) report.innerHTML = '<p class="text-muted small">Select a module above to run a focused check.</p>';
+    const reports = document.getElementById('gadsReportsResult');
+    if (reports) reports.innerHTML = '<p class="text-muted small">Select a report preset above to run a report query.</p>';
   }
 
   function gadsResolveActiveTab() {
     const active = document.querySelector('#gadsTabs [data-bs-toggle="tab"].active');
     const target = active ? active.getAttribute('data-bs-target') : '#gadsOverview';
     if (target === '#gadsCampaigns') return 'campaigns';
+    if (target === '#gadsIntelligence') return 'intelligence';
     if (target === '#gadsDiagnostics') return 'diagnostics';
     if (target === '#gadsAiBrief') return 'aiBrief';
     if (target === '#gadsReports') return 'reports';
@@ -6323,11 +6369,15 @@
   async function gadsReloadActiveTab() {
     gadsState.activeTab = gadsResolveActiveTab();
     if (gadsState.activeTab === 'campaigns') return gadsLoadCampaigns();
+    if (gadsState.activeTab === 'intelligence') {
+      if (gadsState.activeModule && _GADS_REPORT_PRESETS[gadsState.activeModule]) return gadsRunPreset(gadsState.activeModule, 'gadsReportResult');
+      if (gadsState.activeModule) return gadsOpenModule(gadsState.activeModule);
+      return;
+    }
     if (gadsState.activeTab === 'diagnostics') return gadsLoadDiagnostics();
     if (gadsState.activeTab === 'aiBrief') return gadsLoadAiBrief();
     if (gadsState.activeTab === 'reports') {
-      if (gadsState.activeModule && _GADS_REPORT_PRESETS[gadsState.activeModule]) return gadsRunPreset(gadsState.activeModule);
-      if (gadsState.activeModule) return gadsOpenModule(gadsState.activeModule);
+      if (gadsState.activeReportPreset) return gadsRunPreset(gadsState.activeReportPreset, 'gadsReportsResult');
       return;
     }
     if (gadsState.activeTab === 'overview') return gadsLoadOverview();
@@ -6657,7 +6707,7 @@
           ${statusBadge}
           ${gadsCurrencyBadge((data && data.currency) || null)}
         </div>
-        <button class="btn btn-sm btn-outline-primary" type="button" onclick="document.querySelector('[data-bs-target=&quot;#gadsReports&quot;]').click(); _gadsSelectModule('account_health'); gadsOpenModule('account_health');">
+        <button class="btn btn-sm btn-outline-primary" type="button" onclick="document.querySelector('[data-bs-target=&quot;#gadsIntelligence&quot;]').click(); _gadsSelectModule('account_health'); gadsOpenModule('account_health');">
           <i class="bi bi-heart-pulse me-1"></i>Account Health
         </button>
       </div>`;
@@ -7133,6 +7183,10 @@
     // no auto-load — user picks module/preset
   }
 
+  function gadsOnIntelligenceTabOpen() {
+    // no auto-load — user picks intelligence module
+  }
+
   // ── Module chip active-state helper ───────────────────────────────────
   function _gadsSelectModule(moduleKey) {
     gadsState.activeModule = moduleKey;
@@ -7448,13 +7502,15 @@
     `;
   }
 
-  async function gadsRunPreset(presetKey) {
+  async function gadsRunPreset(presetKey, resultContainerId) {
     const preset = _GADS_REPORT_PRESETS[presetKey];
     if (!preset) return;
-    const account = gadsRequireSelectedAccount('gadsReportResult');
-    const container = document.getElementById('gadsReportResult');
+    const targetId = resultContainerId || (gadsResolveActiveTab() === 'reports' ? 'gadsReportsResult' : 'gadsReportResult');
+    const account = gadsRequireSelectedAccount(targetId);
+    const container = document.getElementById(targetId);
     if (!account) return;
-    gadsState.activeModule = presetKey;
+    if (targetId === 'gadsReportsResult') gadsState.activeReportPreset = presetKey;
+    else gadsState.activeModule = presetKey;
     const { accountId, mccId, dateRange } = _gadsQs();
     container.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Running report…</div>';
     try {
@@ -7480,14 +7536,16 @@
         _gadsPresetApiErrorState(container, presetKey, preset.name);
         return;
       }
-      gadsRenderReport(data, preset.name);
+      gadsRenderReport(data, preset.name, targetId);
     } catch (e) {
       container.innerHTML = `<div class="alert alert-danger">Report failed: ${e.message}</div>`;
     }
   }
 
-  function gadsRenderReport(data, presetName) {
-    const container = document.getElementById('gadsReportResult');
+  function gadsRenderReport(data, presetName, resultContainerId) {
+    const targetId = resultContainerId || 'gadsReportResult';
+    const container = document.getElementById(targetId);
+    const tableId = targetId === 'gadsReportsResult' ? 'gadsReportsTable' : 'gadsReportTable';
     const rows = data.rows || [];
     const totals = data.totals || {};
     const source = data.source || '';
@@ -7543,7 +7601,7 @@
         <span class="text-muted small ms-auto">${rows.length} campaigns</span>
       </div>
       <div class="table-responsive">
-        <table class="table table-dark table-sm table-hover" id="gadsReportTable">
+        <table class="table table-dark table-sm table-hover" id="${tableId}">
           <thead><tr>${colHeaders}</tr></thead>
           <tbody>${bodyRows}</tbody>
           <tfoot>${totalRow}</tfoot>
@@ -7552,8 +7610,8 @@
     `;
   }
 
-  function gadsExportReportCSV() {
-    const table = document.getElementById('gadsReportTable');
+  function gadsExportReportCSV(tableId) {
+    const table = document.getElementById(tableId || 'gadsReportTable');
     if (!table) return;
     const rows = Array.from(table.querySelectorAll('tr'));
     const csv = rows.map(r =>

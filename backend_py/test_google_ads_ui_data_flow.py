@@ -29,10 +29,75 @@ def _template():
         return fh.read()
 
 
+def _between(text, start, end):
+    start_idx = text.index(start)
+    end_idx = text.index(end, start_idx)
+    return text[start_idx:end_idx]
+
+
+def _visible_google_ads_tab_labels(tab_html):
+    labels = []
+    for item in re.findall(r'<li class="nav-item">(.*?)</li>', tab_html, flags=re.S):
+        match = re.search(r"<button\b[^>]*>(.*?)</button>", item, flags=re.S)
+        if not match:
+            continue
+        label = re.sub(r"<[^>]+>", " ", match.group(1))
+        labels.append(" ".join(label.split()))
+    return labels
+
+
 class TestGoogleAdsTemplateDataFlow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.html = _template()
+        cls.gads_panel = _between(cls.html, "GOOGLE ADS RICH PANEL", "END GOOGLE ADS PANEL")
+        cls.gads_tabs = _between(cls.gads_panel, 'id="gadsTabs"', "</ul>")
+
+    def test_primary_google_ads_tabs_preserve_intelligence_and_diagnostics(self):
+        self.assertEqual(
+            _visible_google_ads_tab_labels(self.gads_tabs),
+            [
+                "Overview",
+                "Campaigns",
+                "Intelligence",
+                "Diagnostics",
+                "Reports",
+                "AI Brief",
+                "Settings",
+            ],
+        )
+        self.assertIn('data-bs-target="#gadsIntelligence"', self.gads_tabs)
+        self.assertIn('data-bs-target="#gadsDiagnostics"', self.gads_tabs)
+        self.assertIn('data-bs-target="#gadsReports"', self.gads_tabs)
+        self.assertNotIn('id="gadsDiagnosticsTab" data-bs-toggle="tab" data-bs-target="#gadsDiagnostics" type="button" title="Diagnostics legacy pane"', self.gads_tabs)
+
+    def test_intelligence_workspace_and_reports_workspace_are_separate(self):
+        intelligence = _between(
+            self.gads_panel,
+            '<div class="tab-pane fade" id="gadsIntelligence">',
+            '<div class="tab-pane fade" id="gadsReports">',
+        )
+        reports = _between(
+            self.gads_panel,
+            '<div class="tab-pane fade" id="gadsReports">',
+            '<div class="tab-pane fade" id="gadsAssets">',
+        )
+        self.assertIn("Google Ads Intelligence Modules", intelligence)
+        self.assertIn('id="gadsModuleCards"', intelligence)
+        for label in ("Account Health", "Waste Finder", "ROAS Leaders", "Conv. Efficiency", "Search Terms", "PMax"):
+            self.assertIn(label, intelligence)
+        self.assertIn("Google Ads Reports", reports)
+        self.assertIn("Report presets", reports)
+        self.assertIn('id="gadsReportsResult"', reports)
+        self.assertNotIn("Google Ads Intelligence Modules", reports)
+
+    def test_advanced_legacy_keeps_dev_tools_not_intelligence_or_diagnostics(self):
+        advanced = self.gads_panel[self.gads_panel.index('id="gadsAdvancedLegacy"'):]
+        self.assertIn("Advanced / Legacy", advanced)
+        for label in ("Test API", "Budget Pacing", "Asset Generator"):
+            self.assertIn(label, advanced)
+        self.assertNotIn("Intelligence", advanced)
+        self.assertNotIn("Diagnostics</button>", advanced)
 
     def test_central_gads_state_has_date_and_account_context(self):
         self.assertIn("let gadsState = {", self.html)
@@ -99,7 +164,7 @@ class TestGoogleAdsTemplateDataFlow(unittest.TestCase):
         self.assertIn("${mccQs}", body)
 
     def test_report_query_uses_date_range_from_helper(self):
-        body = re.search(r"async function gadsRunPreset\(presetKey\) \{(?P<body>.*?)\n  \}", self.html, re.S).group("body")
+        body = re.search(r"async function gadsRunPreset\([^)]*\) \{(?P<body>.*?)\n  \}", self.html, re.S).group("body")
         self.assertIn("const { accountId, mccId, dateRange } = _gadsQs();", body)
         self.assertIn("date_range: dateRange", body)
         self.assertIn("manager_customer_id: mccId || undefined", body)
@@ -127,7 +192,7 @@ class TestGoogleAdsTemplateDataFlow(unittest.TestCase):
             ("gadsLoadDiagnostics", "gadsRequireSelectedAccount('gadsDiagnosticsContent')"),
             ("gadsLoadAiBrief", "gadsRequireSelectedAccount('gadsAiBriefContent')"),
             ("gadsOpenModule", "gadsRequireSelectedAccount('gadsReportResult')"),
-            ("gadsRunPreset", "gadsRequireSelectedAccount('gadsReportResult')"),
+            ("gadsRunPreset", "gadsRequireSelectedAccount(targetId)"),
         ):
             body = re.search(rf"async function {fn_name}\([^)]*\) \{{(?P<body>.*?)\n  \}}", self.html, re.S).group("body")
             self.assertIn(marker, body)
