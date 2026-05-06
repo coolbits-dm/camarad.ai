@@ -23049,29 +23049,44 @@ def _gads_compute_search_term_signals(rows, currency_ctx, has_pmax=False):
     return signals
 
 
-def _gads_resolve_live_search_terms(customer_id, mcc_id, days, limit, user_id=None):
-    """Unified resolver: fetch live search terms or return mock fallback.
+def _gads_resolve_live_search_terms(customer_id, mcc_id, days, limit, user_id=None,
+                                    allow_fallback=False, explicit_demo=False):
+    """Fetch live search terms or return an explicitly labeled non-live result.
 
-    Mirrors _gads_resolve_live_campaigns pattern.
     Returns (rows, date_range, source, account_currency_code).
+    Connected/API-validated users never silently receive plain mock rows on
+    token or Google Ads API failure.
     """
     if user_id is None:
         user_id = get_current_user_id()
     meta = _gads_token_get_meta(user_id)
     safe_cid = re.sub(r"[^0-9]", "", str(customer_id or ""))
-    live_attempted = False
+    connected_live_intended = bool(
+        meta and meta.get("status") == "active" and meta.get("api_validated")
+    )
 
-    if (
-        meta
-        and meta.get("status") == "active"
-        and meta.get("api_validated")
-        and safe_cid
-        and safe_cid.isdigit()
-        and len(safe_cid) >= 8
-    ):
+    def _mock_search_terms_tuple(source):
+        mock_currency = next(
+            (a.get("currency") for a in GOOGLE_ADS_MOCK_ACCOUNTS if a.get("id") == customer_id),
+            None,
+        )
+        # Return a copy of mock rows with currency_code filled in.
+        import copy
+        mock_rows = copy.deepcopy(_GADS_MOCK_SEARCH_TERMS)
+        for row in mock_rows:
+            row["currency_code"] = mock_currency
+        return mock_rows, "LAST_30_DAYS", source, mock_currency
+
+    if explicit_demo:
+        return _mock_search_terms_tuple("mock")
+
+    if connected_live_intended:
+        if not (safe_cid and safe_cid.isdigit() and len(safe_cid) >= 8):
+            if allow_fallback:
+                return _mock_search_terms_tuple("mock_fallback")
+            return [], "LAST_30_DAYS", "google_ads_api_error", None
         token_result = _gads_get_fresh_access_token(user_id)
         if token_result.get("success"):
-            live_attempted = True
             access_token = token_result["access_token"]
             cfg = _gads_oauth_config_internal()
             developer_token = cfg.get("developer_token", "")
@@ -23081,11 +23096,16 @@ def _gads_resolve_live_search_terms(customer_id, mcc_id, days, limit, user_id=No
                           str((meta or {}).get("selected_manager_customer_id") or "")).strip()
                 or safe_cid
             )
-            result = _gads_fetch_search_terms(
-                safe_cid, login_cid, access_token, developer_token,
-                days=days, limit=limit,
-            )
-            access_token = None  # wipe immediately
+            try:
+                result = _gads_fetch_search_terms(
+                    safe_cid, login_cid, access_token, developer_token,
+                    days=days, limit=limit,
+                )
+            except Exception as exc:
+                result = {"success": False, "error": "api_exception",
+                          "message": str(exc)[:80]}
+            finally:
+                access_token = None  # wipe immediately
             if result.get("success"):
                 return (
                     result["rows"],
@@ -23094,18 +23114,15 @@ def _gads_resolve_live_search_terms(customer_id, mcc_id, days, limit, user_id=No
                     result.get("account_currency_code"),
                 )
             print(f"gads_resolve_search_terms_error: {result.get('error')} acct={safe_cid}")
+            if allow_fallback:
+                return _mock_search_terms_tuple("mock_fallback")
+            return [], result.get("date_range", "LAST_30_DAYS"), "google_ads_api_error", None
+        print(f"gads_resolve_search_terms_token_error: {token_result.get('error')} acct={safe_cid}")
+        if allow_fallback:
+            return _mock_search_terms_tuple("mock_fallback")
+        return [], "LAST_30_DAYS", "google_ads_api_error", None
 
-    fallback_source = "mock_fallback" if live_attempted else "mock"
-    mock_currency = next(
-        (a.get("currency") for a in GOOGLE_ADS_MOCK_ACCOUNTS if a.get("id") == customer_id),
-        None,
-    )
-    # Return a copy of mock rows with currency_code filled in
-    import copy
-    mock_rows = copy.deepcopy(_GADS_MOCK_SEARCH_TERMS)
-    for row in mock_rows:
-        row["currency_code"] = mock_currency
-    return mock_rows, "LAST_30_DAYS", fallback_source, mock_currency
+    return _mock_search_terms_tuple("mock")
 
 
 @app.route("/api/connectors/google-ads/intelligence/search-terms", methods=["GET"])
@@ -23135,6 +23152,8 @@ def google_ads_intelligence_search_terms():
     limit = min(request.args.get("limit", 100, type=int), 500)
     user_id = get_current_user_id()
     meta = _gads_token_get_meta(user_id) or {}
+    explicit_demo = _gads_truthy_request_arg("demo") or _gads_truthy_request_arg("mock")
+    allow_fallback = explicit_demo or _gads_truthy_request_arg("allow_fallback")
     manager_cid = (
         re.sub(r"[^0-9]", "", mcc_id).strip()
         or re.sub(r"[^0-9]", "", str(meta.get("selected_manager_customer_id") or "")).strip()
@@ -23142,7 +23161,8 @@ def google_ads_intelligence_search_terms():
     )
 
     rows, date_range, source, api_currency = _gads_resolve_live_search_terms(
-        customer_id, mcc_id, days, limit, user_id
+        customer_id, mcc_id, days, limit, user_id,
+        allow_fallback=allow_fallback, explicit_demo=explicit_demo
     )
     currency_ctx = _gads_resolve_currency_context(
         customer_id=customer_id,
@@ -23164,7 +23184,10 @@ def google_ads_intelligence_search_terms():
     account_avg_cpa = (total_cost / total_conv) if total_conv > 0 else None
 
     # Check if account has PMax campaigns (from existing campaigns data — best effort)
-    campaigns, _, _, _ = _gads_resolve_live_campaigns(customer_id, mcc_id, days, user_id)
+    campaigns, _, _, _ = _gads_resolve_live_campaigns(
+        customer_id, mcc_id, days, user_id,
+        allow_fallback=allow_fallback, explicit_demo=explicit_demo
+    )
     has_pmax = any(
         "Performance Max" in str(c.get("channel") or "")
         or "PERFORMANCE_MAX" in str(c.get("channel_type") or "")
@@ -23206,16 +23229,14 @@ def google_ads_intelligence_search_terms():
 
     top_recs = [s["recommendation"] for s in signals[:5] if s.get("recommendation")]
 
-    warnings = []
+    policy = _gads_source_policy(
+        source,
+        connected_live=bool(meta.get("status") == "active" and meta.get("api_validated")),
+        explicit_demo=explicit_demo,
+    )
+    warnings = list(policy.get("warnings") or [])
     if currency_ctx.get("warning"):
         warnings.append(currency_ctx["warning"])
-    if source == "mock_fallback":
-        warnings.append(
-            "API call failed. Showing demo data. "
-            "Your account is connected but the API returned an error."
-        )
-    elif source == "mock":
-        warnings.append("No live Google Ads connection. Showing demo data.")
     if has_pmax:
         warnings.append(
             "This account has Performance Max campaigns. "
