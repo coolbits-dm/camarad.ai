@@ -20005,6 +20005,13 @@ def _google_ads_mock_accounts_response():
         "selected_manager_customer_id": None,
         "mcc_hierarchy_loaded": False,
         "source": "mock",
+        "source_label": "Demo data",
+        "live_data": False,
+        "mock_used": True,
+        "fallback_used": False,
+        "cache": False,
+        "fresh": False,
+        "warnings": ["No live Google Ads connection. Showing demo data."],
         "connected_live": False,
         "connected_mock": True,
         "message": "Demo data only. No live Google Ads OAuth connection is active.",
@@ -20062,6 +20069,7 @@ def _gads_source_policy(source, connected_live=False, explicit_demo=False,
         "mock": "Demo data",
         "mock_fallback": "Fallback demo data",
         "google_ads_api_error": "Google Ads API error",
+        "cached_google_ads_api": "Cached Google Ads",
         "planned": "Planned",
         "coolbits": "Coolbits gateway",
     }
@@ -20076,6 +20084,27 @@ def _gads_source_policy(source, connected_live=False, explicit_demo=False,
     if api_error:
         out["api_error"] = str(api_error)[:120]
     return out
+
+
+_GADS_CACHED_ACCOUNT_DATA_WARNING = "Using cached Google Ads account data."
+
+
+def _gads_cached_accounts_source_policy(connected_live=False):
+    """Source truth for account data read from local DB cache."""
+    policy = _gads_source_policy(
+        "cached_google_ads_api",
+        connected_live=bool(connected_live),
+        warning=_GADS_CACHED_ACCOUNT_DATA_WARNING,
+    )
+    policy.update({
+        "live_data": False,
+        "mock_used": False,
+        "fallback_used": False,
+        "cache": True,
+        "fresh": False,
+        "connected_live": bool(connected_live),
+    })
+    return policy
 
 
 # ── Phase 2B: Real Google Ads Campaigns via searchStream ─────────────────────
@@ -20292,8 +20321,10 @@ def google_ads_accounts():
     api_validated = has_token and bool((meta or {}).get("api_validated"))
 
     if api_validated:
-        # connected_live: return grouped data
-        # 1. Directly accessible accounts from ListAccessibleCustomers
+        # Connected-live account selectors read the last successful API load
+        # from DB cache. They are not fresh API reads.
+        source_policy = _gads_cached_accounts_source_policy(connected_live=True)
+        # 1. Directly accessible accounts from cached ListAccessibleCustomers
         direct_customers = _gads_get_accessible_customers(user_id)
         direct_access_accounts = [
             {
@@ -20342,10 +20373,9 @@ def google_ads_accounts():
             "manager_accounts": manager_accounts_list,
             "selected_manager_customer_id": selected_manager or None,
             "mcc_hierarchy_loaded": mcc_hierarchy_loaded,
-            "source": "google_ads_api",
-            "connected_live": True,
+            **source_policy,
             "connected_mock": False,
-            "message": "Live Google Ads accounts.",
+            "message": "Cached Google Ads accounts from the last successful API load.",
         })
 
     if has_token:
@@ -20357,6 +20387,12 @@ def google_ads_accounts():
             "selected_manager_customer_id": None,
             "mcc_hierarchy_loaded": False,
             "source": "none",
+            "live_data": False,
+            "mock_used": False,
+            "fallback_used": False,
+            "cache": False,
+            "fresh": False,
+            "warnings": [],
             "connected_live": False,
             "connected_mock": False,
             "message": "OAuth token stored. Validate Google Ads API access to load accounts.",
@@ -20382,7 +20418,10 @@ def google_ads_accounts():
         mapped_accounts = _google_ads_map_accounts(accounts)
         mapped_accounts = _google_ads_enrich_accounts_names(mapped_accounts, mcc_id)
         if mapped_accounts:
-            return jsonify({"accounts": mapped_accounts, "source": "coolbits", "gateway": gw,
+            source_policy = _gads_source_policy("coolbits", connected_live=False)
+            source_policy.update({"cache": False, "fresh": False})
+            return jsonify({"accounts": mapped_accounts, "gateway": gw,
+                            **source_policy,
                             "direct_access_accounts": [], "mcc_accounts": [],
                             "mcc_hierarchy_loaded": False, "connected_live": False})
     return jsonify(_google_ads_mock_accounts_response())
@@ -24714,10 +24753,18 @@ def google_ads_mcc_hierarchy_load():
     # Get fresh access token
     token_result = _gads_get_fresh_access_token(user_id)
     if not token_result.get("success"):
+        source_policy = _gads_source_policy(
+            "google_ads_api_error",
+            connected_live=True,
+            api_error=token_result.get("error", "token_error"),
+            warning="Google Ads token refresh failed. No cached or demo data was substituted.",
+        )
+        source_policy.update({"cache": False, "fresh": False})
         return jsonify({
             "success": False,
             "status": token_result.get("error", "token_error"),
-            "connected_live": False,
+            **source_policy,
+            "connected_live": True,
             "message": token_result.get("message", "Token refresh failed."),
         }), 400
 
@@ -24735,10 +24782,17 @@ def google_ads_mcc_hierarchy_load():
     )
 
     if not hierarchy_result.get("success"):
+        source_policy = _gads_source_policy(
+            "google_ads_api_error",
+            connected_live=True,
+            api_error=hierarchy_result.get("error", "api_error"),
+        )
+        source_policy.update({"cache": False, "fresh": False})
         return jsonify({
             "success": False,
             "status": hierarchy_result.get("error", "api_error"),
             "manager_customer_id": manager_customer_id,
+            **source_policy,
             "connected_live": True,
             "message": hierarchy_result.get("message", "Failed to load MCC hierarchy."),
         }), 400
@@ -24755,12 +24809,14 @@ def google_ads_mcc_hierarchy_load():
     client_count = sum(1 for a in accounts if a.get("account_type") == "client")
     client_accounts_list = [a for a in accounts if a.get("account_type") == "client"]
     manager_accounts_list = [a for a in accounts if a.get("account_type") == "manager"]
+    source_policy = _gads_source_policy("google_ads_api", connected_live=True)
+    source_policy.update({"cache": False, "fresh": True})
 
     return jsonify({
         "success": True,
         "provider": "google_ads",
         "status": "mcc_hierarchy_loaded",
-        "source": "google_ads_api",
+        **source_policy,
         "connected_live": True,
         "manager_customer_id": manager_customer_id,
         "accounts_count": stored_count,
@@ -24778,7 +24834,8 @@ def google_ads_mcc_hierarchy_get():
     """Return cached MCC hierarchy from DB. No live API call."""
     user_id = get_current_user_id()
     meta = _gads_token_get_meta(user_id)
-    api_validated = bool((meta or {}).get("api_validated"))
+    api_validated = bool((meta or {}).get("status") == "active" and (meta or {}).get("api_validated"))
+    source_policy = _gads_cached_accounts_source_policy(connected_live=api_validated)
 
     manager_customer_id = str(
         request.args.get("manager_customer_id") or
@@ -24791,7 +24848,7 @@ def google_ads_mcc_hierarchy_get():
             "accounts": [],
             "manager_customer_id": None,
             "mcc_hierarchy_loaded": False,
-            "connected_live": api_validated,
+            **source_policy,
             "message": "No manager_customer_id specified.",
         })
 
@@ -24804,8 +24861,7 @@ def google_ads_mcc_hierarchy_get():
     return jsonify({
         "success": True,
         "provider": "google_ads",
-        "source": "google_ads_api",
-        "connected_live": api_validated,
+        **source_policy,
         "manager_customer_id": manager_customer_id,
         "mcc_hierarchy_loaded": len(accounts) > 0,
         "accounts_count": len(accounts),

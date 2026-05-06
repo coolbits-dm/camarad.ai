@@ -328,7 +328,7 @@ class TestAccountsEndpoint(unittest.TestCase):
 
     @patch("app.requests.post")
     @patch("app.requests.get")
-    def test_accounts_returns_live_source_after_validation(self, mock_get, mock_post):
+    def test_accounts_returns_cached_source_after_validation(self, mock_get, mock_post):
         mock_post_resp = MagicMock()
         mock_post_resp.status_code = 200
         mock_post_resp.json.return_value = {"access_token": "FRESH_ACCT_TOKEN_NOT_REAL", "token_type": "Bearer"}
@@ -343,7 +343,10 @@ class TestAccountsEndpoint(unittest.TestCase):
             c.post("/api/connectors/google-ads/validate")
             r = c.get("/api/connectors/google-ads/accounts")
         data = json.loads(r.data)
-        self.assertEqual(data.get("source"), "google_ads_api")
+        self.assertEqual(data.get("source"), "cached_google_ads_api")
+        self.assertFalse(data.get("live_data"))
+        self.assertTrue(data.get("cache"))
+        self.assertFalse(data.get("fresh"))
         self.assertTrue(data.get("connected_live"))
         self.assertFalse(data.get("connected_mock"))
         ids = [a["id"] for a in data.get("accounts", [])]

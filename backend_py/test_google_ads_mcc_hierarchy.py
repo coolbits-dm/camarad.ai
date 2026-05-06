@@ -414,12 +414,15 @@ class TestAccountsEndpointNoMockInLiveMode(unittest.TestCase):
         for mock_name in self.MOCK_NAMES:
             self.assertNotIn(mock_name, all_names, f"Mock account '{mock_name}' found in live mode response")
 
-    def test_source_is_google_ads_api_in_live_mode(self):
+    def test_source_is_cached_google_ads_api_in_live_mode(self):
         with app.test_client() as c:
             c.set_cookie("camarad_user_id", "1")
             resp = c.get("/api/connectors/google-ads/accounts")
         data = resp.get_json()
-        self.assertEqual(data.get("source"), "google_ads_api")
+        self.assertEqual(data.get("source"), "cached_google_ads_api")
+        self.assertFalse(data.get("live_data"))
+        self.assertTrue(data.get("cache"))
+        self.assertFalse(data.get("fresh"))
 
 
 class TestNoMccFilterAppliedString(unittest.TestCase):
